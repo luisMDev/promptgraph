@@ -9,6 +9,8 @@ export interface CompletionCallbacks {
   resume(): void;
 }
 
+type Phase = "working" | "grace" | "idle" | "done";
+
 /**
  * §7.4 state machine, independent of PTYs/hooks (unit-testable with fake timers):
  * - auto: Stop → grace timer (graceSec); user input during grace cancels it → stays running; expiry → succeed.
@@ -17,25 +19,70 @@ export interface CompletionCallbacks {
  * - hold (any policy): the current turn behaves as manual; clearing hold does not retroactively succeed.
  */
 export class CompletionController {
+  private phase: Phase = "working";
+  private hold = false;
+  private timer: NodeJS.Timeout | null = null;
+
   constructor(
     private readonly policy: CompletionPolicy,
     private readonly callbacks: CompletionCallbacks,
   ) {}
 
   onStop(lastAssistantMessage: string | null): void {
-    throw new Error("not implemented");
+    if (this.phase === "done") return;
+    this.clearTimer();
+    if (this.hold || this.policy.mode === "manual") return this.toIdle();
+    if (this.policy.mode === "marker") {
+      return lastAssistantMessage?.includes(this.policy.token) ? this.succeed() : this.toIdle();
+    }
+    if (this.policy.graceSec <= 0) return this.succeed();
+    this.phase = "grace";
+    this.timer = setTimeout(() => this.succeed(), this.policy.graceSec * 1000);
   }
 
   onUserInput(): void {
-    throw new Error("not implemented");
+    this.backToWork();
+  }
+
+  /** Claude started working again (PreToolUse after idle/grace): same effect as user input. */
+  onActivity(): void {
+    this.backToWork();
   }
 
   setHold(hold: boolean): void {
-    throw new Error("not implemented");
+    this.hold = hold;
+    if (hold && this.phase === "grace") {
+      this.clearTimer();
+      this.toIdle();
+    }
   }
 
   /** Clears timers. */
   dispose(): void {
-    throw new Error("not implemented");
+    this.clearTimer();
+    this.phase = "done";
+  }
+
+  private backToWork(): void {
+    if (this.phase !== "grace" && this.phase !== "idle") return;
+    this.clearTimer();
+    this.phase = "working";
+    this.callbacks.resume();
+  }
+
+  private toIdle(): void {
+    this.phase = "idle";
+    this.callbacks.idle();
+  }
+
+  private succeed(): void {
+    this.clearTimer();
+    this.phase = "done";
+    this.callbacks.succeed();
+  }
+
+  private clearTimer(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 }

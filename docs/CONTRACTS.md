@@ -97,8 +97,8 @@ Semantics fixed here (do not re-implement elsewhere):
 | `store/schema.ts` ✅ | `MIGRATIONS` (user_version based) | done |
 | `store/store.ts` | `openDatabase`, `Store` DAO, `NewRun`, `RunPatch`, `NewLane`, `LanePatch`, `NewNodeRun`, `NodeRunPatch` | M1 |
 | `graphs/graph-store.ts` | `GraphStore {ensureDir, list, get, save, delete, watch}`, `hashContent`, `serializeGraph`, `GraphNotFoundError`, `GraphLoadError` | M1 |
-| `git/exec.ts` | `git`, `gitOk`, `GitError` | M1 |
-| `git/repo.ts` | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` | M1 |
+| `git/exec.ts` ✅ | `git`, `gitOk`, `GitError` | M1 |
+| `git/repo.ts` ✅ | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` | M1 |
 | `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) | M1 |
 | `pty/pty-manager.ts` | `PtyManager`, `PtyHandle`, `SpawnPtyOptions`, `PtyAttachResult` | M1 |
 | `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` | M1 |
@@ -216,6 +216,27 @@ Helper modules: `ActivationTracker` (pure, §8.1), `Scheduler` (FIFO, `maxParall
 uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `state.ts` transition table
 (assert on every status write).
 
+**Implementation notes (server-core, minimal extensions):**
+- `GraphStore.setWriteGuard(fn)`: called before `save`/`delete`; the `Engine` constructor installs a guard that
+  throws `EngineError("run_active")` (→ 409) while the graph has a running/paused run, so routes need no extra check.
+- `Store` takes an optional clock (`new Store(db, now?)`) and adds `getLane(runId, laneId)`.
+  `RunSummary.waitingInput` counts `waiting_input` **and** `idle` node runs; usage sums every attempt.
+- `EngineDeps` adds optional `env` (base env for workspace setup, default `process.env`) and `stopTimeoutMs`
+  (graceful-stop bound for cancel/shutdown, default 5000).
+- `Scheduler.clear()`; `ActivationTracker.isResolved(nodeId)` and `readyUnresolved()` (used by restore/resume).
+- Fork lanes are created (parent checkpoint → `headSha` → `createLane`) when the fork-after node resolves,
+  **before** its successors are enqueued, so the lane-keeping successor cannot dirty the parent mid-checkpoint;
+  `ensureLane` at node start remains the fallback (e.g. after a restart). Creation errors fail the lane's first node.
+- Leaving `waiting_input` clears `waitingReason` unless the patch sets one. Status changes after a node settled
+  (late hooks) are dropped from runner patches; final statuses from runners throw.
+- Events written by the engine: `run.started`, `run.status`, `run.action`, `run.cleanup`, `run.cleanup_failed`,
+  `lane.created`, `node.status`, `node.action`, `node.user_skip` (restore treats such skipped node runs as
+  success; other `skipped` node runs are dead paths). Runner `ctx.event` types are free-form.
+- Retry is refused (`invalid_state`) for non-latest attempts, finished runs, and failures already routed by a
+  Phase-2 failure edge. Skip also accepts `ready` (queued) nodes. `setHold` works on any non-final node run.
+- Run end: unhandled `failed`/`interrupted`/`cancelled` current node runs with nothing in flight → `paused`;
+  all `succeeded`/`skipped`/handled-`failed` → `succeeded`; anything else stuck → `failed` "No node can make progress".
+
 ## 7. Runners (`runners/`)
 
 Contract in `runners/types.ts`. A runner never writes final statuses; it returns a `RunnerResult`. While
@@ -244,6 +265,38 @@ running it may `ctx.update({status: "running" | "idle" | "waiting_input" | "wait
 
 **CommitRunner / PrRunner / MergeRunner / ApprovalRunner / ConditionRunner**: see each file's doc comment.
 Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and read `structured_output`.
+
+**Implementation notes (server-runners, minimal extensions):**
+- Optional `env` (base env, default `process.env`) on `HeadlessOptions`, `GenerateMessageInput`, `ShellRunnerDeps`,
+  `CommitRunnerDeps`, `RunnerRegistryDeps`; `detectNotifyPlatform(env?)`. `CommitRunner` needs only
+  `lanes.withLaneLock`. `NotifierDeps` has test seams `detect?`/`send?`.
+- `runners/git/checkpoint.ts` (new): `CHECKPOINT_PREFIX`, `checkpointMessage`, `isCheckpointMessage`,
+  `checkpointIfDirty(cwd, label)` (what `LaneManager.checkpoint` should call under its lane lock) and
+  `squashTarget(cwd, baseRef)`. `squashCheckpoints` soft-resets over trailing checkpoints but **never below
+  `lane.baseRef`** (history shared with a parent lane stays intact).
+- `CompletionController.onActivity()` (PreToolUse after idle/grace → running). Hold is remembered even when set
+  before the controller exists and is seeded from `nodeRun.hold`.
+- `resolveClaudeOptions(node, defaults)` and `describePredecessor(p)` are exported (merge/judge reuse).
+- Notification `idle_prompt` is ignored after a Stop (the completion policy already decided); other
+  notifications → `waiting_input`. `context:"resume"` with no same-lane Claude predecessor session → failed.
+- Graceful stop writes `/exit`, then `\r` 100 ms later (verified with real Claude Code), waits 3 s, SIGTERM, SIGKILL.
+- Pre-trust also trusts the directory's realpath and writes through a symlinked config; unparsable config → throws
+  (node fails) instead of overwriting.
+- `PtyManager`: spawning an id that is still live throws; `get()` also returns exited handles; exit `code` is null
+  when killed by a signal. Reopen PTYs log to `ptyLogPath(paths, run.id, "reopen-<id>")` — the composition root's
+  `resolveLogPath` must map those after a restart.
+- Commit messages are generated from `ctx.predecessors` (the context has no other node runs).
+- Real-claude test: `PG_REAL_CLAUDE=1 pnpm vitest run packages/server/test/claude-runner.real.test.ts`.
+
+**Implementation notes (integration M1+M2):**
+- `git/exec.ts`, `git/repo.ts`, `workspace/lane-manager.ts` and `workspace/setup.ts` are implemented (incl. M3's
+  `merge`/`concludeMerge`/`abortMerge`). `git()` only opens stdin when `input` is given (no EPIPE on early exit).
+- `LaneManager.diff` stages HEAD + all worktree changes into a throwaway index (`GIT_INDEX_FILE`) and diffs it
+  against the merge-base, so untracked files show up without touching the lane's index.
+- `LaneManager.cleanup` (§9.6) removes worktrees and deletes unpushed branches **only when they carry no commits
+  of their own** (or the lane was merged). A run without a `pr` node keeps its branch (e.g. the commit node's work).
+- `Engine.shutdown` also waits (bounded by `stopTimeoutMs`) for in-flight node chains (finish → advance →
+  finalize/cleanup) so nothing writes to the store after the DB is closed.
 
 ## 8. HTTP & WebSocket
 
@@ -283,6 +336,31 @@ subscribed to the run; `pty:*` → clients attached to that pty. `pty:attach` �
 then replay as `pty:data` chunks (≤64 KiB each), then live data. `pty:input` → `PtyManager.userInput` (live
 PTYs only; else `pty:error`). Most recent attach/resize drives PTY size.
 
+**Implementation notes (server-http, minimal extensions):**
+- `localhostOnly()` takes no argument: the Host (and Origin, if present) **hostname** must be `127.0.0.1`,
+  `localhost` or `[::1]`; the port is not checked, because the vite dev proxy forwards its own Host
+  (`127.0.0.1:5173`). DNS rebinding is still blocked (an attacker's Host is their domain). Shared with the WS
+  upgrade as `isLocalRequest(host, origin)` in `http/auth.ts`.
+- Cookie name is `TOKEN_COOKIE` (`pg_token`). `isAuthorized` also accepts `Authorization: Bearer`.
+- `AppContext.env` (new): the server's base env (commands discovery, `PG_WEB_DIST`). `resolvePtyLogPath(store,
+  paths, ptyId)` in `app/context.ts` maps node PTYs, `setup-`/`shell-<nodeRunId>` and (by scanning run dirs)
+  `reopen-*` PTYs to their logs after a restart.
+- `http/errors.ts` (new): `HttpError`, `toApiError`, `readBody(c, schema)` (empty body = `{}`), `readJson`.
+  Extra codes: `unauthorized` 401, `forbidden_host` 403, `id_mismatch` 400 (PUT graph), `internal` 500.
+- `AppSettingsStore.update` applies only keys present in the patch (`UpdateAppSettingsRequestSchema` is
+  `.partial()` of a schema with defaults, so parsing `{}` yields `{notifications: true}`); PUT /api/settings
+  validates the raw body and passes it on unparsed.
+- `GET /api/graphs/:id`: `modifiedOutside` is true also when no hash is known yet (never run/saved by the app).
+- Hooks: unknown event → 404; everything else (unknown node run, bad payload/JSON) → 204.
+- Static: unknown paths without an extension → index.html; missing files with an extension → 404;
+  `/assets/*` cached immutable.
+- WS: replay chunks ≤ 64 KiB; a client whose `bufferedAmount` exceeds 16 MiB is terminated (it reconnects and
+  re-attaches with a fresh replay); 30 s ping heartbeat; max client frame 1 MiB.
+- `checkPrereqs`: only a missing git is an error; missing claude/gh and no desktop notifier are warnings
+  (DESIGN §4.2 "only warns"). The CLI checks prerequisites before `resolveRepoRoot`.
+- `pg-hook` needs no copy into `dist/`: `PG_HOOK_SOURCE` resolves to `packages/server/assets/pg-hook` from
+  both `src/` and `dist/`.
+
 ## 9. Web (`packages/web/src`)
 
 ```
@@ -306,6 +384,25 @@ components/settings/             app settings (notifications toggle) + graph set
 
 The UI is English. Only `errors` disable Run; `warnings` are shown but non-blocking. The store files currently
 hold only state interfaces; builders add the zustand stores there.
+
+**Implementation notes (web, minimal extensions):**
+- Stores extend the contract interfaces: `EditorStore extends EditorState` adds `phase`, `graphId` (also set when
+  the file failed to load), `loading`, `loadError`, `saveError`, `activeRunId` (graph read-only while set),
+  `externalChange` (file changed on disk while dirty), multi-selection `selectedNodeIds/selectedEdgeIds`
+  (`selectedNodeId/EdgeId` only when exactly one element is selected) and actions; `RunStore extends RunState`
+  adds `graphId`, `detailError`, `selectedNodeId` (run-canvas inspection); `UiStore extends UiState` adds
+  `tabMeta`, `drawerOpen`, `leftPanel` (palette | history), `toasts`. New `store/app-store.ts` (repo, app
+  settings, graph list, commands, pending approvals, WS connection) and `store/app-actions.ts` (cross-store
+  workflows + WS → store routing). Test seams: `setEditorPersistence`, `setRunStoreDeps`, `new WsClient(urlFn)`.
+- `WsClient` adds `onConnection(listener)` and `resizePty(ptyId, cols, rows)` (remembers the size for re-attach).
+  On every `pty:attached` (first attach and re-attach after reconnect) the terminal is reset before the replay.
+- `api/token.ts` adds `devToken()` (memoised `getDevToken()`; the `t` param is stripped from the URL).
+- Vite proxy target port: `PG_DEV_PORT` (then `PG_PORT`), default 4777; it rewrites `Origin` to the target.
+- The palette always lists every node type; `condition` carries a "phase 2" badge while `phase` is 1 (the
+  validator rejects it there).
+- Replayed (finished) terminals drop "leave alternate screen" sequences (`lib/terminal-replay.ts`), so a Claude
+  Code session replays its last screen instead of the empty main screen. The canvas re-fits when the drawer
+  opens/closes.
 
 ## 10. fake-claude (`packages/server/test/fixtures/fake-claude`)
 
@@ -347,6 +444,10 @@ same JSON as a string, `stop_reason`, `total_cost_usd`, `usage` (+ `cache_creati
 ## 11. Testing
 
 - `pnpm test` runs everything with vitest (forks pool, 20 s timeout). Put server tests in `packages/server/test/`.
+  Each package also has `test` (`vitest run --root ../.. packages/<name>/`), so `pnpm -r test` works.
+- End-to-end tests: `packages/server/test/e2e/` (`harness.ts`: temp repo + PG_HOME + fake claude, in-process
+  `startServer`, REST + WS client). The crash-recovery case runs the CLI in a child process (`tsx
+  --conditions=source`) and SIGKILLs it.
 - `test/helpers.ts`: `tempDir`, `createTempRepo` (branch `main`, one commit), `fakeClaudeEnv(root)` (`PG_HOME`,
   `CLAUDE_CONFIG_DIR`, `PG_CLAUDE_BIN`), `realClaudeEnv(root)`, `waitFor`.
 - Pass env explicitly (`createAppContext({env})`, `childEnv(extra, base)`) instead of mutating `process.env`.

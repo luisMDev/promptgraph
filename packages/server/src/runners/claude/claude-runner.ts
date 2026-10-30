@@ -1,8 +1,32 @@
-import type { NodeRun, Lane, Run } from "@promptgraph/shared";
-import type { PgPaths } from "../../config/paths.js";
-import type { HookRouter } from "../../hooks/hook-router.js";
-import type { PtyManager } from "../../pty/pty-manager.js";
-import type { NodeExecution, Runner, RunnerContext } from "../types.js";
+import fs from "node:fs";
+import {
+  describeToolActivity,
+  isClaudeNode,
+  type ClaudeNode,
+  type CompletionPolicy,
+  type Effort,
+  type GraphDefaults,
+  type Lane,
+  type NodeRun,
+  type NodeRunOutput,
+  type NodeStatus,
+  type PermissionMode,
+  type Run,
+} from "@promptgraph/shared";
+import { childEnv, claudeBin } from "../../config/child-env.js";
+import { hooksSettingsPath, ptyLogPath, type PgPaths } from "../../config/paths.js";
+import type { HookMessage, HookRouter } from "../../hooks/hook-router.js";
+import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
+import type { NodeRunPatch } from "../../store/store.js";
+import { newId, newSessionId } from "../../util/ids.js";
+import { stripAnsi } from "../../util/text.js";
+import type { NodeControls, NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
+import { buildClaudeArgs, toCliPermissionMode } from "./args.js";
+import { CompletionController } from "./completion.js";
+import { buildInitialMessage, INTERRUPTED_MESSAGE } from "./context.js";
+import { writeHooksSettings } from "./hooks-settings.js";
+import { lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "./transcript.js";
+import { preTrustDirectory, TRUST_DIALOG_PATTERN } from "./trust.js";
 
 export interface ServerEndpoint {
   port: number;
@@ -19,6 +43,35 @@ export interface ClaudeRunnerDeps {
   endpoint: () => ServerEndpoint;
   env?: NodeJS.ProcessEnv;
 }
+
+/** Options of a Claude node after applying graph defaults. */
+export interface ResolvedClaudeOptions {
+  model?: string;
+  effort?: Effort;
+  permissionMode: PermissionMode;
+  allowedTools?: string[];
+  completion: CompletionPolicy;
+}
+
+export function resolveClaudeOptions(node: ClaudeNode, defaults: GraphDefaults): ResolvedClaudeOptions {
+  return {
+    model: node.config.model ?? defaults.model,
+    effort: node.config.effort ?? defaults.effort,
+    permissionMode: node.config.permissionMode ?? defaults.permissionMode,
+    allowedTools: node.config.allowedTools ?? defaults.allowedTools,
+    completion: node.config.completion ?? defaults.completion,
+  };
+}
+
+const PTY_COLS = 120;
+const PTY_ROWS = 40;
+/** §7.4: after "/exit", wait this long before killing. */
+const EXIT_WAIT_MS = 3000;
+const KILL_WAIT_MS = 2000;
+/** Lets the TUI register the typed command before Enter. */
+const ENTER_DELAY_MS = 100;
+const TRUST_WINDOW_CHARS = 4096;
+const TRUST_MESSAGE = "Claude Code asks whether you trust this folder. Answer in the terminal.";
 
 /**
  * prompt/command nodes (§7). Per start:
@@ -40,7 +93,8 @@ export class ClaudeRunner implements Runner {
   constructor(private readonly deps: ClaudeRunnerDeps) {}
 
   start(ctx: RunnerContext): NodeExecution {
-    throw new Error("not implemented");
+    const execution = new ClaudeExecution(this.deps, ctx);
+    return { result: execution.result, controls: execution.controls };
   }
 
   /**
@@ -48,6 +102,289 @@ export class ClaudeRunner implements Runner {
    * (or the repo if the worktree is gone), not tracked by the run. Returns the new ptyId (`reopen-<id>`).
    */
   reopen(run: Run, nodeRun: NodeRun, lane: Lane | null, repoPath: string): string {
-    throw new Error("not implemented");
+    if (!nodeRun.sessionId) throw new Error("This node run has no Claude session to reopen");
+    const env = this.deps.env ?? process.env;
+    const cwd = lane && fs.existsSync(lane.worktreePath) ? lane.worktreePath : repoPath;
+    const node = run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId);
+    const defaults = run.graphSnapshot.settings.defaults;
+    const opts = node && isClaudeNode(node) ? resolveClaudeOptions(node, defaults) : null;
+    const args = ["--resume", nodeRun.sessionId, "--permission-mode", toCliPermissionMode(opts?.permissionMode ?? defaults.permissionMode)];
+    if (opts?.model) args.push("--model", opts.model);
+    if (opts?.effort) args.push("--effort", opts.effort);
+    const id = `reopen-${newId()}`;
+    this.deps.ptys.spawn({
+      id,
+      file: claudeBin(env),
+      args,
+      cwd,
+      env: childEnv({}, env),
+      cols: PTY_COLS,
+      rows: PTY_ROWS,
+      logPath: ptyLogPath(this.deps.paths, run.id, id),
+    });
+    return id;
   }
 }
+
+type Ending = { kind: "succeeded" } | { kind: "failed"; reason: string } | { kind: "cancelled" };
+
+interface LaunchPlan {
+  node: ClaudeNode;
+  options: ResolvedClaudeOptions;
+  message: string;
+  sessionId: string;
+  resumeSessionId?: string;
+}
+
+/** One live Claude node run: PTY + hooks + completion policy. */
+class ClaudeExecution {
+  readonly result: Promise<RunnerResult>;
+  readonly controls: NodeControls;
+  private resolveResult!: (r: RunnerResult) => void;
+  private readonly env: NodeJS.ProcessEnv;
+  private status: NodeStatus;
+  private handle: PtyHandle | null = null;
+  private ending: Ending | null = null;
+  private controller: CompletionController | null = null;
+  private output: NodeRunOutput = {};
+  private transcriptPath: string | null;
+  /** A Stop arrived and no activity/input since: an idle_prompt notification adds nothing. */
+  private turnEnded = false;
+  /** Hold may be toggled before the controller exists (or persisted from an earlier start). */
+  private hold: boolean;
+  private hookChain: Promise<void> = Promise.resolve();
+  private readonly cleanups: Array<() => void> = [];
+
+  constructor(
+    private readonly deps: ClaudeRunnerDeps,
+    private readonly ctx: RunnerContext,
+  ) {
+    this.env = deps.env ?? process.env;
+    this.status = ctx.nodeRun.status;
+    this.transcriptPath = ctx.nodeRun.transcriptPath;
+    this.hold = ctx.nodeRun.hold;
+    this.result = new Promise((resolve) => (this.resolveResult = resolve));
+    this.controls = {
+      done: () => this.end({ kind: "succeeded" }),
+      fail: (reason) => this.end({ kind: "failed", reason: reason || "Marked as failed by the user" }),
+      setHold: (hold) => {
+        this.hold = hold;
+        this.controller?.setHold(hold);
+      },
+      userInput: () => this.onUserInput(),
+      cancel: async () => {
+        this.end({ kind: "cancelled" });
+        await this.result;
+      },
+    };
+    const onAbort = () => this.end({ kind: "cancelled" });
+    if (ctx.signal.aborted) onAbort();
+    else {
+      ctx.signal.addEventListener("abort", onAbort, { once: true });
+      this.cleanups.push(() => ctx.signal.removeEventListener("abort", onAbort));
+    }
+    void this.run();
+  }
+
+  private async run(): Promise<void> {
+    try {
+      const plan = this.plan();
+      const { run, lane, nodeRun } = this.ctx;
+      const settingsPath = writeHooksSettings(hooksSettingsPath(this.deps.paths, run.id), this.deps.pgHookPath);
+      const autoTrust = run.graphSnapshot.settings.autoTrustWorktrees;
+      if (autoTrust) await preTrustDirectory(lane.worktreePath, this.env);
+      if (this.ending) return this.settle(this.endingResult(null));
+
+      this.controller = new CompletionController(plan.options.completion, {
+        succeed: () => this.end({ kind: "succeeded" }),
+        idle: () => this.update({ status: "idle", waitingReason: null }),
+        resume: () => this.update({ status: "running", waitingReason: null }),
+      });
+      this.controller.setHold(this.hold);
+      this.cleanups.push(() => this.controller?.dispose());
+      this.cleanups.push(this.deps.hooks.register(nodeRun.id, (m) => this.enqueueHook(m)));
+
+      const endpoint = this.deps.endpoint();
+      const args = buildClaudeArgs({
+        message: plan.message,
+        sessionId: plan.sessionId,
+        resumeSessionId: plan.resumeSessionId,
+        name: `pg:${run.graphId}/${plan.node.label || plan.node.id}`,
+        settingsPath,
+        permissionMode: plan.options.permissionMode,
+        model: plan.options.model,
+        effort: plan.options.effort,
+        allowedTools: plan.options.allowedTools,
+      });
+      this.handle = this.deps.ptys.spawn({
+        id: nodeRun.id,
+        file: claudeBin(this.env),
+        args,
+        cwd: lane.worktreePath,
+        env: childEnv({ PG_PORT: String(endpoint.port), PG_TOKEN: endpoint.token, PG_NODE_RUN_ID: nodeRun.id }, this.env),
+        cols: PTY_COLS,
+        rows: PTY_ROWS,
+        logPath: ptyLogPath(this.deps.paths, run.id, nodeRun.id),
+      });
+      this.update({ ptyId: this.handle.id, sessionId: plan.sessionId });
+      if (!autoTrust) this.watchTrustDialog(this.handle);
+
+      const exit = await this.handle.exited;
+      await this.hookChain;
+      this.settle(this.endingResult(exit.code));
+    } catch (err) {
+      this.settle({ status: "failed", error: err instanceof Error ? err.message : String(err), output: this.finalOutput() });
+    }
+  }
+
+  private plan(): LaunchPlan {
+    const { node, run, predecessors, previousAttempt, nodeRun } = this.ctx;
+    if (!isClaudeNode(node)) throw new Error(`ClaudeRunner cannot run ${node.type} nodes`);
+    const options = resolveClaudeOptions(node, run.graphSnapshot.settings.defaults);
+    if (previousAttempt?.status === "interrupted" && previousAttempt.sessionId) {
+      const sid = previousAttempt.sessionId;
+      return { node, options, message: INTERRUPTED_MESSAGE, sessionId: sid, resumeSessionId: sid };
+    }
+    const message = buildInitialMessage(node, predecessors, options.completion);
+    if (node.config.context === "resume") {
+      const pred = predecessors.find(
+        (p) => (p.type === "prompt" || p.type === "command") && p.sessionId && p.laneId === nodeRun.laneId,
+      );
+      if (!pred?.sessionId) throw new Error('Context "resume" needs a predecessor Claude node with a session in the same lane');
+      return { node, options, message, sessionId: pred.sessionId, resumeSessionId: pred.sessionId };
+    }
+    return { node, options, message, sessionId: newSessionId() };
+  }
+
+  private enqueueHook(message: HookMessage): void {
+    this.hookChain = this.hookChain.then(() => this.onHook(message)).catch(() => undefined);
+  }
+
+  private async onHook(m: HookMessage): Promise<void> {
+    if (this.ending) return;
+    switch (m.event) {
+      case "session-start":
+        this.transcriptPath = m.payload.transcript_path ?? this.transcriptPath;
+        this.update({ sessionId: m.payload.session_id, transcriptPath: this.transcriptPath, status: "running", waitingReason: null });
+        return;
+      case "activity":
+        this.turnEnded = false;
+        this.controller?.onActivity();
+        this.update({ activity: describeToolActivity(m.payload), ...this.leaveWaiting() });
+        return;
+      case "notification":
+        if (m.payload.notification_type === "idle_prompt" && (this.turnEnded || this.status === "idle")) return;
+        this.update({
+          status: "waiting_input",
+          waitingReason: {
+            kind: "notification",
+            notificationType: m.payload.notification_type,
+            message: m.payload.message || "Claude needs your input",
+          },
+        });
+        return;
+      case "stop": {
+        this.transcriptPath = m.payload.transcript_path ?? this.transcriptPath;
+        const transcript = this.transcriptPath;
+        const text = m.payload.last_assistant_message ?? (transcript ? await waitForLastAssistantText(transcript) : null);
+        if (this.ending) return;
+        this.turnEnded = true;
+        this.output = { ...this.output, ...(text !== null ? { text } : {}), ...(transcript ? { usage: usageFromTranscript(transcript) } : {}) };
+        this.update({ output: this.output, transcriptPath: transcript, ...this.leaveWaiting() });
+        this.controller?.onStop(text);
+        return;
+      }
+    }
+  }
+
+  private onUserInput(): void {
+    if (this.ending) return;
+    this.turnEnded = false;
+    this.controller?.onUserInput();
+    const patch = this.leaveWaiting();
+    if (patch.status) this.update(patch);
+  }
+
+  /** waiting_input → running (activity, answer typed, turn finished). */
+  private leaveWaiting(): NodeRunPatch {
+    return this.status === "waiting_input" ? { status: "running", waitingReason: null } : {};
+  }
+
+  private watchTrustDialog(handle: PtyHandle): void {
+    let window = "";
+    const off = handle.onData((chunk) => {
+      window = (window + stripAnsi(chunk.toString("utf8")).replace(/\s+/g, "")).slice(-TRUST_WINDOW_CHARS);
+      if (!TRUST_DIALOG_PATTERN.test(window)) return;
+      off();
+      if (this.status === "running") this.update({ status: "waiting_input", waitingReason: { kind: "trust_dialog", message: TRUST_MESSAGE } });
+    });
+    this.cleanups.push(off);
+  }
+
+  /** First ending wins; asks Claude to exit, then kills it (§7.4). */
+  private end(ending: Ending): void {
+    if (this.ending) return;
+    this.ending = ending;
+    this.controller?.dispose();
+    void this.stopProcess();
+  }
+
+  private async stopProcess(): Promise<void> {
+    const h = this.handle;
+    if (!h?.isLive) return;
+    h.write("/exit");
+    await sleep(ENTER_DELAY_MS);
+    h.write("\r");
+    if (await exitsWithin(h, EXIT_WAIT_MS)) return;
+    h.kill("SIGTERM");
+    if (await exitsWithin(h, KILL_WAIT_MS)) return;
+    h.kill("SIGKILL");
+  }
+
+  private endingResult(exitCode: number | null): RunnerResult {
+    const ending = this.ending;
+    if (!ending) {
+      return { status: "failed", error: `Claude exited unexpectedly (code ${exitCode ?? "signal"})`, output: this.finalOutput() };
+    }
+    if (ending.kind === "cancelled") return { status: "cancelled" };
+    if (ending.kind === "failed") return { status: "failed", error: ending.reason, output: this.finalOutput() };
+    return { status: "succeeded", output: this.finalOutput() };
+  }
+
+  /** Output with usage re-read from the transcript (later turns may have added usage). */
+  private finalOutput(): NodeRunOutput {
+    const transcript = this.transcriptPath;
+    if (!transcript || !fs.existsSync(transcript)) return this.output;
+    const text = this.output.text ?? lastAssistantText(transcript) ?? undefined;
+    return { ...this.output, ...(text !== undefined ? { text } : {}), usage: usageFromTranscript(transcript) };
+  }
+
+  private settle(result: RunnerResult): void {
+    for (const c of this.cleanups.splice(0)) c();
+    this.resolveResult(result);
+  }
+
+  /** Persists through the engine; a rejected patch (e.g. node already final) is not fatal for the runner. */
+  private update(patch: NodeRunPatch): void {
+    if (patch.status) this.status = patch.status;
+    try {
+      const nodeRun = this.ctx.update(patch);
+      if (nodeRun?.status) this.status = nodeRun.status;
+    } catch {
+      // The engine owns statuses; ignore patches it refuses.
+    }
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function exitsWithin(h: PtyHandle, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<false>((r) => (timer = setTimeout(() => r(false), ms)));
+  const exited = await Promise.race([h.exited.then(() => true as const), timeout]);
+  clearTimeout(timer);
+  return exited;
+}
+

@@ -1,0 +1,93 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { EventBus } from "../src/events/bus.js";
+import { PtyManager } from "../src/pty/pty-manager.js";
+import { tempDir, waitFor } from "./helpers.js";
+
+const cleanups: Array<() => void> = [];
+afterEach(() => cleanups.splice(0).forEach((c) => c()));
+
+function setup(resolveLogPath: (id: string) => string | null = () => null) {
+  const t = tempDir();
+  cleanups.push(t.cleanup);
+  const bus = new EventBus();
+  const ptys = new PtyManager(bus, resolveLogPath);
+  const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", TERM: "xterm-256color" };
+  return { dir: t.dir, bus, ptys, env };
+}
+
+describe("PtyManager", () => {
+  it("streams output on the bus, flushes the log on exit and replays it", async () => {
+    const { dir, bus, ptys, env } = setup();
+    const chunks: string[] = [];
+    const exits: Array<number | null> = [];
+    bus.on("pty:data", (e) => e.ptyId === "p1" && chunks.push(e.data.toString()));
+    bus.on("pty:exit", (e) => exits.push(e.code));
+    const logPath = path.join(dir, "runs", "r", "p1.log");
+    const h = ptys.spawn({ id: "p1", file: "sh", args: ["-c", "echo hello; exit 3"], cwd: dir, env, logPath });
+    expect(h.id).toBe("p1");
+    const exit = await h.exited;
+    expect(exit.code).toBe(3);
+    expect(exits).toEqual([3]);
+    expect(chunks.join("")).toContain("hello");
+    expect(fs.readFileSync(logPath, "utf8")).toContain("hello");
+    expect(h.isLive).toBe(false);
+    expect(ptys.list()).toEqual([]);
+    const replay = ptys.attach("p1", { cols: 80, rows: 20 });
+    expect(replay.live).toBe(false);
+    expect(replay.replay.toString()).toContain("hello");
+  });
+
+  it("replays the live buffer, lets the latest attach drive the size and reports user input", async () => {
+    const { dir, ptys, env } = setup();
+    const h = ptys.spawn({ file: "sh", args: ["-c", "echo ready; read line; echo got:$line; stty size"], cwd: dir, env, logPath: path.join(dir, "x.log") });
+    await waitFor(() => ptys.attach(h.id).replay.toString().includes("ready"));
+    const first = ptys.attach(h.id, { cols: 100, rows: 30 });
+    expect(first).toMatchObject({ live: true, cols: 100, rows: 30 });
+    expect(ptys.attach(h.id, { cols: 90, rows: 25 })).toMatchObject({ cols: 90, rows: 25 });
+    const inputs: string[] = [];
+    ptys.onUserInput((id) => inputs.push(id));
+    ptys.userInput(h.id, "abc\r");
+    await h.exited;
+    expect(inputs).toEqual([h.id]);
+    const text = ptys.attach(h.id).replay.toString();
+    expect(text).toContain("got:abc");
+    expect(text).toContain("25 90");
+    expect(() => ptys.userInput(h.id, "x")).toThrow(/not running/);
+  });
+
+  it("programmatic writes do not count as user input; onData unsubscribes", async () => {
+    const { dir, ptys, env } = setup();
+    const inputs: string[] = [];
+    ptys.onUserInput((id) => inputs.push(id));
+    const h = ptys.spawn({ file: "sh", args: ["-c", "read line; echo got:$line"], cwd: dir, env, logPath: path.join(dir, "y.log") });
+    let seen = "";
+    const off = h.onData((c) => (seen += c.toString()));
+    h.write("zzz\r");
+    await h.exited;
+    off();
+    expect(seen).toContain("got:zzz");
+    expect(inputs).toEqual([]);
+  });
+
+  it("uses resolveLogPath for ptys unknown in memory and throws for unknown ids", () => {
+    const { dir, ptys } = setup((id) => (id === "old" ? path.join(dir, "old.log") : null));
+    fs.writeFileSync(path.join(dir, "old.log"), "previous output");
+    expect(ptys.attach("old")).toMatchObject({ live: false, cols: 120, rows: 40 });
+    expect(ptys.attach("old").replay.toString()).toBe("previous output");
+    expect(() => ptys.attach("nope")).toThrow(/Unknown PTY/);
+  });
+
+  it("refuses a duplicate live id and killAll stops everything", async () => {
+    const { dir, ptys, env } = setup();
+    const a = ptys.spawn({ id: "a", file: "sh", args: ["-c", "sleep 30"], cwd: dir, env, logPath: path.join(dir, "a.log") });
+    expect(() => ptys.spawn({ id: "a", file: "sh", args: ["-c", "true"], cwd: dir, env, logPath: path.join(dir, "a2.log") })).toThrow(/already running/);
+    ptys.spawn({ id: "b", file: "sh", args: ["-c", "sleep 30"], cwd: dir, env, logPath: path.join(dir, "b.log") });
+    expect(ptys.list().map((h) => h.id).sort()).toEqual(["a", "b"]);
+    await ptys.killAll();
+    expect(ptys.list()).toEqual([]);
+    expect(a.isLive).toBe(false);
+    expect(fs.existsSync(path.join(dir, "b.log"))).toBe(true);
+  });
+});

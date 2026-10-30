@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
+import pty, { type IPty } from "node-pty";
 import type { EventBus } from "../events/bus.js";
+import { newId } from "../util/ids.js";
+import { RingBuffer } from "./ring-buffer.js";
 
 export interface SpawnPtyOptions {
   /** Defaults to a fresh id. Node PTYs use the nodeRunId (see CONTRACTS.md § PTY ids). */
@@ -43,11 +48,95 @@ export interface PtyAttachResult {
 /** Called for every chunk of user input from a viewer (engine cancels auto grace / clears waiting_input). */
 export type UserInputListener = (ptyId: string) => void;
 
+const DEFAULT_COLS = 120;
+const DEFAULT_ROWS = 40;
+/** node-pty may deliver the last output chunks just after onExit; wait before flushing the log. */
+const EXIT_DRAIN_MS = 50;
+/** killAll: SIGKILL stragglers after this long. */
+const KILL_ALL_GRACE_MS = 2000;
+
+class ManagedPty implements PtyHandle {
+  readonly exited: Promise<PtyExit>;
+  readonly ring = new RingBuffer();
+  cols: number;
+  rows: number;
+  private live = true;
+  private readonly listeners = new Set<(chunk: Buffer) => void>();
+
+  constructor(
+    readonly id: string,
+    private readonly proc: IPty,
+    readonly logPath: string,
+    size: { cols: number; rows: number },
+    onChunk: (chunk: Buffer) => void,
+    onExit: (handle: ManagedPty, exit: PtyExit) => Promise<void>,
+  ) {
+    this.cols = size.cols;
+    this.rows = size.rows;
+    proc.onData((data) => {
+      const chunk = Buffer.from(data, "utf8");
+      this.ring.push(chunk);
+      onChunk(chunk);
+      for (const l of this.listeners) l(chunk);
+    });
+    this.exited = new Promise<PtyExit>((resolve) => {
+      proc.onExit(({ exitCode, signal }) => {
+        const exit: PtyExit = { code: signal ? null : exitCode, signal: signal || null };
+        setTimeout(() => {
+          this.live = false;
+          this.listeners.clear();
+          void onExit(this, exit).then(() => resolve(exit));
+        }, EXIT_DRAIN_MS);
+      });
+    });
+  }
+
+  get pid(): number {
+    return this.proc.pid;
+  }
+
+  get isLive(): boolean {
+    return this.live;
+  }
+
+  write(data: string): void {
+    if (this.live) this.proc.write(data);
+  }
+
+  resize(cols: number, rows: number): void {
+    if (!this.live || cols < 1 || rows < 1) return;
+    this.cols = cols;
+    this.rows = rows;
+    try {
+      this.proc.resize(cols, rows);
+    } catch {
+      // The process may have exited between the check and the call.
+    }
+  }
+
+  kill(signal?: NodeJS.Signals): void {
+    if (!this.live) return;
+    try {
+      this.proc.kill(signal);
+    } catch {
+      // Already gone.
+    }
+  }
+
+  onData(listener: (chunk: Buffer) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+}
+
 /**
  * Owns every PTY process (node-pty). Keeps a 2 MB ring buffer per PTY, emits `pty:data`/`pty:exit`
  * on the bus, flushes the buffer to `logPath` on exit, and replays live buffers or logs on attach.
  */
 export class PtyManager {
+  private readonly handles = new Map<string, ManagedPty>();
+  private readonly inputListeners = new Set<UserInputListener>();
+
   constructor(
     private readonly bus: EventBus,
     /** Resolves a log path for ptys not known in memory (after a server restart). */
@@ -55,38 +144,96 @@ export class PtyManager {
   ) {}
 
   spawn(opts: SpawnPtyOptions): PtyHandle {
-    throw new Error("not implemented");
+    const id = opts.id ?? newId();
+    if (this.handles.get(id)?.isLive) throw new Error(`PTY ${id} is already running`);
+    const size = { cols: opts.cols ?? DEFAULT_COLS, rows: opts.rows ?? DEFAULT_ROWS };
+    const proc = pty.spawn(opts.file, opts.args, {
+      name: opts.env.TERM ?? "xterm-256color",
+      cwd: opts.cwd,
+      env: opts.env,
+      ...size,
+    });
+    const handle = new ManagedPty(
+      id,
+      proc,
+      opts.logPath,
+      size,
+      (data) => this.bus.emit("pty:data", { ptyId: id, data }),
+      async (h, exit) => {
+        await flushLog(h.logPath, h.ring.snapshot());
+        this.bus.emit("pty:exit", { ptyId: id, code: exit.code });
+      },
+    );
+    this.handles.set(id, handle);
+    return handle;
   }
 
   get(id: string): PtyHandle | undefined {
-    throw new Error("not implemented");
+    return this.handles.get(id);
   }
 
   /** Replay data for a viewer; resizes the PTY when cols/rows are given (latest attach wins). @throws if unknown. */
   attach(id: string, size?: { cols: number; rows: number }): PtyAttachResult {
-    throw new Error("not implemented");
+    const handle = this.handles.get(id);
+    if (handle?.isLive) {
+      if (size) handle.resize(size.cols, size.rows);
+      return { live: true, cols: handle.cols, rows: handle.rows, replay: handle.ring.snapshot() };
+    }
+    const logPath = handle?.logPath ?? this.resolveLogPath(id);
+    if (!logPath) throw new Error(`Unknown PTY ${id}`);
+    return {
+      live: false,
+      cols: handle?.cols ?? DEFAULT_COLS,
+      rows: handle?.rows ?? DEFAULT_ROWS,
+      replay: readLog(logPath),
+    };
   }
 
   /** Input typed by a user in the browser: writes to the PTY and notifies input listeners. */
   userInput(id: string, data: string): void {
-    throw new Error("not implemented");
+    const handle = this.handles.get(id);
+    if (!handle?.isLive) throw new Error(`PTY ${id} is not running`);
+    handle.write(data);
+    for (const l of this.inputListeners) l(id);
   }
 
   resize(id: string, cols: number, rows: number): void {
-    throw new Error("not implemented");
+    this.handles.get(id)?.resize(cols, rows);
   }
 
   onUserInput(listener: UserInputListener): () => void {
-    throw new Error("not implemented");
+    this.inputListeners.add(listener);
+    return () => this.inputListeners.delete(listener);
   }
 
   /** Live PTYs. */
   list(): PtyHandle[] {
-    throw new Error("not implemented");
+    return [...this.handles.values()].filter((h) => h.isLive);
   }
 
   /** SIGINT path: kills every live PTY (callers send /exit first) and waits for log flush. */
-  killAll(): Promise<void> {
-    throw new Error("not implemented");
+  async killAll(): Promise<void> {
+    const live = this.list();
+    for (const h of live) h.kill("SIGTERM");
+    const timer = setTimeout(() => live.forEach((h) => h.kill("SIGKILL")), KILL_ALL_GRACE_MS);
+    await Promise.all(live.map((h) => h.exited));
+    clearTimeout(timer);
+  }
+}
+
+async function flushLog(logPath: string, data: Buffer): Promise<void> {
+  try {
+    await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.promises.writeFile(logPath, data);
+  } catch {
+    // A missing log only loses the replay of a finished terminal.
+  }
+}
+
+function readLog(logPath: string): Buffer {
+  try {
+    return fs.readFileSync(logPath);
+  } catch {
+    return Buffer.alloc(0);
   }
 }

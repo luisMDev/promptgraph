@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli/index.js",
     "dev": "tsx watch --conditions=source src/cli/index.ts",
     "start": "node dist/cli/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. --passWithNoTests packages/server/"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
