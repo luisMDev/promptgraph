@@ -310,4 +310,34 @@ describe("e2e: real server, fake claude", () => {
     expect(resumed.argv).toContain(before.sessionId);
     expect(done.nodeRuns.at(-1)!.output?.text).toBe("Done: You were interrupted. Continue the task.");
   });
+
+  it("retry of a held node interrupted while idle resumes without a message, keeps its output and Hold", { timeout: 60_000 }, async () => {
+    const w = world();
+    const s = await server(w);
+    await s.saveGraph(chainGraph("held", [{ id: "p", type: "prompt", config: { prompt: "[[sleep:500]] [[reply:the answer]] question" } }]));
+    const runId = (await s.startRun("held")).run.id;
+    const first = await s.waitForNode(runId, "p", ["running"]);
+    await s.api("POST", `/api/node-runs/${first.id}/hold`, { hold: true });
+    const idle = await s.waitForNode(runId, "p", ["idle"]);
+    expect(idle.output?.text).toBe("the answer");
+    expect(idle.output?.usage?.outputTokens).toBeGreaterThan(0);
+    await s.close();
+
+    const s2 = await server(w);
+    const interrupted = await s2.nodeRun(runId, "p");
+    expect(interrupted).toMatchObject({ status: "interrupted", hold: true });
+    // The interrupted attempt keeps the usage of its finished turn.
+    expect(interrupted.output?.usage?.outputTokens).toBeGreaterThan(0);
+    const callsBefore = readClaudeLog(w).length;
+    await s2.api("POST", `/api/node-runs/${interrupted.id}/retry`);
+    const retried = await s2.waitForNode(runId, "p", ["idle", "succeeded", "failed"], 30_000);
+    expect(retried).toMatchObject({ status: "idle", attempt: 1, hold: true });
+    expect(retried.output?.text).toBe("the answer");
+    const resume = readClaudeLog(w).slice(callsBefore).at(-1)!;
+    expect(resume.argv).toContain("--resume");
+    // No new turn: the resumed session gets no message.
+    expect(resume.argv).not.toContain("You were interrupted. Continue the task.");
+    await s2.api("POST", `/api/node-runs/${retried.id}/done`);
+    expect((await s2.waitForRun(runId, ["succeeded", "failed", "paused"])).run.status).toBe("succeeded");
+  });
 });

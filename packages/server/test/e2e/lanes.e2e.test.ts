@@ -212,6 +212,35 @@ describe("e2e: parallel lanes and ship-it nodes (M3+M4)", () => {
     expect(gitIn(w.repo, "rev-list", "--parents", "-1", main!.branch).split(" ")).toHaveLength(3);
   });
 
+  it("skipping a merge left mid-conflict by a stopped server drops the half-done merge; the next commit has no markers", { timeout: 90_000 }, async () => {
+    const { w, s } = await setup();
+    const g = conflictGraph("conflict-skip", "pause");
+    await s.saveGraph({
+      ...g,
+      nodes: [...(g.nodes ?? []), { id: "c", type: "commit", label: "c", position: { x: 600, y: 100 }, config: {} }],
+      edges: [...(g.edges ?? []), { id: "e-mc", source: "m", target: "c" }],
+    } as GraphInput);
+    const runId = (await s.startRun("conflict-skip")).run.id;
+    await s.waitForNode(runId, "m", ["waiting_input"], 30_000);
+    const [main, l2] = (await s.getRun(runId)).lanes;
+    await s.close();
+    expect(() => gitIn(main!.worktreePath, "merge", "--no-ff", "-m", "x", l2!.branch)).toThrow();
+
+    const s2 = await E2eServer.start(w);
+    cleanups.push(() => s2.close());
+    const interrupted = await s2.nodeRun(runId, "m");
+    expect(interrupted.status).toBe("interrupted");
+    await s2.api("POST", `/api/node-runs/${interrupted.id}/skip`);
+    const done = await s2.waitForRun(runId, ["succeeded", "failed", "paused"], 30_000);
+    expect(done.run.status).toBe("succeeded");
+    // No merge in progress, README unchanged from lane a, and nothing with conflict markers was committed.
+    expect(() => gitIn(main!.worktreePath, "rev-parse", "-q", "--verify", "MERGE_HEAD")).toThrow();
+    expect(gitIn(w.repo, "show", `${main!.branch}:README.md`)).not.toContain("<<<<<<<");
+    // The commit (checkpoints squashed into it) is a plain one-parent commit with lane a's README.
+    expect(gitIn(w.repo, "show", `${main!.branch}:README.md`)).toBe("from a");
+    expect(gitIn(w.repo, "rev-list", "--parents", "-1", main!.branch).split(" ")).toHaveLength(2);
+  });
+
   it("merge with strategy squash, then commit: one generated commit, no checkpoint noise", { timeout: 60_000 }, async () => {
     const { w, s } = await setup();
     await s.saveGraph(

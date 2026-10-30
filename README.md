@@ -190,6 +190,8 @@ conditions are counted too. The cost is an estimate from public per-model prices
 | `~/.promptgraph/runs/<run-id>/` | Terminal logs and the hook settings of each run |
 | `~/.promptgraph/worktrees/` | Lane worktrees |
 | `~/.promptgraph/settings.json` | App settings (notifications) |
+| `~/.promptgraph/locks/` | One pid file per repository with a running promptgraph |
+| `~/.promptgraph/bin/` | The `pg-hook` helper that Claude Code's hooks call |
 
 `~/.promptgraph` is created readable by you only (mode 0700), because it holds prompts, outputs and
 terminal logs. Set `PG_HOME` to use another directory.
@@ -213,6 +215,18 @@ there.
   HttpOnly cookie; other local web servers you open on `127.0.0.1` receive that cookie too (browsers do
   not separate cookies by port), so do not run untrusted local servers while promptgraph is open.
 - Claude sessions only get a per-step hook token that can report that step's status and nothing else.
+
+## Known limitations
+
+- Claude Code's hooks report each session's status. If no hook arrives within 45 s of a start, the
+  step turns yellow with a hint. If a later hook (the end of a turn) is lost, the step can stay
+  **Running** until Claude reports that it is idle: check its terminal and click **Done** or **Fail**.
+- The canvas does not show the auto-completion grace period: a step reads "Running" for a few seconds
+  after Claude's turn ended.
+- Terminal tabs of earlier runs stay open in the drawer; their titles show the run id and attempt.
+- Edge labels can be clipped between close nodes, and a loop edge can pass under the minimap.
+- The session cookie can be replayed by other local servers on `127.0.0.1` (see Security notes).
+- Linux and WSL only.
 
 ## Development
 
