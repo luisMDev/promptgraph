@@ -2,7 +2,7 @@ import type { Lane, NodeRun, RunDetail, RunSummary } from "@promptgraph/shared";
 import { create } from "zustand";
 import { api, errorMessage } from "../api/rest";
 import { wsClient } from "../api/ws";
-import { currentNodeRuns, runInfoOf, upsertNodeRun, type RunInfo } from "../lib/run-view";
+import { affectsLoops, currentNodeRuns, loopViews, runInfoOf, upsertNodeRun, type LoopView, type RunInfo } from "../lib/run-view";
 
 /** Runs: history list (from REST + run:update), the selected run's detail (node:update/lane:update merged in). */
 export interface RunState {
@@ -21,12 +21,18 @@ export interface RunStore extends RunState {
   detailError: string | null;
   /** Node inspected on the run canvas (snapshot node id). */
   selectedNodeId: string | null;
+  /** Loop iteration shown in the inspector for the selected node; null = the latest. Reset on node change. */
+  selectedIteration: number | null;
+  /** Loop back-edge id → loop state (server `RunDetail.loops`, else derived from node run iterations). */
+  loops: Record<string, LoopView>;
   /** Lanes and PRs of runs expanded in the history (loaded on demand, refreshed on status/cleanup changes). */
   runInfo: Record<string, RunInfo>;
 
   loadRuns(graphId: string): Promise<void>;
   clearRuns(): void;
   selectNode(nodeId: string | null): void;
+  /** Inspector iteration selector (§15.4); null follows the latest iteration. */
+  selectIteration(iteration: number | null): void;
   /** Opens a run on the canvas (subscribes to its live updates); null returns to edit mode. */
   selectRun(runId: string | null): Promise<void>;
   /** Shows a freshly started run without an extra fetch. */
@@ -45,6 +51,10 @@ export interface RunSubscriptions {
   unsubscribe(runId: string): void;
   fetchRun(runId: string): Promise<RunDetail>;
 }
+
+/** Coalesces loop-state refetches triggered by bursts of node updates. */
+const LOOP_REFRESH_MS = 150;
+let loopRefresh: ReturnType<typeof setTimeout> | null = null;
 
 let deps: RunSubscriptions = {
   subscribe: (id) => wsClient.subscribeRun(id),
@@ -82,6 +92,8 @@ export const useRunStore = create<RunStore>()((set, get) => ({
   graphId: null,
   detailError: null,
   selectedNodeId: null,
+  selectedIteration: null,
+  loops: {},
   runInfo: {},
 
   async loadRuns(graphId) {
@@ -105,7 +117,11 @@ export const useRunStore = create<RunStore>()((set, get) => ({
   },
 
   selectNode(nodeId) {
-    set({ selectedNodeId: nodeId });
+    if (nodeId !== get().selectedNodeId) set({ selectedNodeId: nodeId, selectedIteration: null });
+  },
+
+  selectIteration(iteration) {
+    set({ selectedIteration: iteration });
   },
 
   async selectRun(runId) {
@@ -113,7 +129,7 @@ export const useRunStore = create<RunStore>()((set, get) => ({
     if (prev === runId) return;
     if (prev) deps.unsubscribe(prev);
     buffer = [];
-    set({ selectedRunId: runId, detail: null, currentByNode: {}, lanes: {}, detailError: null, selectedNodeId: null });
+    set({ selectedRunId: runId, detail: null, currentByNode: {}, lanes: {}, loops: {}, detailError: null, selectedNodeId: null, selectedIteration: null });
     if (!runId) return;
     deps.subscribe(runId);
     try {
@@ -133,7 +149,7 @@ export const useRunStore = create<RunStore>()((set, get) => ({
     if (prev && prev !== detail.run.id) deps.unsubscribe(prev);
     buffer = [];
     deps.subscribe(detail.run.id);
-    set({ selectedRunId: detail.run.id, detailError: null, selectedNodeId: null, runs: detail.run.graphId === get().graphId ? upsertRun(get().runs, stripSnapshot(detail)) : get().runs });
+    set({ selectedRunId: detail.run.id, detailError: null, selectedNodeId: null, selectedIteration: null, runs: detail.run.graphId === get().graphId ? upsertRun(get().runs, stripSnapshot(detail)) : get().runs });
     setDetail(detail);
   },
 
@@ -170,7 +186,10 @@ export const useRunStore = create<RunStore>()((set, get) => ({
     const known = s.detail.nodeRuns.find((n) => n.id === nodeRun.id);
     if (known && known.updatedAt > nodeRun.updatedAt) return;
     const nodeRuns = upsertNodeRun(s.detail.nodeRuns, nodeRun);
-    set({ detail: { ...s.detail, nodeRuns }, currentByNode: currentNodeRuns(nodeRuns) });
+    const graph = s.detail.run.graphSnapshot;
+    set({ detail: { ...s.detail, nodeRuns }, currentByNode: currentNodeRuns(nodeRuns), loops: loopViews(graph, nodeRuns, s.detail.loops) });
+    // Loop counters are not pushed over WS: refetch them when a loop may have looped back or exhausted.
+    if (affectsLoops(graph, s.detail.nodeRuns, nodeRun)) scheduleLoopRefresh(nodeRun.runId);
   },
 
   applyLaneUpdate(lane) {
@@ -187,7 +206,33 @@ export const useRunStore = create<RunStore>()((set, get) => ({
 }));
 
 function setDetail(detail: RunDetail): void {
-  useRunStore.setState({ detail, currentByNode: currentNodeRuns(detail.nodeRuns), lanes: lanesById(detail.lanes) });
+  useRunStore.setState({
+    detail,
+    currentByNode: currentNodeRuns(detail.nodeRuns),
+    lanes: lanesById(detail.lanes),
+    loops: loopViews(detail.run.graphSnapshot, detail.nodeRuns, detail.loops),
+  });
+}
+
+function scheduleLoopRefresh(runId: string): void {
+  if (loopRefresh) clearTimeout(loopRefresh);
+  loopRefresh = setTimeout(() => {
+    loopRefresh = null;
+    void refreshLoops(runId);
+  }, LOOP_REFRESH_MS);
+}
+
+/** Takes only `loops` from a fresh detail (node runs and lanes stay WS-driven). */
+async function refreshLoops(runId: string): Promise<void> {
+  try {
+    const fresh = await deps.fetchRun(runId);
+    const s = useRunStore.getState();
+    if (s.selectedRunId !== runId || !s.detail || !fresh.loops) return;
+    const detail = { ...s.detail, loops: fresh.loops };
+    useRunStore.setState({ detail, loops: loopViews(detail.run.graphSnapshot, detail.nodeRuns, fresh.loops) });
+  } catch {
+    // Best effort: the derived counts stay.
+  }
 }
 
 function applyBuffered(u: BufferedUpdate): void {

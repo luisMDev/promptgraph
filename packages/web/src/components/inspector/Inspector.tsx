@@ -1,13 +1,25 @@
-import { formatCostUsd, isFinalRunStatus, type GraphEdge, type GraphNode, type OnError } from "@promptgraph/shared";
+import {
+  edgeWhen,
+  formatCostUsd,
+  isFinalRunStatus,
+  type EdgeWhen,
+  type GraphEdge,
+  type GraphNode,
+  type LoopSpec,
+  type OnError,
+  type SourcePort,
+} from "@promptgraph/shared";
 import { formatDuration } from "../../lib/format";
+import { DEFAULT_LOOP, setEdgeLoop, setEdgeWhen } from "../../lib/graph-ops";
 import { NODE_TYPE_META } from "../../lib/node-meta";
+import { nodeIterations, selectIterationEntry } from "../../lib/run-view";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
 import { Select } from "../common/fields";
 import { NodeTypeIcon } from "../common/icons";
-import { Button, Field, Section, StatusDot, inputClass } from "../common/ui";
+import { Button, Checkbox, Field, Section, StatusDot, inputClass } from "../common/ui";
 import { GraphSettingsForm } from "../settings/GraphSettingsForm";
 import { LaneLegend } from "./LaneLegend";
 import { NodeConfigForm } from "./NodeConfigForm";
@@ -67,6 +79,7 @@ const ON_ERROR_OPTIONS: readonly { value: OnError; label: string }[] = [
 
 function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean }) {
   const settings = useEditorStore((s) => s.graph!.settings);
+  const phase = useEditorStore((s) => s.phase);
   const issues = useEditorStore((s) => s.validation);
   const nodeIssues = { errors: issues.errors.filter((i) => i.nodeId === node.id), warnings: issues.warnings.filter((i) => i.nodeId === node.id) };
   const meta = NODE_TYPE_META[node.type];
@@ -95,7 +108,7 @@ function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean 
         <Field label="Label">
           <input className={inputClass} value={node.label} disabled={disabled} onChange={(e) => update((n) => ({ ...n, label: e.target.value }))} />
         </Field>
-        <Field label="On error">
+        <Field label="On error" hint={phase === 2 ? "Applies only when no failure edge (error port) handles the failure." : undefined}>
           <Select value={node.onError ?? "pause"} options={ON_ERROR_OPTIONS} disabled={disabled} onChange={(onError) => update((n) => ({ ...n, onError }))} />
         </Field>
       </Section>
@@ -106,41 +119,68 @@ function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean 
   );
 }
 
+const WHEN_OPTIONS: readonly { value: EdgeWhen; label: string }[] = [
+  { value: "success", label: "Source succeeded" },
+  { value: "failure", label: "Source failed" },
+  { value: "always", label: "Always (success or failure)" },
+];
+
+const EXHAUSTED_OPTIONS: readonly { value: LoopSpec["onExhausted"]; label: string }[] = [
+  { value: "fail", label: "Fail" },
+  { value: "continue", label: "Continue" },
+];
+
+const PORT_LABEL: Record<SourcePort, string> = { out: "output", true: "true", false: "false", error: "error" };
+
 function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean }) {
   const graph = useEditorStore((s) => s.graph!);
   const phase = useEditorStore((s) => s.phase);
+  const validation = useEditorStore((s) => s.validation);
+  const edgeIssues = { errors: validation.errors.filter((i) => i.edgeId === edge.id), warnings: validation.warnings.filter((i) => i.edgeId === edge.id) };
   const label = (id: string) => graph.nodes.find((n) => n.id === id)?.label || id;
   const update = (fn: (e: GraphEdge) => GraphEdge) => useEditorStore.getState().updateEdge(edge.id, fn);
+  const errorPort = edge.sourcePort === "error";
   return (
-    <Section title="Edge" actions={<Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([], [edge.id])}>Delete</Button>}>
-      <p className="text-sm text-zinc-300">
-        {label(edge.source)} <span className="text-zinc-500">({edge.sourcePort})</span> → {label(edge.target)}
-      </p>
+    <>
+      <Section title={edge.loop ? "Loop edge" : "Edge"} actions={<Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([], [edge.id])}>Delete</Button>}>
+        <p className="text-sm text-zinc-300">
+          {label(edge.source)} <span className={errorPort ? "text-red-400" : "text-zinc-500"}>({PORT_LABEL[edge.sourcePort]})</span> → {label(edge.target)}
+        </p>
+        {(edgeIssues.errors.length > 0 || edgeIssues.warnings.length > 0) && <ValidationList validation={edgeIssues} />}
+        {phase < 2 && <p className="text-[11px] text-zinc-500">Edge conditions, error ports and loops need phase 2.</p>}
+      </Section>
       {phase === 2 && (
-        <>
-          <Field label="Follow when">
-            <Select<string>
-              value={edge.when ?? ""}
-              disabled={disabled}
-              options={[
-                { value: "", label: "Default" },
-                { value: "success", label: "Source succeeded" },
-                { value: "failure", label: "Source failed" },
-                { value: "always", label: "Always" },
-              ]}
-              onChange={(w) => update((e) => ({ ...e, when: w === "" ? undefined : (w as GraphEdge["when"]) }))}
-            />
+        <Section title="Condition">
+          <Field
+            label="Follow when"
+            hint={
+              errorPort
+                ? "Edges from the error port run their target when the source fails."
+                : edge.sourcePort === "true" || edge.sourcePort === "false"
+                  ? `Also requires the condition to be ${edge.sourcePort}. Edges that do not match deliver a skip (dead path).`
+                  : "Edges that do not match deliver a skip: the target is skipped unless another input activates it."
+            }
+          >
+            <Select<EdgeWhen> value={edgeWhen(edge)} disabled={disabled || errorPort} options={WHEN_OPTIONS} onChange={(w) => update((e) => setEdgeWhen(e, w))} />
           </Field>
-          <label className="flex items-center gap-2 text-sm text-zinc-300">
-            <input
-              type="checkbox"
-              className="accent-blue-500"
-              checked={!!edge.loop}
-              disabled={disabled}
-              onChange={(ev) => update((e) => ({ ...e, loop: ev.target.checked ? { maxIterations: 3, onExhausted: "fail" } : undefined }))}
-            />
-            Loop back-edge
-          </label>
+        </Section>
+      )}
+      {phase === 2 && (
+        <Section title="Loop">
+          <Checkbox
+            checked={!!edge.loop}
+            disabled={disabled}
+            label="Loop back-edge"
+            onChange={(on) => update((e) => setEdgeLoop(e, on ? { ...DEFAULT_LOOP } : null))}
+          />
+          <p className="text-[11px] leading-snug text-zinc-500">
+            A loop edge points back to an earlier node: when it activates, the nodes from its target to its source run again as a new iteration.
+          </p>
+          {edge.loop && (
+            <p className="text-[11px] text-zinc-500">
+              Loops back at most {edge.loop.maxIterations} time{edge.loop.maxIterations === 1 ? "" : "s"}; the run shows the count as a badge on the edge.
+            </p>
+          )}
           {edge.loop && (
             <div className="grid grid-cols-2 gap-2">
               <Field label="Max iterations">
@@ -161,32 +201,47 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
                 <Select
                   value={edge.loop.onExhausted}
                   disabled={disabled}
-                  options={[
-                    { value: "fail", label: "Fail" },
-                    { value: "continue", label: "Continue" },
-                  ]}
+                  options={EXHAUSTED_OPTIONS}
                   onChange={(onExhausted) => update((e) => ({ ...e, loop: { ...e.loop!, onExhausted } }))}
                 />
               </Field>
             </div>
           )}
-        </>
+          {edge.loop && (
+            <p className="text-[11px] text-zinc-500">
+              {edge.loop.onExhausted === "fail"
+                ? "When exhausted, the edge's source node fails (route it with a failure edge, or the run pauses)."
+                : "When exhausted, the edge delivers a skip and the flow continues on the other branches."}
+            </p>
+          )}
+        </Section>
       )}
-    </Section>
+    </>
   );
 }
 
 function RunInspector() {
   const detail = useRunStore((s) => s.detail);
   const selectedNodeId = useRunStore((s) => s.selectedNodeId);
-  const currentByNode = useRunStore((s) => s.currentByNode);
+  const selectedIteration = useRunStore((s) => s.selectedIteration);
   const lanes = useRunStore((s) => s.lanes);
   if (!detail) return null;
   const node = selectedNodeId ? detail.run.graphSnapshot.nodes.find((n) => n.id === selectedNodeId) : undefined;
   if (node) {
-    const nodeRun = currentByNode[node.id] ?? null;
+    const iterations = nodeIterations(detail.nodeRuns, node.id);
+    const entry = selectIterationEntry(iterations, selectedIteration);
+    const nodeRun = entry?.nodeRun ?? null;
     const lane = nodeRun?.laneId ? (lanes[nodeRun.laneId] ?? null) : null;
-    return <NodeRunDetails node={node} nodeRun={nodeRun} lane={lane} runStatus={detail.run.status} />;
+    return (
+      <NodeRunDetails
+        node={node}
+        nodeRun={nodeRun}
+        lane={lane}
+        runStatus={detail.run.status}
+        iterations={iterations}
+        historical={!!entry && entry !== iterations[iterations.length - 1]}
+      />
+    );
   }
   return <RunOverview />;
 }

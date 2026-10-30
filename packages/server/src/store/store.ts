@@ -7,6 +7,7 @@ import {
   type Graph,
   type Lane,
   type LaneStatus,
+  type LoopState,
   type NodeRun,
   type NodeRunOutput,
   type NodeStatus,
@@ -48,7 +49,10 @@ export interface NewRun {
   startedAt: number;
 }
 
-export type RunPatch = Partial<Pick<Run, "status" | "error" | "finishedAt" | "cleanedUp">>;
+export type RunPatch = Partial<Pick<Run, "status" | "error" | "finishedAt" | "cleanedUp">> & {
+  /** Phase 2 loop counters (§15.4), exposed as RunDetail.loops. */
+  loops?: LoopState[];
+};
 
 export type NewLane = Omit<Lane, "pushed" | "status"> & { status?: LaneStatus };
 export type LanePatch = Partial<Pick<Lane, "status" | "pushed" | "worktreePath">>;
@@ -68,6 +72,7 @@ interface RunRow {
   status: RunStatus;
   error: string | null;
   cleaned_up: number;
+  loops: string | null;
   started_at: number;
   finished_at: number | null;
 }
@@ -204,6 +209,7 @@ export class Store {
       ["error", patch.error],
       ["finished_at", patch.finishedAt],
       ["cleaned_up", patch.cleanedUp === undefined ? undefined : patch.cleanedUp ? 1 : 0],
+      ["loops", patch.loops === undefined ? undefined : JSON.stringify(patch.loops)],
     ]);
     if (sql) this.db.prepare(`UPDATE runs SET ${sql} WHERE id = ?`).run(...values, id);
     const run = this.getRun(id);
@@ -242,6 +248,12 @@ export class Store {
       .prepare(`SELECT * FROM runs WHERE status IN (${statuses.map(() => "?").join(", ")}) ORDER BY started_at, rowid`)
       .all(...statuses) as RunRow[];
     return rows.map((r) => this.runFromRow(r));
+  }
+
+  /** Persisted loop counters of a run ([] for graphs without loops). */
+  getLoopStates(runId: string): LoopState[] {
+    const row = this.db.prepare(`SELECT loops FROM runs WHERE id = ?`).get(runId) as Pick<RunRow, "loops"> | undefined;
+    return parseJson<LoopState[]>(row?.loops ?? null) ?? [];
   }
 
   private summaryFromRow(r: RunRow): RunSummary {

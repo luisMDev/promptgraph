@@ -1,4 +1,16 @@
-import { edgeMatches, isActiveNodeStatus, type GraphEdge, type GraphNode, type Lane, type NodeOutcome, type NodeRun, type RunDetail } from "@promptgraph/shared";
+import {
+  edgeMatches,
+  isActiveNodeStatus,
+  isFinalNodeStatus,
+  type Graph,
+  type GraphEdge,
+  type GraphNode,
+  type Lane,
+  type LoopState,
+  type NodeOutcome,
+  type NodeRun,
+  type RunDetail,
+} from "@promptgraph/shared";
 
 /** Latest (highest iteration, then attempt) node run per node id. */
 export function currentNodeRuns(nodeRuns: readonly NodeRun[]): Record<string, NodeRun> {
@@ -23,13 +35,18 @@ export function upsertNodeRun(list: readonly NodeRun[], nodeRun: NodeRun): NodeR
 
 export type EdgeRunState = "idle" | "flowing" | "activated" | "dead";
 
-/** Run-mode look of an edge: animated while its source runs, green once it delivered an activation (§8.2). */
-export function edgeRunState(edge: GraphEdge, source: NodeRun | undefined): EdgeRunState {
+/**
+ * Run-mode look of an edge: animated while its source runs, green once it delivered an activation, greyed when
+ * it delivered a skip (dead path, §8.2/§15.3). An exhausted loop back-edge delivers a skip even when it matches.
+ */
+export function edgeRunState(edge: GraphEdge, source: NodeRun | undefined, loop?: Pick<LoopView, "exhausted">): EdgeRunState {
   if (!source) return "idle";
   if (isActiveNodeStatus(source.status)) return "flowing";
   const outcome = outcomeOf(source);
   if (!outcome) return source.status === "skipped" ? "dead" : "idle";
-  return edgeMatches(edge, outcome) ? "activated" : "dead";
+  if (!edgeMatches(edge, outcome)) return "dead";
+  if (edge.loop && loop?.exhausted) return "dead";
+  return "activated";
 }
 
 function outcomeOf(nr: NodeRun): NodeOutcome | null {
@@ -39,7 +56,88 @@ function outcomeOf(nr: NodeRun): NodeOutcome | null {
   return null;
 }
 
-export type NoteTone = "amber" | "violet" | "green" | "red" | "blue";
+// ---------------------------------------------------------------------------
+// Loops and iterations (§15.4)
+// ---------------------------------------------------------------------------
+
+/** What the canvas shows for a loop back-edge: times looped back (in the current pass) / maximum. */
+export interface LoopView {
+  iteration: number;
+  maxIterations: number;
+  exhausted: boolean;
+}
+
+/**
+ * Loop state per loop back-edge of the snapshot. The server's `RunDetail.loops` wins; for edges it does not
+ * list, the count is derived from the highest iteration of the loop target's node runs (exact for a single
+ * loop; an enclosing loop also advances it) and `exhausted` is unknown (false).
+ */
+export function loopViews(graph: Pick<Graph, "edges">, nodeRuns: readonly NodeRun[], server?: readonly LoopState[]): Record<string, LoopView> {
+  const maxIteration = new Map<string, number>();
+  for (const nr of nodeRuns) maxIteration.set(nr.nodeId, Math.max(maxIteration.get(nr.nodeId) ?? 0, nr.iteration));
+  const known = new Map((server ?? []).map((l) => [l.edgeId, l] as const));
+  const out: Record<string, LoopView> = {};
+  for (const e of graph.edges) {
+    if (!e.loop) continue;
+    const s = known.get(e.id);
+    out[e.id] = s
+      ? { iteration: s.iteration, maxIterations: s.maxIterations, exhausted: s.exhausted }
+      : { iteration: Math.min(maxIteration.get(e.target) ?? 0, e.loop.maxIterations), maxIterations: e.loop.maxIterations, exhausted: false };
+  }
+  return out;
+}
+
+/** Iteration badge of a loop edge during runs, e.g. "2/3". */
+export function loopBadge(loop: LoopView): string {
+  return `${loop.iteration}/${loop.maxIterations}`;
+}
+
+/**
+ * Whether a node update means the server-side loop state may have changed: a node run of a new iteration
+ * (a loop edge looped back), or a loop edge's source settling (it may have exhausted its loop).
+ */
+export function affectsLoops(graph: Pick<Graph, "edges">, prev: readonly NodeRun[], next: NodeRun): boolean {
+  const loopEdges = graph.edges.filter((e) => e.loop);
+  if (loopEdges.length === 0) return false;
+  const newIteration = next.iteration > 0 && !prev.some((n) => n.nodeId === next.nodeId && n.iteration === next.iteration);
+  if (newIteration) return true;
+  const before = prev.find((n) => n.id === next.id);
+  const settled = isFinalNodeStatus(next.status) && before?.status !== next.status;
+  return settled && loopEdges.some((e) => e.source === next.nodeId);
+}
+
+/** One entry per iteration of a node: its latest attempt, plus how many attempts it took. Ascending. */
+export interface IterationEntry {
+  iteration: number;
+  nodeRun: NodeRun;
+  attempts: number;
+}
+
+export function nodeIterations(nodeRuns: readonly NodeRun[], nodeId: string): IterationEntry[] {
+  const byIteration = new Map<number, IterationEntry>();
+  for (const nr of nodeRuns) {
+    if (nr.nodeId !== nodeId) continue;
+    const cur = byIteration.get(nr.iteration);
+    if (!cur) byIteration.set(nr.iteration, { iteration: nr.iteration, nodeRun: nr, attempts: 1 });
+    else byIteration.set(nr.iteration, { iteration: nr.iteration, nodeRun: nr.attempt >= cur.nodeRun.attempt ? nr : cur.nodeRun, attempts: cur.attempts + 1 });
+  }
+  return [...byIteration.values()].sort((a, b) => a.iteration - b.iteration);
+}
+
+/**
+ * The iteration the inspector shows: the selected one when it exists, else the latest (null when the node
+ * has no node run yet).
+ */
+export function selectIterationEntry(entries: readonly IterationEntry[], selected: number | null): IterationEntry | null {
+  if (entries.length === 0) return null;
+  if (selected !== null) {
+    const hit = entries.find((e) => e.iteration === selected);
+    if (hit) return hit;
+  }
+  return entries[entries.length - 1]!;
+}
+
+export type NoteTone = "amber" | "violet" | "green" | "red" | "blue" | "zinc";
 
 /** Type-specific state line on a run-mode node card (merge conflicts, approval gates). */
 export function cardNote(node: Pick<GraphNode, "type">, nodeRun: NodeRun | null): { text: string; tone: NoteTone } | null {
@@ -54,6 +152,11 @@ export function cardNote(node: Pick<GraphNode, "type">, nodeRun: NodeRun | null)
     if (conflicts && isActiveNodeStatus(nodeRun.status)) return { text: `Resolving ${files(conflicts)}`, tone: "blue" };
     if (conflicts && nodeRun.status === "succeeded") return { text: `Resolved ${files(conflicts)}`, tone: "green" };
     return null;
+  }
+  if (node.type === "condition") {
+    if (!o?.port) return null;
+    const reason = o.text?.trim();
+    return { text: reason ? `${o.port} — ${reason}` : `Result: ${o.port}`, tone: o.port === "true" ? "green" : "zinc" };
   }
   if (node.type !== "approval" && node.type !== "pr") return null;
   if (nodeRun.status === "waiting_approval") return { text: "Click to review and approve", tone: "violet" };

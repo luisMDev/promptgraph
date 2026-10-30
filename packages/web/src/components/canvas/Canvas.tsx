@@ -181,6 +181,7 @@ function RunCanvas() {
   const detail = useRunStore((s) => s.detail);
   const currentByNode = useRunStore((s) => s.currentByNode);
   const lanes = useRunStore((s) => s.lanes);
+  const loops = useRunStore((s) => s.loops);
   const selectedNodeId = useRunStore((s) => s.selectedNodeId);
   const detailError = useRunStore((s) => s.detailError);
   const phase = useEditorStore((s) => s.phase);
@@ -198,10 +199,10 @@ function RunCanvas() {
             selectedNodeIds: selectedNodeId ? [selectedNodeId] : [],
             selectedEdgeIds: [],
             measured,
-            run: { currentByNode, lanes },
+            run: { currentByNode, lanes, loops },
           }
         : null,
-    [graph, phase, selectedNodeId, measured, currentByNode, lanes],
+    [graph, phase, selectedNodeId, measured, currentByNode, lanes, loops],
   );
   const nodes = useMemo(() => (input ? toFlowNodes(input) : []), [input]);
   const edges = useMemo(() => (input ? toFlowEdges(input) : []), [input]);

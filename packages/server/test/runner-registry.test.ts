@@ -5,6 +5,7 @@ import { HookRouter } from "../src/hooks/hook-router.js";
 import { PtyManager } from "../src/pty/pty-manager.js";
 import { ClaudeRunner } from "../src/runners/claude/claude-runner.js";
 import { ApprovalRunner } from "../src/runners/approval-runner.js";
+import { ConditionRunner } from "../src/runners/condition-runner.js";
 import { CommitRunner } from "../src/runners/git/commit-runner.js";
 import { MergeRunner } from "../src/runners/git/merge-runner.js";
 import { PrRunner } from "../src/runners/git/pr-runner.js";
@@ -25,5 +26,6 @@ describe("createRunnerRegistry", () => {
     expect(reg.merge).toBeInstanceOf(MergeRunner);
     expect(reg.pr).toBeInstanceOf(PrRunner);
     expect(reg.approval).toBeInstanceOf(ApprovalRunner);
+    expect(reg.condition).toBeInstanceOf(ConditionRunner);
   });
 });

@@ -236,7 +236,15 @@ const EVALUATOR_DEFAULTS: Record<ConditionEvaluator["kind"], ConditionEvaluator>
   judge: { kind: "judge", question: "" },
 };
 
-function ConditionForm({ node, disabled, patch }: FormProps<"condition">) {
+/** Sets or removes (undefined) an optional key, so cleared fields do not linger as `undefined` in the file. */
+function withOptional<T extends object, K extends keyof T>(obj: T, key: K, value: T[K] | undefined): T {
+  const next = { ...obj };
+  if (value === undefined) delete next[key];
+  else next[key] = value;
+  return next;
+}
+
+function ConditionForm({ node, settings, disabled, patch }: FormProps<"condition">) {
   const ev = node.config.evaluator;
   return (
     <div className="space-y-3">
@@ -268,10 +276,22 @@ function ConditionForm({ node, disabled, patch }: FormProps<"condition">) {
         </div>
       )}
       {ev.kind === "judge" && (
-        <Field label="Question" hint="Answered yes/no by headless Claude from the predecessor's output and the diff stat.">
-          <TextArea value={ev.question} rows={3} disabled={disabled} onChange={(question) => patch({ evaluator: { ...ev, question } })} />
-        </Field>
+        <>
+          <Field label="Question" hint="Answered yes (true) / no (false) by headless Claude from the predecessor's output and the lane's diff stat. Its reason is passed to the next node.">
+            <TextArea value={ev.question} rows={3} disabled={disabled} placeholder="Did the review report any blocking issue?" onChange={(question) => patch({ evaluator: { ...ev, question } })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Model">
+              <OptionalText value={ev.model} placeholder={settings.defaults.model ? `Default (${settings.defaults.model})` : "Default"} disabled={disabled} onChange={(model) => patch({ evaluator: withOptional(ev, "model", model) })} />
+            </Field>
+            <Field label="Timeout (s)">
+              <OptionalNumber value={ev.timeoutSec} min={1} placeholder="120" disabled={disabled} onChange={(t) => patch({ evaluator: withOptional(ev, "timeoutSec", t === undefined ? undefined : Math.max(1, Math.round(t))) })} />
+            </Field>
+          </div>
+        </>
       )}
+      {ev.kind === "exitCode" && <p className="text-[11px] text-zinc-500">true when the preceding shell node exited with this code; a timeout counts as false.</p>}
+      {ev.kind === "regex" && <p className="text-[11px] text-zinc-500">true when the pattern matches the predecessor's output (its text, else the shell output tail).</p>}
     </div>
   );
 }

@@ -129,44 +129,80 @@ export function branchKey(edge: GraphEdge): "out" | "true" | "false" | "error" {
   return "out";
 }
 
-/** Nodes downstream of `nodeId` reached only through edges with the given branch key. */
-function branchReach(topo: Topology, nodeId: string, key: string): Set<string> {
-  const seen = new Set<string>();
-  for (const e of topo.outgoing.get(nodeId) ?? []) {
-    if (branchKey(e) !== key) continue;
-    seen.add(e.target);
-    for (const d of descendants(topo, e.target)) seen.add(d);
-  }
-  return seen;
-}
+type ExclusiveKey = "out" | "true" | "false" | "error";
 
-const EXCLUSIVE_KEYS: ReadonlyArray<readonly [string, string]> = [
+/** Branch-key pairs that never fire for the same outcome of one node run. */
+const EXCLUSIVE_KEYS: ReadonlyArray<readonly [ExclusiveKey, ExclusiveKey]> = [
   ["true", "false"],
   ["out", "error"],
   ["true", "error"],
   ["false", "error"],
 ];
 
+/** Edge leaving `split` that fires only for branch key `key` ("always" edges fire for every outcome). */
+function isKeyEdge(e: GraphEdge, split: string, key: ExclusiveKey): boolean {
+  return e.source === split && edgeWhen(e) !== "always" && branchKey(e) === key;
+}
+
 /**
- * Phase 2: whether two incoming edges of a join come from mutually exclusive branches of one
- * upstream node (e.g. the true/false ports of a condition, or success/failure of any node).
+ * Nodes that can only be activated after `split` fired `key`: every forward input is a `key` edge of
+ * `split` or comes from such a node (dominance over activations, computed in topological order).
  */
-export function edgesMutuallyExclusive(topo: Topology, a: GraphEdge, b: GraphEdge): boolean {
+function dominatedBy(topo: Topology, split: string, key: ExclusiveKey): Set<string> {
+  const dominated = new Set<string>();
+  for (const node of topologicalOrder(topo).order) {
+    const inputs = topo.incoming.get(node.id)!;
+    if (inputs.length > 0 && inputs.every((e) => isKeyEdge(e, split, key) || dominated.has(e.source))) dominated.add(node.id);
+  }
+  return dominated;
+}
+
+/**
+ * Phase 2: whether two incoming edges of a join can never both deliver an activation in one pass.
+ *
+ * Provably exclusive (and nothing else): there is a node S and a pair of branch keys of S that never fire
+ * together — true/false of a condition, success (`out`) vs failure (`error`), true or false vs failure —
+ * such that each edge is *dominated* by one side: it is that side's edge of S, or its source can only be
+ * activated through that side (every forward path into it starts with that side's edge of S). "always"
+ * edges fire for every outcome and dominate nothing. Since S runs once per pass and fires one side, at
+ * most one of the two edges activates; the other is a dead path (skip). Reaching a node only *through* a
+ * side is not enough: a second, unrelated input could activate it too.
+ */
+export function edgesMutuallyExclusive(topo: Topology, a: GraphEdge, b: GraphEdge, cache?: Map<string, Set<string>>): boolean {
+  const memo = cache ?? new Map<string, Set<string>>();
+  const dom = (split: string, key: ExclusiveKey): Set<string> => {
+    const k = `${split}\u0000${key}`;
+    let set = memo.get(k);
+    if (!set) memo.set(k, (set = dominatedBy(topo, split, key)));
+    return set;
+  };
+  const on = (e: GraphEdge, split: string, key: ExclusiveKey) => isKeyEdge(e, split, key) || dom(split, key).has(e.source);
   const candidates = new Set([a.source, b.source, ...ancestors(topo, a.source), ...ancestors(topo, b.source)]);
-  const side = (e: GraphEdge, split: string, key: string, reach: Set<string>) =>
-    (e.source === split && branchKey(e) === key) || (e.source !== split && reach.has(e.source));
   for (const split of candidates) {
     for (const [k1, k2] of EXCLUSIVE_KEYS) {
-      const r1 = branchReach(topo, split, k1);
-      const r2 = branchReach(topo, split, k2);
-      const aOnly1 = side(a, split, k1, r1) && !side(a, split, k2, r2);
-      const aOnly2 = side(a, split, k2, r2) && !side(a, split, k1, r1);
-      const bOnly1 = side(b, split, k1, r1) && !side(b, split, k2, r2);
-      const bOnly2 = side(b, split, k2, r2) && !side(b, split, k1, r1);
-      if ((aOnly1 && bOnly2) || (aOnly2 && bOnly1)) return true;
+      if ((on(a, split, k1) && on(b, split, k2)) || (on(a, split, k2) && on(b, split, k1))) return true;
     }
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Loops (§15.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Loop body of a loop back-edge: the nodes on forward paths from its target to its source (both
+ * included). A self-loop edge (retry one node) has a body of one node. Empty when the target does not
+ * reach the source (invalid loop).
+ */
+export function loopBody(topo: Topology, edge: Pick<GraphEdge, "source" | "target">): Set<string> {
+  if (edge.source === edge.target) return new Set(topo.nodes.has(edge.source) ? [edge.source] : []);
+  const down = descendants(topo, edge.target);
+  if (!down.has(edge.source)) return new Set();
+  const up = ancestors(topo, edge.source);
+  const body = new Set<string>([edge.target, edge.source]);
+  for (const id of down) if (up.has(id)) body.add(id);
+  return body;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +238,8 @@ export interface LanePlan {
  * 1. each root starts a new lane from baseBranch (root lanes are numbered first, in canvas order);
  * 2. single successor stays in the lane;
  * 3. fan-out: per branch key, the first target by canvas order keeps the lane, others fork new lanes;
- *    different branch keys are exclusive and all keep the lane;
+ *    different branch keys are exclusive and all keep the lane (both branches of a condition, a node and
+ *    its failure path); a node with an "always" edge has no exclusive groups (every edge may fire with it);
  * 4. merge continues the lane of its first input (canvas order) and merges the others.
  * Non-merge joins (Phase 2 exclusive joins) take the lane of their first input.
  */
@@ -241,8 +278,11 @@ export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan
     laneOf.set(node.id, lane);
 
     const groups = new Map<string, GraphEdge[]>();
-    for (const e of topo.outgoing.get(node.id)!) {
-      const k = branchKey(e);
+    const outgoing = topo.outgoing.get(node.id)!;
+    // "always" edges fire together with the success and the failure side: nothing is exclusive then.
+    const hasAlways = outgoing.some((e) => edgeWhen(e) === "always");
+    for (const e of outgoing) {
+      const k = hasAlways ? "all" : branchKey(e);
       groups.set(k, [...(groups.get(k) ?? []), e]);
     }
     for (const edges of groups.values()) {

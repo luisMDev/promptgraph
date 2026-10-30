@@ -41,6 +41,13 @@ export interface RunnerContext {
   /** Latest earlier attempt of this node (retry); for Claude nodes interrupted → resume its session. */
   previousAttempt: NodeRun | null;
   /**
+   * Phase 2 loops (§15.4): this node's latest run of the previous iteration (null on the first pass and
+   * outside loops). Claude nodes with context "resume" continue its session.
+   */
+  previousIteration?: NodeRun | null;
+  /** Phase 2: the node is inside a loop body (its "resume" first pass may start a new session). */
+  inLoopBody?: boolean;
+  /**
    * merge nodes: the other input lanes to merge into `lane`, in canvas order of the inputs (§9.5, §18 Q4:
    * sequential pairwise). Already checkpointed by the engine, as is `lane`. Empty for other node types.
    */

@@ -25,6 +25,8 @@ export const VALIDATION_CODES = [
   "uncommitted_before_merge",
   "empty_label",
   "condition_input",
+  "unconditional_loop",
+  "on_error_ignored",
 ] as const;
 export const ValidationCodeSchema = z.enum(VALIDATION_CODES);
 export type ValidationCode = z.infer<typeof ValidationCodeSchema>;

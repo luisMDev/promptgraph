@@ -40,29 +40,35 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 |---|---|
 | `graph.ts` | `GraphSchema`, `NodeSchema` (discriminated by `type`), per-type `*ConfigSchema` with §6.1 defaults, `EdgeSchema` (`sourcePort`, Phase-2 `when`/`loop` optional), `GraphSettingsSchema` (incl. `autoTrustWorktrees` default true, `allowPrWithoutApproval` default false), `CompletionPolicySchema`, types `Graph`, `GraphInput`, `GraphNode`, `GraphNodeOf<T>`, `ClaudeNode`, `GraphEdge`, `NodeConfigMap`; helpers `defaultNodeConfig`, `resolveBranchPrefix`, `slugifyGraphId`, `edgeWhen`, `edgeMatches`, `NodeOutcome`, `compareCanvasOrder`, `createEmptyGraph`, `isClaudeNode` |
 | `status.ts` | `NodeStatus` (§8.2; `ready` = queued), `RunStatus` (§8.3), `LaneStatus`, `ACTIVE_/FINAL_/ATTENTION_NODE_STATUSES`, `isFinalRunStatus` |
-| `run.ts` | `TokenUsage`, `NodeRunOutput`, `WaitingReason`, `NodeRun`, `Lane`, `RunSummary`, `Run` (= summary + `graphSnapshot`), `RunDetail`, `RunEvent` |
+| `run.ts` | `TokenUsage`, `NodeRunOutput`, `WaitingReason`, `NodeRun`, `Lane`, `RunSummary`, `Run` (= summary + `graphSnapshot`), `RunDetail` (+ Phase-2 `loops?: LoopState[]`), `LoopState`, `RunEvent` |
 | `pricing.ts` | `PRICE_TABLE`, `MODEL_ALIASES`, `priceFor`, `RawUsage`, `costFromUsage`, `emptyUsage`, `accumulateUsage`, `sumUsage`, `formatCostUsd` |
 | `hooks.ts` | `HookEvent` (`session-start`/`activity`/`notification`/`stop`), `CLAUDE_HOOK_FOR_EVENT`, payload schemas, `HookPayloadMap`, `describeToolActivity` |
 | `headless.ts` | `HeadlessResultSchema` (real `claude -p --output-format json` envelope), `GENERATED_MESSAGE_JSON_SCHEMA`, `JUDGE_JSON_SCHEMA` |
+| `condition.ts` | `regexError(pattern, flags)` → message or null (validator + ConditionRunner) |
 | `api.ts` | REST request/response schemas (§7 below), `AppSettingsSchema`, `API` path builders, `TOKEN_COOKIE` |
 | `ws.ts` | `ServerMessageSchema`, `ClientMessageSchema` (discriminated unions), `encodeBase64`/`decodeBase64` |
-| `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
+| `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
 Semantics fixed here (do not re-implement elsewhere):
 
 - **Edge matching** `edgeMatches(edge, outcome)`: `when` defaults to `failure` for `sourcePort:"error"`, else `success`;
-  `true`/`false` ports match `outcome.port`. Phase 1 graphs only contain `out` + success edges.
+  `true`/`false` ports match `outcome.port`; `always` matches every outcome. Phase 1 graphs only contain `out` +
+  success edges.
 - **Lane plan** `computeLanePlan` (§9.2): root lanes are created first in canvas order (`main`, `l2`, `l3`…),
   forks get the next ids in topological order. Branch-key groups (`out`/`true`/`false`/`error`) are mutually
-  exclusive and never fork. `mergeSources.get(mergeNodeId)` = lanes to merge, in canvas order of the inputs
+  exclusive and never fork — except that a node with an `always` edge has a single group (that edge fires with
+  the success and the failure side). `mergeSources.get(mergeNodeId)` = lanes to merge, in canvas order of the inputs
   (§18 Q4: sequential pairwise, no octopus). `edgeLane.get(edgeId)` = lane an edge grants its target; a
   fan-out edge straight into a merge grants a fork lane whose `firstNodeId` is the merge itself.
-- **Validation phase**: the server passes `SUPPORTED_PHASE` (`config/version.ts`, 1 until M5). Phase 1 rejects
+- **Validation phase**: the server passes `SUPPORTED_PHASE` (`config/version.ts`, **2** since M5/M6). Phase 1 rejects
   condition nodes, non-success edges and loops (`phase2_unsupported`) and every non-merge join (`invalid_join`).
-  Phase 2 allows joins whose inputs are pairwise `edgesMutuallyExclusive`.
+  Phase 2 allows joins whose inputs are pairwise `edgesMutuallyExclusive` **and** granted the same lane
+  (`edgeLane`), see engine-flow notes for the exclusivity proof and the loop rules.
 - **Warnings** (never block Run): `uncommitted_before_pr`, `uncommitted_before_merge` (§18 Q1 — the engine
-  checkpoints automatically), `empty_label`, `condition_input`.
+  checkpoints automatically), `empty_label`, `condition_input` (no input; or an exit-code condition fed by a
+  shell through a `success` edge — a failing shell never reaches it, use `always`), `unconditional_loop`,
+  `on_error_ignored`.
 - **Cost**: `costFromUsage(model, rawUsage)` — cache writes without a 5m/1h split are priced as 1h (what
   Claude Code uses); verified exactly against a real envelope (`total_cost_usd` 0.1756). Unknown model → 0.
 
@@ -91,11 +97,11 @@ Semantics fixed here (do not re-implement elsewhere):
 |---|---|---|
 | `config/paths.ts` ✅ | `pgHome`, `getPaths` → `PgPaths`, `runDir`, `ptyLogPath`, `hooksSettingsPath`, `worktreePath`, `graphsDir`, `claudeConfigFile`, `PG_HOOK_SOURCE`, `webDistDir` | done |
 | `config/child-env.ts` ✅ | `claudeBin`, `childEnv`, `PgHookEnv` | done |
-| `config/version.ts` ✅ | `VERSION`, `SUPPORTED_PHASE` | done (M5 bumps phase) |
+| `config/version.ts` ✅ | `VERSION`, `SUPPORTED_PHASE` (= 2) | done (M5 bumped the phase) |
 | `config/app-settings.ts` | `AppSettingsStore {get, update}` | M2 |
 | `events/bus.ts` ✅ | `EventBus`, `BusEvents`, `AttentionKind` | done |
 | `util/ids.ts`, `util/text.ts` ✅ | see §3 | done |
-| `store/schema.ts` ✅ | `MIGRATIONS` (user_version based) | done |
+| `store/schema.ts` ✅ | `MIGRATIONS` (user_version based; #2 adds `runs.loops`) | done (M6) |
 | `store/store.ts` | `openDatabase`, `Store` DAO, `NewRun`, `RunPatch`, `NewLane`, `LanePatch`, `NewNodeRun`, `NodeRunPatch` | M1 |
 | `graphs/graph-store.ts` | `GraphStore {ensureDir, list, get, save, delete, watch}`, `hashContent`, `serializeGraph`, `GraphNotFoundError`, `GraphLoadError` | M1 |
 | `git/exec.ts` ✅ | `git`, `gitOk`, `GitError` | M1 |
@@ -120,12 +126,12 @@ Semantics fixed here (do not re-implement elsewhere):
 | `runners/git/merge-runner.ts` | `MergeRunner`, `MergeRunnerDeps`, `conflictPrompt`, `mergeMessage` | M3 (done) |
 | `runners/git/pr-runner.ts` | `PrRunner`, `PrRunnerDeps` | M4 (done) |
 | `runners/approval-runner.ts` | `ApprovalRunner`, `ApprovalGate`, `Interruption`, `approvalOutput`, `rejectionError` | M4 (done) |
-| `runners/condition-runner.ts` | `ConditionRunner` | M5 |
+| `runners/condition-runner.ts` ✅ | `ConditionRunner` (+ `evaluatedPredecessor`, `evaluateExitCode`, `evaluateRegex`, `buildJudgePrompt`, `parseJudgeVerdict`, `laneDiffStat`) | M5 |
 | `runners/registry.ts` | `createRunnerRegistry` | M1 (+ each milestone adds its runner) |
 | `workspace/lane-manager.ts` | `LaneManager`, `RepoRef`, `MergeAttempt` | M1 (single lane) / M3 (forks, merge, cleanup) |
 | `workspace/setup.ts` | `runWorkspaceSetup` | M3 |
 | `engine/state.ts` ✅ | `NODE_TRANSITIONS`, `canTransition`, `assertTransition`, `RUN_TRANSITIONS` | done |
-| `engine/activation.ts` | `ActivationTracker`, `ActivationDelta` | M1 (skips/dead paths M5, loops M6) |
+| `engine/activation.ts` ✅ | `ActivationTracker`, `ActivationDelta`, `LoopIteration` | M1 (skips/dead paths M5, loops M6) |
 | `engine/scheduler.ts` | `Scheduler`, `SchedulerItem` | M1 (cap matters from M3) |
 | `engine/recovery.ts` | `markInterrupted` | M4 (crash resume) — M1 may implement early |
 | `engine/engine.ts` | `Engine`, `EngineDeps`, `EngineError` | M1 |
@@ -253,6 +259,84 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
   before queued Claude items) and rejects with "Cancelled" when the node's signal aborts. MergeRunner must await it
   before spawning a Claude conflict resolver.
 
+**Implementation notes (engine-flow, M5/M6):**
+- **Outcomes.** `succeeded` → `{kind:"success", port: output.port}` (condition runners set `port`), `failed` →
+  `{kind:"failure"}`. Every outgoing forward edge delivers an activation (`edgeMatches`) or a skip; a node whose
+  inputs are all resolved with ≥1 activation is ready (join "all"); only skips → `skipped` (dead path) and it
+  propagates skips (§15.3). A failure is **handled** when a forward edge matches it (`when` failure/always, error
+  port) or a loop edge loops back on it; handled failures advance the flow and `onError` does not apply; others
+  follow `onError` (pause / fail-run). The failed node run keeps `error` + runner `output` (shell `exitCode`,
+  `stdoutTail`), so `ctx.predecessors` of the failure branch carry it into the context block (§15.1).
+- **Context** (`ctx.predecessors`): direct predecessors whose edge delivered an activation (all of them when none
+  did, e.g. a user-skipped input), canvas order, current node runs; dead branches of an exclusive join are left out.
+  A loop target in a later iteration also gets, last, the loop-source run that looped back (from the
+  `loop.iteration` event). `getApprovalInfo` still lists every direct predecessor.
+- **Run end**: `blockingNodeRuns` = current `interrupted`/`cancelled`, or `failed` that the tracker has not resolved
+  (unhandled). Nothing blocking and everything `succeeded`/`skipped`/handled-`failed` → `succeeded`.
+- **Provably exclusive joins** (`edgesMutuallyExclusive`, validator): edges `a`, `b` are exclusive iff some node S
+  and a key pair of S that never fire together — `true`/`false`, `out`(success)/`error`, `true`/`error`,
+  `false`/`error` — has each edge *dominated* by one side: the edge is that side's edge of S, or its source can only
+  be activated through that side (every forward input of it is that side's edge of S or comes from a node
+  dominated by it; computed in topological order). `always` edges dominate nothing. S runs once per pass and fires
+  one side, so at most one of the two edges activates. "Reached only through a side" is not enough (a second,
+  unrelated input could activate the node). Covers if/else re-joins and "step + its failure path" re-joins. Both
+  branches of a condition keep the lane (branch-key groups), and the validator additionally requires every input
+  of a plain join to be granted the same lane; otherwise a merge is required.
+- **Loops (§15.4)**. `maxIterations` = how many times the loop edge may **loop back** (the body runs at most
+  `maxIterations + 1` times); `LoopState.iteration` = loop-backs so far (0-based, = the body nodes' `NodeRun.
+  iteration` for a single loop; the UI badge reads `iteration/maxIterations`). Body = `loopBody(topo, edge)` (forward
+  paths target → source, both included; a self-loop edge repeats one node, e.g. `error` port loop = retry).
+  Validation (`invalid_loop`): target must be an ancestor of the source (or the source), removing loop edges leaves
+  a DAG (`cycle`), bodies are disjoint or strictly nested (overlap / identical bodies → error), a body has no merge
+  node and starts no parallel branch (every body node and every edge leaving a body node keeps the body's lane).
+  Warning `unconditional_loop`: an `always` loop edge, or a success loop from an `out` port whose body has no
+  condition and no failure/always edge, with onExhausted `fail` (it can only end in a failure).
+- **Loop runtime** (`ActivationTracker`, pure): while a loop may still repeat, deliveries from its body to nodes
+  outside it are **held** (innermost open loop); when the source resolves, its loop edges are settled innermost
+  first: matching edge with `iteration < max` → loop back (`delta.loops`), else the loop closes (a matching edge at
+  the limit sets `exhausted`) and the held deliveries go out. So a branch skipped in an early pass ("tests pass →
+  commit") is not dead, nodes after a loop run once with its last iteration, and a dead-path-skipped source closes
+  the loop. Loop back: deliveries between body nodes are forgotten, deliveries into the body from outside are kept,
+  nested loops inside restart at iteration 0 / not exhausted, the target is released again. A delta is applied
+  as: skipped → loops → ready (ready is filtered to nodes still released after resets).
+- **Engine on loop back** (`startIteration`, one transaction): every body node gets a new `pending` NodeRun with
+  `iteration = previous + 1`, `attempt 0`, same lane (history kept); an unfinished body node run (only when the
+  user skipped the source early) is skipped (pending/ready) or cancelled (live); `runs.loops` (= `tracker.
+  loopStates()`) is persisted; event `loop.iteration {edgeId, iteration, sourceNodeRunId, targetIteration, body}`;
+  `node:update` for the new node runs and `run:update`. Clients refetch `RunDetail.loops` (the web does on
+  node/run updates).
+- **Exhaustion**: `onExhausted:"fail"` — before persisting the source's success, `exhaustedFailLoop` turns it into
+  `failed` "Loop back to "<target>" reached its limit of N iterations" (output kept, event `loop.exhausted`), routed
+  by the source's failure edges or else `onError`. Retry re-runs the source (same iteration, attempt+1); **skip**
+  (user-skip = success) continues past the loop (the edge is exhausted, so it delivers a skip like `continue`).
+  `"continue"` — the loop edge delivers a skip, the loop closes and the flow continues. A failure loop edge at its
+  limit does not handle the failure.
+- **Store**: migration #2 `runs.loops` (JSON `LoopState[]`, NULL without loop edges), `RunPatch.loops`,
+  `Store.getLoopStates(runId)`. `RunDetail.loops` lists every loop edge (persisted state, else iteration 0).
+- **Crash recovery / restore**: `ActivationTracker.restore(graph, finished, loopStates)` replays the current node
+  runs (latest iteration, latest attempt) in topological order with the persisted counters, so held deliveries
+  and closed loops are recomputed. A source that finished right before a crash (its new iteration never
+  persisted) loops back during the replay: `takeRestoredLoops()` → the engine creates that iteration
+  (`ensureLive`) and `resumeRun`/retry/skip continue. Failed current node runs count as handled when a forward
+  failure edge exists or a loop edge would loop back with the persisted counters.
+- **RunnerContext** (optional, additive): `previousIteration` (this node's latest run of the previous iteration)
+  and `inLoopBody`. ClaudeRunner, `context:"resume"`: `previousIteration.sessionId` → resume the node's own session
+  (prompt only, §15.4); else the predecessor rule; with no session to resume inside a loop body (first pass after
+  a condition) → a new session with the fresh context block. The validator skips the resume predecessor rule for
+  loop-body nodes. `fresh` gets the current iteration's predecessors (plus the loop source for the target).
+- Approval/PR dialog predecessors (`getApprovalInfo`) leave out skipped inputs when another input ran (dead
+  branch of an exclusive join), like the runner context.
+- Tests: `test/activation.test.ts`, `test/engine-flow.test.ts` (fakes shared with `engine.test.ts` in
+  `test/support/engine-fakes.ts`; `setup(runners, {phase: 2})`), `packages/shared/test/flow-validate.test.ts`, and
+  `test/e2e/flow.e2e.test.ts` (real server + shell + condition runners, fake claude) covering the §15.5 patterns:
+  test-fix loop (fails twice → 2 extra iterations → commit; exhausted `fail` pauses; exhausted `continue` goes on),
+  review loop with a scripted judge (`FAKE_CLAUDE_JUDGE_SCRIPT`), failure routing (never pauses), if/else re-join
+  with transitive dead-path skips, retry inside an iteration, context `resume` across iterations, and crash
+  recovery mid-loop (child process SIGKILLed while the iteration-1 fix hangs). Opt-in real:
+  `PG_REAL_CLAUDE=1 pnpm vitest run packages/server/test/e2e/flow.real.test.ts` (haiku: `test -f ok.txt` →
+  exit-code condition → false: "Create an empty file named ok.txt" ⟲ (max 3); passes on the second pass,
+  iteration 1, and commits `ok.txt`).
+
 ## 7. Runners (`runners/`)
 
 Contract in `runners/types.ts`. A runner never writes final statuses; it returns a `RunnerResult`. While
@@ -330,6 +414,27 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   for the user-input signal, and releases the ring buffer once a PTY has exited (attach reads the log).
 - `Engine.shutdown` also waits (bounded by `stopTimeoutMs`) for in-flight node chains (finish → advance →
   finalize/cleanup) so nothing writes to the store after the DB is closed.
+
+**Implementation notes (condition-runner, M5):**
+- `ConditionRunner` (`{env?}`, registered as `condition`) evaluates the first direct predecessor (canvas order)
+  whose current node run succeeded or failed (exclusive joins); none → failed. Output
+  `{result, port: "true"|"false", text: reason}` plus the evaluated predecessor's `exitCode`/`timedOut`/`stdoutTail`
+  when present (so a fix node behind `false` sees the failing output), judge `usage`. The engine routes on
+  `output.port` (existing outcome mechanism; `RunnerResult` unchanged). Evaluation errors → failed.
+  - exitCode: `exitCode === equals`; predecessor without `exitCode` (not a shell) → failed "Exit-code condition:
+    predecessor … has no exit code"; `null` (timeout/signal) → false. Validator: `invalid_config` "An exit-code
+    condition needs a shell predecessor." (phase 2).
+  - regex: fresh `RegExp(pattern, flags)` on `output.text ?? output.stdoutTail ?? error ?? ""`; invalid → failed
+    (validator uses the same `regexError`).
+  - judge: `runHeadless` with `JUDGE_JSON_SCHEMA`, model `evaluator.model ?? settings.defaults.model`, timeout
+    `evaluator.timeoutSec ?? 120` s (both new optional fields of the judge evaluator), cwd = lane; prompt =
+    instructions + question + `describePredecessor` (8k) + `laneDiffStat` (`git diff --stat --summary` of the
+    worktree vs merge-base with `ctx.baseBranch`, + untracked files). Verdict = `structured_output`, else JSON in
+    `result` (bare/fenced/embedded; `pass` may be "yes"/"no"); none → failed "Judge returned no verdict: …".
+  - Event `condition:evaluated {kind, result, predecessor}`. Context block (`describePredecessor`): a node with
+    `output.port` renders `Condition result: <port>` before its text.
+- `NodeRunOutput.result?: boolean` (condition). Real test:
+  `PG_REAL_CLAUDE=1 pnpm vitest run packages/server/test/condition-runner.real.test.ts` (haiku).
 
 **Implementation notes (git-runners, M3/M4):**
 - `ApprovalRunner` (`runners/approval-runner.ts`) also exports the gate helpers `ApprovalGate` (first `approve()` wins,
@@ -549,6 +654,37 @@ hold only state interfaces; builders add the zustand stores there.
 - `DiffView` heads the diff with "Changes since base <sha8>" (full merge-base sha in the tooltip); the inspector lists
   the merge order one source per line. Screenshots: `docs/screenshots/m4-*.png`.
 
+**Implementation notes (web-flow, Phase 2 §15.6):**
+- Editing (`lib/graph-ops.ts`): dragging from the red `error` handle (every node, phase 2) creates
+  `{sourcePort:"error", when:"failure"}`; a phase-2 connection that closes a cycle is created as a loop back-edge
+  with `DEFAULT_LOOP` `{maxIterations:3, onExhausted:"fail"}`. `setEdgeWhen` stores the default (`success` on
+  non-error ports) as an absent `when`; error-port edges keep `when:"failure"` (the inspector locks it).
+  `setEdgeLoop(edge, spec|null)` marks/unmarks. Edge inspector: condition (success/failure/always), loop toggle,
+  max iterations, on exhausted, and the edge's validation issues; node inspector shows judge `model`/`timeoutSec`.
+- Canvas (`lib/flow-mapping.ts`, `components/canvas/PgEdge.tsx`, `lib/edge-path.ts`): loop edges violet, dashed
+  `8 5`; failure edges red, dashed `4 3`. A loop edge pointing backwards is routed below both nodes
+  (`backEdgePath`), label on its bottom run. Edit mode pill: `always` / `on failure` / `loop ≤N[, then continue]`;
+  run mode: loop badge `↺ iteration/maxIterations`. Edge tooltips list errors and warnings. Condition cards have
+  labelled `true`/`false` handles (taken one highlighted in run mode) and a card note `<port> — <reason>`;
+  node cards show `iter N` (1-based) when `iteration > 0`. Skipped (dead) nodes: dashed + faded; edges that
+  delivered a skip (incl. an exhausted loop edge) greyed (`edgeRunState(edge, source, loop?)`).
+- Loop state (`lib/run-view.ts`): `loopViews(snapshot, nodeRuns, detail.loops)` → `RunStore.loops`
+  (edgeId → `{iteration, maxIterations, exhausted}`). `RunDetail.loops` (server, see `shared/run.ts LoopState`)
+  wins; edges it does not list fall back to the loop target's highest node-run iteration (capped, not exhausted).
+  Loop state is not pushed over WS: when `affectsLoops` (a node run of a new iteration, or a loop edge's source
+  settling) the store refetches the run (debounced 150 ms) and takes only `loops` from it.
+- Iterations (§15.4): `nodeIterations(nodeRuns, nodeId)` (latest attempt per iteration, ascending, attempt count)
+  and `selectIterationEntry(entries, RunStore.selectedIteration)` (null / missing → latest). The run inspector
+  shows an iteration selector when a node has several iterations; a previous iteration is read-only (only its
+  Terminal log / Reopen session / Setup log), "Latest" returns to following the current one. `selectNode`
+  to another node resets `selectedIteration`. Condition nodes in run mode: evaluator, result
+  (`output.result ?? port`), reason (`output.text`). When the terminal drawer shows one of the node's iterations,
+  picking another iteration switches the drawer to that iteration's terminal (tab `<label> #N`).
+- Integration (M5/M6): a phase-2 connection from a `shell` to an exit-code `condition` is created with
+  `when:"always"` (so a failing exit code reaches the condition; avoids the `condition_input` warning). Badge
+  numbering: the edge badge is `LoopState.iteration/maxIterations` (loop-backs so far, 0-based), node cards and the
+  iteration selector are 1-based passes (`iter 3` / `#3` = iteration 2). Screenshots: `docs/screenshots/m6-*.png`.
+
 ## 10. fake-claude (`packages/server/test/fixtures/fake-claude`)
 
 Executable Node script; use with `PG_CLAUDE_BIN=<path>` (see `test/helpers.ts: FAKE_CLAUDE, fakeClaudeEnv`).
@@ -581,6 +717,11 @@ Executable Node script; use with `PG_CLAUDE_BIN=<path>` (see `test/helpers.ts: F
   from `FAKE_CLAUDE_STRUCTURED` (JSON); `result` is its JSON string. `[[fail]]` → `is_error:true`, exit 1.
 - `FAKE_CLAUDE_DELAY_MS` (default 50) per-turn latency; `FAKE_CLAUDE_LOG=<file>` appends one JSON line per
   invocation `{argv, cwd, pid, env: PG_*/CLAUDE*/HERMETIC/TERM}` (assert stripping and args).
+- Headless only: `FAKE_CLAUDE_PROMPT_LOG=<file>` appends `{argv, cwd, prompt}` per call (assert judge/message
+  prompts); `FAKE_CLAUDE_RESULT=<text>` → `result` = text and no `structured_output` (a model answering in prose);
+  `FAKE_CLAUDE_JUDGE_SCRIPT=<file>`: one answer per line (`true`/`false`), each headless call whose `--json-schema`
+  has a boolean field consumes the first line for its booleans (a judge across loop iterations); an empty or
+  missing file falls back to the defaults above. Generated commit/PR messages (no boolean field) consume nothing.
 
 Real envelope (Claude Code 2.1.314) for reference: `structured_output` holds the parsed object, `result` the
 same JSON as a string, `stop_reason`, `total_cost_usd`, `usage` (+ `cache_creation.ephemeral_1h_input_tokens`),

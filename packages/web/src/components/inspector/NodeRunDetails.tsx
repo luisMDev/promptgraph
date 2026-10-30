@@ -1,7 +1,18 @@
-import { formatCostUsd, isActiveNodeStatus, isClaudeNode, isFinalRunStatus, type GraphNode, type Lane, type NodeRun, type RunStatus } from "@promptgraph/shared";
+import {
+  formatCostUsd,
+  isActiveNodeStatus,
+  isClaudeNode,
+  isFinalRunStatus,
+  type GraphNode,
+  type GraphNodeOf,
+  type Lane,
+  type NodeRun,
+  type RunStatus,
+} from "@promptgraph/shared";
 import { elapsed, formatTime, formatTokens } from "../../lib/format";
 import { mergeInputLabels } from "../../lib/lanes";
-import { NODE_TYPE_META } from "../../lib/node-meta";
+import { NODE_TYPE_META, configPreview } from "../../lib/node-meta";
+import type { IterationEntry } from "../../lib/run-view";
 import { nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { nodeControl, openNodeTerminal, openSetupTerminal, reopenSession } from "../../store/app-actions";
@@ -9,12 +20,28 @@ import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
-import { Button, DetailRow, Section, StatusDot } from "../common/ui";
+import { Button, DetailRow, Field, Section, StatusDot } from "../common/ui";
 
 /** Run-mode inspector for one node: status, session, branch, timings, output, usage, manual controls. */
-export function NodeRunDetails({ node, nodeRun, lane, runStatus }: { node: GraphNode; nodeRun: NodeRun | null; lane: Lane | null; runStatus: RunStatus }) {
+export function NodeRunDetails({
+  node,
+  nodeRun,
+  lane,
+  runStatus,
+  iterations = [],
+  historical = false,
+}: {
+  node: GraphNode;
+  nodeRun: NodeRun | null;
+  lane: Lane | null;
+  runStatus: RunStatus;
+  /** Every iteration of the node (latest attempt each); a selector is shown when there are several. */
+  iterations?: readonly IterationEntry[];
+  /** `nodeRun` belongs to a previous loop iteration: read-only (no controls besides its terminal). */
+  historical?: boolean;
+}) {
   const label = node.label || NODE_TYPE_META[node.type].title;
-  const attempts = useRunStore((s) => (s.detail?.nodeRuns ?? []).filter((n) => n.nodeId === node.id).length);
+  const attempts = iterations.find((e) => e.nodeRun.id === nodeRun?.id)?.attempts ?? 1;
   return (
     <div>
       <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
@@ -30,9 +57,11 @@ export function NodeRunDetails({ node, nodeRun, lane, runStatus }: { node: Graph
         <p className="px-4 py-4 text-sm text-zinc-500">This node has not been scheduled yet.</p>
       ) : (
         <>
+          {iterations.length > 1 && <IterationSelector iterations={iterations} shown={nodeRun.iteration} historical={historical} label={label} />}
           <StatusSection node={node} nodeRun={nodeRun} lane={lane} attempts={attempts} />
-          <Controls node={node} nodeRun={nodeRun} label={label} runFinal={isFinalRunStatus(runStatus)} />
-          <OutputSection nodeRun={nodeRun} />
+          <Controls node={node} nodeRun={nodeRun} label={iterations.length > 1 ? `${label} #${nodeRun.iteration + 1}` : label} runFinal={isFinalRunStatus(runStatus)} historical={historical} />
+          {node.type === "condition" && <ConditionResult node={node} nodeRun={nodeRun} />}
+          <OutputSection nodeRun={nodeRun} reasonShown={node.type === "condition"} />
           {nodeRun.output?.usage && <UsageSection usage={nodeRun.output.usage} />}
         </>
       )}
@@ -93,16 +122,18 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
   );
 }
 
-function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun: NodeRun; label: string; runFinal: boolean }) {
+function Controls({ node, nodeRun, label, runFinal, historical }: { node: GraphNode; nodeRun: NodeRun; label: string; runFinal: boolean; historical: boolean }) {
   const s = nodeRun.status;
-  const active = isActiveNodeStatus(s);
-  const canRetry = !runFinal && (s === "failed" || s === "interrupted" || s === "cancelled");
-  const canSkip = !runFinal && (s === "failed" || s === "interrupted" || s === "pending" || s === "ready");
-  const canDone = s === "idle" || s === "waiting_input" || (s === "running" && isClaudeNode(node));
-  const canHold = isClaudeNode(node) && !runFinal && (active || s === "pending" || s === "ready");
+  // A previous iteration is history: only its terminal log and session can be opened.
+  const live = !historical;
+  const active = live && isActiveNodeStatus(s);
+  const canRetry = live && !runFinal && (s === "failed" || s === "interrupted" || s === "cancelled");
+  const canSkip = live && !runFinal && (s === "failed" || s === "interrupted" || s === "pending" || s === "ready");
+  const canDone = live && (s === "idle" || s === "waiting_input" || (s === "running" && isClaudeNode(node)));
+  const canHold = live && isClaudeNode(node) && !runFinal && (active || s === "pending" || s === "ready");
   // Any node with a Claude session: prompt/command nodes, and merges that resolved conflicts with Claude.
-  const canReopen = !!nodeRun.sessionId && !active;
-  const canReview = s === "waiting_approval";
+  const canReopen = !!nodeRun.sessionId && !isActiveNodeStatus(s);
+  const canReview = live && s === "waiting_approval";
   const mergeShell = node.type === "merge" && nodeRun.waitingReason?.kind === "merge_conflict";
   if (!(canDone || active || canHold || canRetry || canSkip || canReview || nodeRun.ptyId || canReopen || nodeRun.laneSetup)) return null;
   const id = nodeRun.id;
@@ -159,10 +190,11 @@ function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun
   );
 }
 
-function OutputSection({ nodeRun }: { nodeRun: NodeRun }) {
+function OutputSection({ nodeRun, reasonShown }: { nodeRun: NodeRun; reasonShown: boolean }) {
   const o = nodeRun.output;
   if (!o) return null;
-  const hasAny = o.text || o.stdoutTail || o.sha || o.prUrl || o.exitCode !== undefined || o.conflictedFiles?.length || o.approved !== undefined;
+  const text = reasonShown ? undefined : o.text;
+  const hasAny = text || o.stdoutTail || o.sha || o.prUrl || o.exitCode !== undefined || o.conflictedFiles?.length || o.approved !== undefined;
   if (!hasAny) return null;
   return (
     <Section title="Output">
@@ -179,10 +211,10 @@ function OutputSection({ nodeRun }: { nodeRun: NodeRun }) {
           </DetailRow>
         )}
         {o.approved !== undefined && <DetailRow label="Approval">{o.approved ? "Approved" : "Rejected"}{o.comment ? ` — ${o.comment}` : ""}</DetailRow>}
-        {o.port && <DetailRow label="Branch taken">{o.port}</DetailRow>}
+        {o.port && !reasonShown && <DetailRow label="Branch taken">{o.port}</DetailRow>}
         {o.conflictedFiles?.length ? <DetailRow label="Conflicts"><span className="font-mono text-[11px]">{o.conflictedFiles.join(", ")}</span></DetailRow> : null}
       </div>
-      {o.text && <pre className="max-h-80 overflow-auto rounded-md bg-zinc-950 p-2 text-xs leading-relaxed whitespace-pre-wrap text-zinc-200 ring-1 ring-zinc-800">{o.text}</pre>}
+      {text && <pre className="max-h-80 overflow-auto rounded-md bg-zinc-950 p-2 text-xs leading-relaxed whitespace-pre-wrap text-zinc-200 ring-1 ring-zinc-800">{text}</pre>}
       {o.stdoutTail && <pre className="max-h-80 overflow-auto rounded-md bg-zinc-950 p-2 font-mono text-[11px] whitespace-pre-wrap text-zinc-300 ring-1 ring-zinc-800">{o.stdoutTail}</pre>}
     </Section>
   );
@@ -204,6 +236,85 @@ export function UsageSection({ usage, title = "Usage" }: { usage: NonNullable<No
         <span className="text-right font-mono font-medium text-zinc-100">{formatCostUsd(usage.costUsd)}</span>
       </div>
       {usage.model && <p className="text-[11px] text-zinc-500">Model: {usage.model}</p>}
+    </Section>
+  );
+}
+
+/** Iteration selector (§15.4): browse previous loop iterations of a node (output, terminal log, timings). */
+function IterationSelector({ iterations, shown, historical, label }: { iterations: readonly IterationEntry[]; shown: number; historical: boolean; label: string }) {
+  const latest = iterations[iterations.length - 1]!.iteration;
+  const select = (iteration: number | null) => {
+    useRunStore.getState().selectIteration(iteration);
+    // The drawer follows the selection when it shows this node's terminal (one of its iterations).
+    const ui = useUiStore.getState();
+    const activeRunId = ui.activeTerminal ? ui.tabMeta[ui.activeTerminal]?.nodeRunId : null;
+    const target = iterations.find((e) => e.iteration === (iteration ?? latest))?.nodeRun;
+    if (ui.drawerOpen && target?.ptyId && iterations.some((e) => e.nodeRun.id === activeRunId)) {
+      openNodeTerminal(target, `${label} #${target.iteration + 1}`);
+    }
+  };
+  return (
+    <Section
+      title={`Iteration ${shown + 1} of ${latest + 1}`}
+      actions={
+        historical ? (
+          <Button size="sm" variant="ghost" onClick={() => select(null)} title="Follow the latest iteration">
+            Latest
+          </Button>
+        ) : undefined
+      }
+    >
+      <div className="flex flex-wrap gap-1" role="tablist" aria-label="Loop iterations">
+        {iterations.map((e) => {
+          const style = nodeRunStyle(e.nodeRun);
+          const active = e.iteration === shown;
+          return (
+            <button
+              key={e.iteration}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              title={`Iteration ${e.iteration + 1}: ${style.label}${e.attempts > 1 ? ` (${e.attempts} attempts)` : ""}`}
+              onClick={() => select(e.iteration === latest ? null : e.iteration)}
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs tabular-nums ring-1 ${
+                active ? "bg-zinc-700 text-zinc-100 ring-zinc-500" : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800"
+              }`}
+            >
+              <StatusDot className={style.dot} />#{e.iteration + 1}
+            </button>
+          );
+        })}
+      </div>
+      {historical && <p className="text-[11px] text-zinc-500">Previous iteration: read-only.</p>}
+    </Section>
+  );
+}
+
+/** Condition node in run mode: evaluator, result and reason (§15.2). */
+function ConditionResult({ node, nodeRun }: { node: GraphNodeOf<"condition">; nodeRun: NodeRun }) {
+  const o = nodeRun.output;
+  const result = o?.result ?? (o?.port ? o.port === "true" : undefined);
+  return (
+    <Section title="Condition">
+      <div className="space-y-1.5">
+        <DetailRow label="Evaluator">
+          <span className={node.config.evaluator.kind === "judge" ? "" : "font-mono"}>{configPreview(node)}</span>
+        </DetailRow>
+        <DetailRow label="Result">
+          {result === undefined ? (
+            <span className="text-zinc-500">{isActiveNodeStatus(nodeRun.status) ? "Evaluating…" : "Not evaluated"}</span>
+          ) : (
+            <span className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold ${result ? "bg-green-500/15 text-green-300" : "bg-zinc-700/50 text-zinc-200"}`}>
+              {result ? "true" : "false"}
+            </span>
+          )}
+        </DetailRow>
+      </div>
+      {o?.text && (
+        <Field label="Reason">
+          <pre className="max-h-60 overflow-auto rounded-md bg-zinc-950 p-2 text-xs leading-relaxed whitespace-pre-wrap text-zinc-200 ring-1 ring-zinc-800">{o.text}</pre>
+        </Field>
+      )}
     </Section>
   );
 }

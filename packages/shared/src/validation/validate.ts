@@ -9,13 +9,15 @@ import {
   type NodeType,
 } from "../graph.js";
 import {
-  ancestors,
   buildTopology,
   computeLanePlan,
   edgesMutuallyExclusive,
   findCycle,
+  loopBody,
+  type LanePlan,
   type Topology,
 } from "../topology.js";
+import { regexError } from "../condition.js";
 import type { ValidateOptions, ValidationIssue, ValidationResult } from "./types.js";
 
 /** Node types whose work leaves uncommitted changes in the lane (for the §18 Q1 warning). */
@@ -77,10 +79,12 @@ export function validateGraph(graph: Graph, options: ValidateOptions = {}): Vali
     if (!node.label.trim()) out.warn({ code: "empty_label", message: "Node has no label.", nodeId: node.id });
   }
 
-  checkJoins(topo, out, phase);
-  checkLoops(topo, out);
-  if (!cycle) {
-    checkResumeContext(graph, topo, out);
+  const plan = cycle ? null : computeLanePlan(graph);
+  checkJoins(topo, plan, out, phase);
+  checkLoops(topo, plan, out);
+  checkFailureRouting(topo, out, phase);
+  if (plan) {
+    checkResumeContext(topo, plan, out);
     checkUncommittedWork(topo, out);
   }
   return { errors: out.errors, warnings: out.warnings };
@@ -111,8 +115,12 @@ function checkIdsAndEdges(graph: Graph, out: Collector, phase: 1 | 2): void {
       out.error({ code: "dangling_edge", message: "Edge points to a missing node.", edgeId: e.id });
       continue;
     }
-    if (e.source === e.target) {
-      out.error({ code: "self_loop", message: "A node cannot connect to itself.", edgeId: e.id });
+    if (e.source === e.target && !e.loop) {
+      out.error({
+        code: "self_loop",
+        message: phase === 2 ? "A node cannot connect to itself unless the edge is a loop (repeat the node)." : "A node cannot connect to itself.",
+        edgeId: e.id,
+      });
       continue;
     }
     const pair = `${e.source}:${e.sourcePort}->${e.target}:${e.loop ? "loop" : "fwd"}`;
@@ -124,6 +132,13 @@ function checkIdsAndEdges(graph: Graph, out: Collector, phase: 1 | 2): void {
     const when = edgeWhen(e);
     if (e.sourcePort === "error" && when !== "failure") {
       out.error({ code: "invalid_port", message: "Edges from the error port must use when = failure.", edgeId: e.id });
+    }
+    if ((e.sourcePort === "true" || e.sourcePort === "false") && when !== "success") {
+      out.error({
+        code: "invalid_port",
+        message: `Edges from the "${e.sourcePort}" port fire when the condition is ${e.sourcePort}; use the error port for failures.`,
+        edgeId: e.id,
+      });
     }
     if (phase === 1 && (e.loop || when !== "success" || e.sourcePort !== "out")) {
       out.error({
@@ -203,11 +218,8 @@ function checkNodeConfig(graph: Graph, node: GraphNode, out: Collector, phase: 1
       if (ev.kind === "regex") {
         if (!ev.pattern) missing(node, out, "Regex pattern is empty.");
         else {
-          try {
-            new RegExp(ev.pattern, ev.flags);
-          } catch (err) {
-            out.error({ code: "invalid_config", message: `Invalid regex: ${(err as Error).message}`, nodeId: node.id });
-          }
+          const invalid = regexError(ev.pattern, ev.flags);
+          if (invalid) out.error({ code: "invalid_config", message: `Invalid regex: ${invalid}`, nodeId: node.id });
         }
       }
       break;
@@ -217,9 +229,12 @@ function checkNodeConfig(graph: Graph, node: GraphNode, out: Collector, phase: 1
 
 /**
  * Joins (§9.2 rule 5, §15.3): a non-merge node with several inputs is invalid, unless (phase 2) every
- * pair of inputs comes from mutually exclusive branches. Merge nodes need at least two inputs.
+ * pair of inputs comes from mutually exclusive branches (`edgesMutuallyExclusive`) that run in the same
+ * lane (otherwise their work is in different worktrees and only a merge can combine it). Merge nodes need
+ * at least two inputs.
  */
-function checkJoins(topo: Topology, out: Collector, phase: 1 | 2): void {
+function checkJoins(topo: Topology, plan: LanePlan | null, out: Collector, phase: 1 | 2): void {
+  const exclusiveCache = new Map<string, Set<string>>();
   for (const node of topo.nodes.values()) {
     const inputs = topo.incoming.get(node.id)!;
     if (node.type === "merge") {
@@ -231,37 +246,169 @@ function checkJoins(topo: Topology, out: Collector, phase: 1 | 2): void {
     if (node.type === "condition" && inputs.length === 0) {
       out.warn({ code: "condition_input", message: "A condition node evaluates its predecessor; connect one.", nodeId: node.id });
     }
+    if (phase === 2 && node.type === "condition" && node.config.evaluator.kind === "exitCode" && inputs.some((e) => topo.nodes.get(e.source)?.type !== "shell")) {
+      out.error({ code: "invalid_config", message: "An exit-code condition needs a shell predecessor.", nodeId: node.id });
+    }
+    if (phase === 2 && node.type === "condition" && node.config.evaluator.kind === "exitCode") {
+      for (const e of inputs) {
+        if (topo.nodes.get(e.source)?.type !== "shell" || edgeWhen(e) !== "success") continue;
+        out.warn({
+          code: "condition_input",
+          message:
+            "A failing shell step (exit code ≠ 0) fails and never reaches this condition through a success edge; " +
+            'set the edge to "always" so the condition also evaluates failures.',
+          nodeId: node.id,
+          edgeId: e.id,
+        });
+      }
+    }
     if (inputs.length < 2) continue;
-    if (phase === 2 && allPairsExclusive(topo, inputs)) continue;
-    out.error({
-      code: "invalid_join",
-      message: "Only merge nodes can join parallel branches. Insert a merge node.",
-      nodeId: node.id,
-    });
-  }
-}
-
-function allPairsExclusive(topo: Topology, inputs: readonly GraphEdge[]): boolean {
-  for (let i = 0; i < inputs.length; i++)
-    for (let j = i + 1; j < inputs.length; j++)
-      if (!edgesMutuallyExclusive(topo, inputs[i]!, inputs[j]!)) return false;
-  return true;
-}
-
-/** §15.4: a loop edge must point to an ancestor of its source (the target reaches the source). */
-function checkLoops(topo: Topology, out: Collector): void {
-  for (const e of topo.loopEdges) {
-    if (!ancestors(topo, e.source).has(e.target)) {
-      out.error({ code: "invalid_loop", message: "A loop edge must point back to an earlier node on the same path.", edgeId: e.id });
+    if (phase === 1) {
+      out.error({ code: "invalid_join", message: "Only merge nodes can join parallel branches. Insert a merge node.", nodeId: node.id });
+      continue;
+    }
+    if (!allPairsExclusive(topo, inputs, exclusiveCache)) {
+      out.error({
+        code: "invalid_join",
+        message:
+          "These inputs can both run, so only a merge node can join them. A plain join is allowed only for branches " +
+          "that exclude each other: the true/false ports of one condition, or a step and its failure path.",
+        nodeId: node.id,
+      });
+      continue;
+    }
+    if (plan && new Set(inputs.map((e) => plan.edgeLane.get(e.id))).size > 1) {
+      out.error({
+        code: "invalid_join",
+        message: "These exclusive branches run in different lanes (a parallel branch starts on one of them); join them with a merge node.",
+        nodeId: node.id,
+      });
     }
   }
 }
 
-/** §7.5: resume is valid when exactly one predecessor exists and it is a Claude node in the same lane. */
-function checkResumeContext(graph: Graph, topo: Topology, out: Collector): void {
-  const plan = computeLanePlan(graph);
+function allPairsExclusive(topo: Topology, inputs: readonly GraphEdge[], cache: Map<string, Set<string>>): boolean {
+  for (let i = 0; i < inputs.length; i++)
+    for (let j = i + 1; j < inputs.length; j++)
+      if (!edgesMutuallyExclusive(topo, inputs[i]!, inputs[j]!, cache)) return false;
+  return true;
+}
+
+/**
+ * §15.4 loops. Errors (`invalid_loop`): the edge must point back to an ancestor of its source (or to the
+ * source itself: repeat one node); two loop bodies must be disjoint or one strictly inside the other
+ * (they are repeated as a unit); a body runs in one lane, so it cannot contain merge nodes nor start
+ * parallel branches (forks would have to be re-created on every iteration). Warning
+ * `unconditional_loop`: an edge that loops back on every outcome with onExhausted "fail" always ends
+ * in a failure.
+ */
+function checkLoops(topo: Topology, plan: LanePlan | null, out: Collector): void {
+  const bodies: Array<{ edge: GraphEdge; body: Set<string> }> = [];
+  for (const e of topo.loopEdges) {
+    const body = loopBody(topo, e);
+    if (body.size === 0) {
+      out.error({
+        code: "invalid_loop",
+        message: "A loop edge must point back to an earlier step on the same path (an ancestor of its source).",
+        edgeId: e.id,
+      });
+      continue;
+    }
+    bodies.push({ edge: e, body });
+    if (alwaysLoopsBack(topo, e, body) && e.loop!.onExhausted === "fail") {
+      out.warn({
+        code: "unconditional_loop",
+        message:
+          `Nothing stops this loop but a failure: its steps run ${e.loop!.maxIterations + 1} times and then the run fails. ` +
+          'Loop back from a condition\'s true/false port or a failure edge, or set "when exhausted" to continue.',
+        edgeId: e.id,
+      });
+    }
+    const merge = [...body].map((id) => topo.nodes.get(id)!).find((n) => n.type === "merge");
+    if (merge) {
+      out.error({
+        code: "invalid_loop",
+        message: `Loop steps run in one lane and cannot contain a merge node ("${labelOf(merge)}").`,
+        edgeId: e.id,
+        nodeId: merge.id,
+      });
+      continue;
+    }
+    if (!plan) continue;
+    const lane = plan.laneOf.get(e.target);
+    for (const id of body) {
+      const forks = (topo.outgoing.get(id) ?? []).some((o) => plan.edgeLane.get(o.id) !== lane);
+      if (plan.laneOf.get(id) !== lane || forks) {
+        out.error({
+          code: "invalid_loop",
+          message: `Loop steps run in one lane: "${labelOf(topo.nodes.get(id)!)}" starts parallel branches. Move the fan-out after the loop.`,
+          edgeId: e.id,
+          nodeId: id,
+        });
+        break;
+      }
+    }
+  }
+  for (let i = 0; i < bodies.length; i++) {
+    for (let j = i + 1; j < bodies.length; j++) {
+      const a = bodies[i]!;
+      const b = bodies[j]!;
+      const shared = [...a.body].filter((id) => b.body.has(id)).length;
+      if (shared === 0) continue;
+      const nested = (shared === b.body.size) !== (shared === a.body.size); // strictly inside
+      if (nested) continue;
+      out.error({
+        code: "invalid_loop",
+        message:
+          shared === a.body.size && shared === b.body.size
+            ? "Two loop edges repeat exactly the same steps; keep one loop edge."
+            : "Loops overlap: one loop must contain the other entirely, or they must not share steps.",
+        edgeId: b.edge.id,
+      });
+    }
+  }
+}
+
+/**
+ * Whether nothing but a failure can stop the loop: an "always" edge, or a success edge from the out port
+ * when no step of the body branches (no condition, no failure edge), so the source runs and succeeds on
+ * every pass.
+ */
+function alwaysLoopsBack(topo: Topology, e: GraphEdge, body: ReadonlySet<string>): boolean {
+  const when = edgeWhen(e);
+  if (when === "always") return true;
+  if (when !== "success" || e.sourcePort !== "out") return false;
+  return [...body].every(
+    (id) => topo.nodes.get(id)!.type !== "condition" && (topo.outgoing.get(id) ?? []).every((o) => edgeWhen(o) === "success"),
+  );
+}
+
+/** Phase 2 (§15.1): onError only applies to failures that no failure edge handles. */
+function checkFailureRouting(topo: Topology, out: Collector, phase: 1 | 2): void {
+  if (phase === 1) return;
   for (const node of topo.nodes.values()) {
-    if (!isClaudeNode(node) || node.config.context !== "resume") continue;
+    if (!node.onError) continue;
+    const routed = (topo.outgoing.get(node.id) ?? []).some((e) => edgeWhen(e) !== "success");
+    if (routed) {
+      out.warn({
+        code: "on_error_ignored",
+        message: `"On error: ${node.onError}" has no effect: failures of this step follow its failure edge.`,
+        nodeId: node.id,
+      });
+    }
+  }
+}
+
+/**
+ * §7.5: resume is valid when exactly one predecessor exists and it is a Claude node in the same lane.
+ * §15.4: inside a loop body a resume node continues its own session from the previous iteration, so the
+ * rule only matters for its first pass; when it does not hold there, the first pass starts a new session
+ * with the predecessors' outputs (like "fresh").
+ */
+function checkResumeContext(topo: Topology, plan: LanePlan, out: Collector): void {
+  const inLoop = new Set(topo.loopEdges.flatMap((e) => [...loopBody(topo, e)]));
+  for (const node of topo.nodes.values()) {
+    if (!isClaudeNode(node) || node.config.context !== "resume" || inLoop.has(node.id)) continue;
     const inputs = topo.incoming.get(node.id)!;
     const pred = inputs.length === 1 ? topo.nodes.get(inputs[0]!.source)! : undefined;
     let reason: string | null = null;

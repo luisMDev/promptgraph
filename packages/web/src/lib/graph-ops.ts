@@ -74,16 +74,47 @@ function reaches(graph: Graph, from: string, to: string): boolean {
   return false;
 }
 
+/** Loop spec given to a connection that closes a cycle (phase 2); editable in the edge inspector. */
+export const DEFAULT_LOOP = { maxIterations: 3, onExhausted: "fail" } as const satisfies GraphEdge["loop"];
+
+/**
+ * Adds the edge. Phase 2: a connection from the error port is a failure edge (`when: "failure"`), and one that
+ * closes a cycle becomes a loop back-edge (§15.4) — an unmarked cycle would only be a validation error. A
+ * shell → exit-code condition edge is `always`, so a failing exit code reaches the condition (§15.5).
+ */
 export function connect(graph: Graph, c: ConnectRequest, phase: 1 | 2 = 2): Graph {
   if (connectionError(graph, c, phase)) return graph;
+  const source = graph.nodes.find((n) => n.id === c.source);
+  const target = graph.nodes.find((n) => n.id === c.target);
+  const exitCodeCheck =
+    phase === 2 && c.sourcePort !== "error" && source?.type === "shell" && target?.type === "condition" && target.config.evaluator.kind === "exitCode";
   const edge: GraphEdge = {
     id: uniqueId("e", new Set(graph.edges.map((e) => e.id))),
     source: c.source,
     sourcePort: c.sourcePort,
     target: c.target,
     targetPort: "in",
+    ...(c.sourcePort === "error" ? { when: "failure" as const } : {}),
+    ...(exitCodeCheck ? { when: "always" as const } : {}),
+    ...(phase === 2 && reaches(graph, c.target, c.source) ? { loop: { ...DEFAULT_LOOP } } : {}),
   };
   return { ...graph, edges: [...graph.edges, edge] };
+}
+
+/**
+ * Sets an edge's condition. The default (`success`, or `failure` on the error port) is stored as an absent
+ * `when` so graph files stay minimal.
+ */
+export function setEdgeWhen(edge: GraphEdge, when: NonNullable<GraphEdge["when"]>): GraphEdge {
+  const { when: _old, ...rest } = edge;
+  const implicit = edge.sourcePort === "error" ? "failure" : "success";
+  return when === implicit && edge.sourcePort !== "error" ? rest : { ...rest, when };
+}
+
+/** Marks (with `DEFAULT_LOOP`) or unmarks an edge as a loop back-edge. */
+export function setEdgeLoop(edge: GraphEdge, loop: GraphEdge["loop"] | null): GraphEdge {
+  const { loop: _old, ...rest } = edge;
+  return loop ? { ...rest, loop } : rest;
 }
 
 /** Removes nodes (and every edge touching them) and edges. */

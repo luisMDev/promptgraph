@@ -3,6 +3,7 @@ import type { PtyManager } from "../pty/pty-manager.js";
 import type { LaneManager } from "../workspace/lane-manager.js";
 import { ApprovalRunner } from "./approval-runner.js";
 import type { ClaudeRunner } from "./claude/claude-runner.js";
+import { ConditionRunner } from "./condition-runner.js";
 import { CommitRunner } from "./git/commit-runner.js";
 import { MergeRunner } from "./git/merge-runner.js";
 import { PrRunner } from "./git/pr-runner.js";
@@ -20,7 +21,7 @@ export interface RunnerRegistryDeps {
 
 /**
  * Maps every implemented node type to its runner (prompt/command share the ClaudeRunner; merge uses it
- * for conflicts). condition is added by M5.
+ * for conflicts; condition judges run headless claude).
  */
 export function createRunnerRegistry(deps: RunnerRegistryDeps): RunnerRegistry {
   return {
@@ -31,5 +32,6 @@ export function createRunnerRegistry(deps: RunnerRegistryDeps): RunnerRegistry {
     merge: new MergeRunner({ lanes: deps.lanes, ptys: deps.ptys, claude: deps.claude, paths: deps.paths, env: deps.env }),
     pr: new PrRunner({ lanes: deps.lanes, env: deps.env }),
     approval: new ApprovalRunner(),
+    condition: new ConditionRunner({ env: deps.env }),
   };
 }

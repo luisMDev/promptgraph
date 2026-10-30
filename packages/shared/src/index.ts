@@ -4,6 +4,7 @@ export * from "./run.js";
 export * from "./pricing.js";
 export * from "./hooks.js";
 export * from "./headless.js";
+export * from "./condition.js";
 export * from "./api.js";
 export * from "./ws.js";
 export * from "./topology.js";

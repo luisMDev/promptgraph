@@ -252,15 +252,27 @@ async function trustDialog() {
 }
 
 // ---------------------------------------------------------------------------- headless
-function synthesize(schema, prompt) {
+// FAKE_CLAUDE_JUDGE_SCRIPT=<file>: one answer per line ("true"/"false"), consumed by successive headless
+// calls whose JSON schema has a boolean field (condition judges across loop iterations). Empty/missing → default.
+function nextJudgeAnswer() {
+  const file = process.env.FAKE_CLAUDE_JUDGE_SCRIPT;
+  if (!file || !fs.existsSync(file)) return undefined;
+  const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return undefined;
+  fs.writeFileSync(file, lines.slice(1).join("\n"));
+  return /^\s*(true|yes|1)\b/i.test(lines[0]);
+}
+
+const hasBoolean = (schema) => Object.values(schema?.properties ?? {}).some((s) => s?.type === "boolean" || hasBoolean(s));
+
+function synthesize(schema, prompt, boolValue = (hasBoolean(schema) ? nextJudgeAnswer() : undefined) ?? !/\[\[judge:false\]\]/.test(prompt)) {
   if (process.env.FAKE_CLAUDE_STRUCTURED) return JSON.parse(process.env.FAKE_CLAUDE_STRUCTURED);
-  const boolValue = !/\[\[judge:false\]\]/.test(prompt);
   const value = (name, s) => {
     switch (s?.type) {
       case "boolean": return boolValue;
       case "number": case "integer": return 0;
       case "array": return [];
-      case "object": return synthesize(s, prompt);
+      case "object": return synthesize(s, prompt, boolValue);
       default: return `fake ${name}`;
     }
   };
@@ -275,11 +287,16 @@ async function headless() {
     const piped = Buffer.concat(chunks).toString("utf8");
     prompt = prompt ? `${prompt}\n\n${piped}` : piped;
   }
+  if (process.env.FAKE_CLAUDE_PROMPT_LOG) {
+    fs.appendFileSync(process.env.FAKE_CLAUDE_PROMPT_LOG, JSON.stringify({ argv: process.argv.slice(2), cwd, prompt }) + "\n");
+  }
   const failing = /\[\[fail\]\]/.test(prompt + modeMarker);
   await sleep(delayMs);
   const schema = args["json-schema"] ? JSON.parse(args["json-schema"]) : null;
-  const structured = schema && !failing ? synthesize(schema, prompt) : undefined;
-  const result = failing ? "fake failure" : structured ? JSON.stringify(structured) : `Done: ${prompt.trim().slice(0, 60)}`;
+  // FAKE_CLAUDE_RESULT: raw `result` text and no structured_output (a model answering in prose).
+  const rawResult = process.env.FAKE_CLAUDE_RESULT;
+  const structured = schema && !failing && rawResult === undefined ? synthesize(schema, prompt) : undefined;
+  const result = failing ? "fake failure" : rawResult ?? (structured ? JSON.stringify(structured) : `Done: ${prompt.trim().slice(0, 60)}`);
   if ((args["output-format"] ?? "text") === "text") {
     process.stdout.write(result + "\n");
     process.exit(failing ? 1 : 0);

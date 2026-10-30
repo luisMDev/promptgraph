@@ -107,7 +107,14 @@ export type MergeConfig = z.infer<typeof MergeConfigSchema>;
 export const ConditionEvaluatorSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exitCode"), equals: z.number().int().default(0) }),
   z.object({ kind: z.literal("regex"), pattern: z.string().default(""), flags: z.string().default("") }),
-  z.object({ kind: z.literal("judge"), question: z.string().default("") }),
+  z.object({
+    kind: z.literal("judge"),
+    question: z.string().default(""),
+    /** Headless model; absent = settings.defaults.model. */
+    model: z.string().optional(),
+    /** Headless call timeout; absent = 120 s. */
+    timeoutSec: z.number().int().positive().optional(),
+  }),
 ]);
 export type ConditionEvaluator = z.infer<typeof ConditionEvaluatorSchema>;
 

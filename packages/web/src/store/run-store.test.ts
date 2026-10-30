@@ -1,6 +1,6 @@
 import type { RunDetail } from "@promptgraph/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { laneOf, linearGraph, nodeRunOf, runDetailOf } from "../test-fixtures";
+import { laneOf, linearGraph, nodeRunOf, runDetailOf, testFixLoopGraph } from "../test-fixtures";
 import { setRunStoreDeps, useRunStore } from "./run-store";
 
 describe("run store", () => {
@@ -107,5 +107,50 @@ describe("run store", () => {
     useRunStore.setState({ runInfo: { r1: { lanes: [], prs: [] } } });
     await useRunStore.getState().loadRuns("g2").catch(() => undefined);
     expect(useRunStore.getState().runInfo).toEqual({});
+  });
+});
+
+describe("run store: loops and iterations", () => {
+  beforeEach(async () => {
+    vi.useRealTimers();
+    await useRunStore.getState().selectRun(null);
+  });
+
+  it("follows the latest iteration and resets the iteration selection on node change", () => {
+    const s = useRunStore.getState();
+    s.showRun(runDetailOf(testFixLoopGraph(), [nodeRunOf({ id: "t0", nodeId: "test", status: "failed" })]));
+    s.selectNode("test");
+    s.selectIteration(0);
+    expect(useRunStore.getState().selectedIteration).toBe(0);
+    // Same node again keeps it; another node resets it.
+    s.selectNode("test");
+    expect(useRunStore.getState().selectedIteration).toBe(0);
+    s.selectNode("fix");
+    expect(useRunStore.getState()).toMatchObject({ selectedNodeId: "fix", selectedIteration: null });
+    // A new iteration becomes the current node run.
+    s.applyNodeUpdate(nodeRunOf({ id: "t1", nodeId: "test", iteration: 1, status: "running" }));
+    expect(useRunStore.getState().currentByNode.test!.id).toBe("t1");
+  });
+
+  it("derives loop counts and refetches the server loop state when a loop iterates", async () => {
+    vi.useFakeTimers();
+    const graph = testFixLoopGraph();
+    const fetchRun = vi.fn();
+    setRunStoreDeps({ subscribe: vi.fn(), unsubscribe: vi.fn(), fetchRun });
+    const detail = { ...runDetailOf(graph, [nodeRunOf({ id: "f0", nodeId: "fix", status: "running" })]), loops: [{ edgeId: "loop", iteration: 0, maxIterations: 3, exhausted: false }] };
+    useRunStore.getState().showRun(detail);
+    expect(useRunStore.getState().loops.loop).toEqual({ iteration: 0, maxIterations: 3, exhausted: false });
+
+    fetchRun.mockResolvedValue({ ...detail, nodeRuns: [], loops: [{ edgeId: "loop", iteration: 1, maxIterations: 3, exhausted: false }] });
+    // Burst: the loop source settles and the loop body gets new iterations; one refetch.
+    useRunStore.getState().applyNodeUpdate(nodeRunOf({ id: "f0", nodeId: "fix", status: "succeeded", updatedAt: 2 }));
+    useRunStore.getState().applyNodeUpdate(nodeRunOf({ id: "t1", nodeId: "test", iteration: 1, status: "pending", updatedAt: 2 }));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(fetchRun).toHaveBeenCalledTimes(1);
+    const s = useRunStore.getState();
+    expect(s.loops.loop).toEqual({ iteration: 1, maxIterations: 3, exhausted: false });
+    // Only the loop state is taken from the refetch: node runs stay WS-driven.
+    expect(s.detail!.nodeRuns.map((n) => n.id)).toEqual(["f0", "t1"]);
+    vi.useRealTimers();
   });
 });

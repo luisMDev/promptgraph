@@ -1,9 +1,9 @@
-import type { Graph, GraphEdge, Lane, NodeRun, ValidationResult } from "@promptgraph/shared";
+import { edgeWhen, type Graph, type GraphEdge, type Lane, type NodeRun, type ValidationResult } from "@promptgraph/shared";
 import { MarkerType } from "@xyflow/react";
 import type { PgFlowEdge } from "../components/canvas/PgEdge";
 import type { NodeIssues, PgFlowNode } from "../components/nodes/types";
 import { mergeInputLabels, nodeLanes } from "./lanes";
-import { edgeRunState, type EdgeRunState } from "./run-view";
+import { edgeRunState, loopBadge, type EdgeRunState, type LoopView } from "./run-view";
 
 /** Maps the domain graph (+ validation or run state) to React Flow nodes and edges. Pure. */
 
@@ -15,7 +15,12 @@ export interface FlowInput {
   selectedEdgeIds: readonly string[];
   measured: Readonly<Record<string, { width: number; height: number }>>;
   /** Present in run mode. */
-  run?: { currentByNode: Readonly<Record<string, NodeRun>>; lanes: Readonly<Record<string, Lane>> };
+  run?: {
+    currentByNode: Readonly<Record<string, NodeRun>>;
+    lanes: Readonly<Record<string, Lane>>;
+    /** Loop back-edge id → loop state (`loopViews`); drives the iteration badge and exhausted loops. */
+    loops?: Readonly<Record<string, LoopView>>;
+  };
 }
 
 export function issuesByNode(validation: ValidationResult): Map<string, NodeIssues> {
@@ -65,36 +70,43 @@ const RUN_EDGE_STYLE: Record<EdgeRunState, { stroke: string; animated: boolean; 
   dead: { stroke: "#3f3f46", animated: false, opacity: 0.5 },
 };
 
-function edgeLabel(edge: GraphEdge): string | undefined {
+/** Edit-mode pill: non-default conditions and loop bounds. Error-port edges are already red. */
+export function edgeLabel(edge: GraphEdge): string | undefined {
   const parts: string[] = [];
-  if (edge.when && edge.when !== "success") parts.push(edge.when);
-  if (edge.loop) parts.push(`loop ≤${edge.loop.maxIterations}`);
+  const when = edgeWhen(edge);
+  if (when === "always") parts.push("always");
+  else if (when === "failure" && edge.sourcePort !== "error") parts.push("on failure");
+  if (edge.when === "success" && edge.sourcePort === "error") parts.push("on success");
+  if (edge.loop) parts.push(`loop ≤${edge.loop.maxIterations}${edge.loop.onExhausted === "continue" ? ", then continue" : ""}`);
   return parts.length ? parts.join(" · ") : undefined;
 }
 
 export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
   const errorEdges = new Map<string, string[]>();
-  const warnEdges = new Set<string>();
+  const warnEdges = new Map<string, string[]>();
   if (!input.run) {
     for (const i of input.validation.errors) if (i.edgeId) errorEdges.set(i.edgeId, [...(errorEdges.get(i.edgeId) ?? []), i.message]);
-    for (const i of input.validation.warnings) if (i.edgeId) warnEdges.add(i.edgeId);
+    for (const i of input.validation.warnings) if (i.edgeId) warnEdges.set(i.edgeId, [...(warnEdges.get(i.edgeId) ?? []), i.message]);
   }
   const selected = new Set(input.selectedEdgeIds);
   return input.graph.edges.map((edge) => {
-    const failure = edge.sourcePort === "error" || edge.when === "failure";
-    let stroke = failure ? "#ef4444" : "#71717a";
+    const failure = edgeWhen(edge) === "failure";
+    let stroke = failure ? "#ef4444" : edge.loop ? "#a78bfa" : "#71717a";
     let animated = false;
     let opacity: number | undefined;
+    let state: EdgeRunState | undefined;
+    const loop = input.run?.loops?.[edge.id];
     if (input.run) {
-      const state = edgeRunState(edge, input.run.currentByNode[edge.source]);
+      state = edgeRunState(edge, input.run.currentByNode[edge.source], loop);
       ({ stroke, animated, opacity } = RUN_EDGE_STYLE[state]);
     } else if (errorEdges.has(edge.id)) {
       stroke = "#ef4444";
     } else if (warnEdges.has(edge.id)) {
       stroke = "#f59e0b";
     }
-    const dashed = !!edge.loop || failure;
-    const label = edgeLabel(edge);
+    // Loops: long dashes; failure edges: short dashes (both distinct from plain success edges).
+    const dash = edge.loop ? "8 5" : failure ? "4 3" : undefined;
+    const issues = [...(errorEdges.get(edge.id) ?? []), ...(warnEdges.get(edge.id) ?? [])];
     return {
       id: edge.id,
       type: "pg" as const,
@@ -108,10 +120,16 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
       style: {
         stroke,
         strokeWidth: errorEdges.has(edge.id) ? 2.5 : 2,
-        ...(dashed ? { strokeDasharray: "6 4" } : {}),
+        ...(dash ? { strokeDasharray: dash } : {}),
         ...(opacity !== undefined ? { opacity } : {}),
       },
-      data: { title: errorEdges.get(edge.id)?.join("\n"), label },
+      data: {
+        title: issues.length ? issues.join("\n") : undefined,
+        label: input.run ? undefined : edgeLabel(edge),
+        loop: !!edge.loop,
+        badge: input.run && edge.loop ? loopBadge(loop ?? { iteration: 0, maxIterations: edge.loop.maxIterations, exhausted: false }) : undefined,
+        ...(state ? { runState: state } : {}),
+      },
     };
   });
 }

@@ -237,7 +237,7 @@ describe("run and node-run routes", () => {
 describe("misc routes", () => {
   it("describes the repo", async () => {
     const info = await (await app.request("/api/repo", { headers: AUTH })).json();
-    expect(info).toMatchObject({ path: repo, currentBranch: "main", branches: ["main", "dev"], phase: 1, warnings: ["gh not found: PR nodes will fail"] });
+    expect(info).toMatchObject({ path: repo, currentBranch: "main", branches: ["main", "dev"], phase: 2, warnings: ["gh not found: PR nodes will fail"] });
   });
 
   it("reads and persists app settings without resetting unspecified keys", async () => {

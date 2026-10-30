@@ -288,9 +288,19 @@ class ClaudeExecution {
     }
     const message = buildInitialMessage(node, predecessors, options.completion);
     if (node.config.context === "resume") {
+      // §15.4: inside a loop, later iterations continue the node's own session (it remembers what it tried).
+      const own = this.ctx.previousIteration;
+      if (own?.sessionId) {
+        return { node, options, message, sessionId: own.sessionId, resumeSessionId: own.sessionId, resumeTranscriptPath: own.transcriptPath };
+      }
       const pred = predecessors.find(
         (p) => (p.type === "prompt" || p.type === "command") && p.sessionId && p.laneId === nodeRun.laneId,
       );
+      if (!pred?.sessionId && this.ctx.inLoopBody) {
+        // First pass of a loop step without a Claude predecessor to continue: a new session with context.
+        const fresh = { ...node, config: { ...node.config, context: "fresh" as const } } as ClaudeNode;
+        return { node, options, message: buildInitialMessage(fresh, predecessors, options.completion), sessionId: newSessionId() };
+      }
       if (!pred?.sessionId) throw new Error('Context "resume" needs a predecessor Claude node with a session in the same lane');
       return { node, options, message, sessionId: pred.sessionId, resumeSessionId: pred.sessionId, resumeTranscriptPath: pred.transcriptPath };
     }

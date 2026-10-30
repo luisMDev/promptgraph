@@ -84,3 +84,23 @@ export function forkMergeGraph(): Graph {
 export function laneOf(patch: Partial<Lane> & Pick<Lane, "id" | "index">): Lane {
   return { runId: "r1", branch: `pg/g1/ab12/${patch.id}`, worktreePath: `/w/${patch.id}`, baseRef: "base", status: "active", pushed: false, ...patch };
 }
+
+/** §15.5 test-fix loop: impl → test → cond(exitCode); cond.true → commit; cond.false → fix; fix ⟲ test (loop, max 3). */
+export function testFixLoopGraph(): Graph {
+  return graphOf({
+    nodes: [
+      { id: "impl", type: "prompt", label: "Implement", position: { x: 0, y: 0 }, config: { prompt: "do it" } },
+      { id: "test", type: "shell", label: "Test", position: { x: 300, y: 0 }, config: { run: "pnpm test" } },
+      { id: "cond", type: "condition", label: "Green?", position: { x: 600, y: 0 }, config: { evaluator: { kind: "exitCode", equals: 0 } } },
+      { id: "commit", type: "commit", label: "Commit", position: { x: 900, y: 0 } },
+      { id: "fix", type: "prompt", label: "Fix", position: { x: 900, y: 200 }, config: { prompt: "fix the tests" } },
+    ],
+    edges: [
+      { id: "e1", source: "impl", target: "test" },
+      { id: "e2", source: "test", target: "cond" },
+      { id: "e3", source: "cond", sourcePort: "true", target: "commit" },
+      { id: "e4", source: "cond", sourcePort: "false", target: "fix" },
+      { id: "loop", source: "fix", target: "test", loop: { maxIterations: 3, onExhausted: "fail" } },
+    ],
+  });
+}

@@ -75,4 +75,6 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (repo_path, graph_id)
   );
   `,
+  // Phase 2 (§15.4): JSON LoopState[] (one per loop edge of the snapshot); NULL for graphs without loops.
+  `ALTER TABLE runs ADD COLUMN loops TEXT;`,
 ];

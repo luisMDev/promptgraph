@@ -39,6 +39,8 @@ export const NodeRunOutputSchema = z.object({
   comment: z.string().optional(),
   /** condition (Phase 2): chosen port. */
   port: z.enum(["true", "false"]).optional(),
+  /** condition (Phase 2): evaluation result (port === "true"); the reason is in `text`. */
+  result: z.boolean().optional(),
   /** skipped: the user skipped the node (treated as success downstream), not a dead path. */
   skippedByUser: z.boolean().optional(),
   /** Claude nodes (and headless helpers run on behalf of the node). */
@@ -128,11 +130,28 @@ export type RunSummary = z.infer<typeof RunSummarySchema>;
 export const RunSchema = RunSummarySchema.extend({ graphSnapshot: GraphSchema });
 export type Run = z.infer<typeof RunSchema>;
 
+/**
+ * Phase 2 (§15.4): state of one loop back-edge in a run. `iteration` = times the edge has looped back in
+ * the current pass of its enclosing loops (0 before the first loop-back; reset to 0 when an outer loop
+ * repeats this loop's body). The edge may loop back while `iteration < maxIterations`, so the body runs
+ * at most maxIterations + 1 times. The UI badge reads `iteration/maxIterations`.
+ */
+export const LoopStateSchema = z.object({
+  edgeId: z.string(),
+  iteration: z.number().int().min(0),
+  maxIterations: z.number().int(),
+  /** The edge would have looped back once more but the limit was reached (onExhausted applied). */
+  exhausted: z.boolean(),
+});
+export type LoopState = z.infer<typeof LoopStateSchema>;
+
 export const RunDetailSchema = z.object({
   run: RunSchema,
   lanes: z.array(LaneSchema),
   /** All node runs of the run, all iterations and attempts. */
   nodeRuns: z.array(NodeRunSchema),
+  /** Phase 2: one entry per loop edge of the snapshot (canvas edge order). Absent for graphs without loops. */
+  loops: z.array(LoopStateSchema).optional(),
 });
 export type RunDetail = z.infer<typeof RunDetailSchema>;
 

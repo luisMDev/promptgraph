@@ -40,6 +40,8 @@ export function describePredecessor(p: PredecessorOutput): string {
   const o = p.output;
   const lines: string[] = [];
   if (p.error) lines.push(`Error: ${p.error}`);
+  // Condition nodes (§15.2): result, then the reason (text) and the evaluated output copied below.
+  if (o?.port) lines.push(`Condition result: ${o.port}`);
   if (o?.text) lines.push(o.text);
   if (o?.exitCode !== undefined) lines.push(`Exit code: ${o.exitCode ?? "none"}${o.timedOut ? " (timed out)" : ""}`);
   if (o?.stdoutTail) lines.push(`Output (tail):\n${o.stdoutTail}`);
