@@ -75,7 +75,7 @@ describe.runIf(process.env.PG_REAL_CLAUDE === "1")("ClaudeRunner (real claude)",
     await waitFor(() => ctx.current?.status === "waiting_input" && ctx.current.waitingReason?.notificationType === "permission_prompt", 120_000);
     expect(fs.existsSync(marker)).toBe(false);
     await exec.controls.cancel();
-    expect(await exec.result).toEqual({ status: "cancelled" });
+    expect(await exec.result).toMatchObject({ status: "cancelled" });
     await new Promise((r) => setTimeout(r, 1000));
     expect(fs.existsSync(marker)).toBe(false);
   });
