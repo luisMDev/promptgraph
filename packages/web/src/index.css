@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "@xterm/xterm/css/xterm.css";
+
+/* Node status colours (§8.2), shared by canvas nodes, badges and history. */
+@theme {
+  --color-status-pending: var(--color-zinc-400);
+  --color-status-ready: var(--color-zinc-500);
+  --color-status-running: var(--color-blue-500);
+  --color-status-idle: var(--color-sky-300);
+  --color-status-waiting-input: var(--color-amber-500);
+  --color-status-waiting-approval: var(--color-violet-500);
+  --color-status-succeeded: var(--color-green-500);
+  --color-status-failed: var(--color-red-500);
+  --color-status-skipped: var(--color-zinc-300);
+  --color-status-cancelled: var(--color-zinc-600);
+  --color-status-interrupted: var(--color-zinc-600);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}

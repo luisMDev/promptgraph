@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+coverage/
+*.log
+# promptgraph runtime state inside a target repo; graph files are committed
+.promptgraph/*
+!.promptgraph/graphs/
+scripts/spike/repo/
+scripts/spike/cfg/

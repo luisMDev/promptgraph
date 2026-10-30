@@ -1,0 +1,320 @@
+#!/usr/bin/env node
+// Fake `claude` CLI for promptgraph tests. Emulates the parts of Claude Code 2.1.x that promptgraph uses:
+// interactive TUI on a PTY, --settings hooks (SessionStart / PreToolUse / Notification / Stop) with real
+// payload shapes, transcript JSONL with message.usage, --session-id / --resume, and headless
+// `-p --output-format json [--json-schema]`. Behaviour is scripted by markers in the message (see
+// MARKERS below) or by FAKE_CLAUDE_MODE. Full reference: docs/CONTRACTS.md § fake-claude.
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import readline from "node:readline";
+
+const VERSION = "2.1.314 (Claude Code) [fake]";
+const DEFAULT_MODEL = "claude-opus-5-5";
+const ALIASES = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5", fable: "claude-fable-5-1" };
+const USAGE = { input_tokens: 12, output_tokens: 34, cache_creation_input_tokens: 1000, cache_read_input_tokens: 2000 };
+const MODE_MARKERS = { normal: "", fail: "[[fail]]", ask: "[[ask]]", crash: "[[crash]]", idle: "[[idle]]", hang: "[[hang]]" };
+
+// ---------------------------------------------------------------------------- args
+function parseArgs(argv) {
+  const o = { positional: [], allowedTools: [] };
+  const takesValue = new Set([
+    "--session-id", "--resume", "-r", "--settings", "--permission-mode", "--model", "--effort", "--name", "-n",
+    "--output-format", "--json-schema", "--append-system-prompt", "--max-turns", "--input-format",
+  ]);
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "-p" || a === "--print") o.print = true;
+    else if (a === "--version" || a === "-v") o.version = true;
+    else if (a === "--allowedTools" || a === "--allowed-tools") {
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("-")) o.allowedTools.push(argv[++i]);
+    } else if (a.startsWith("--") && a.includes("=")) {
+      const [k, v] = a.split(/=(.*)/s);
+      o[k.replace(/^-+/, "")] = v;
+    } else if (takesValue.has(a)) o[a.replace(/^-+/, "")] = argv[++i];
+    else if (a.startsWith("-")) o[a.replace(/^-+/, "")] = true;
+    else o.positional.push(a);
+  }
+  o.resume = o.resume ?? o.r;
+  return o;
+}
+
+const args = parseArgs(process.argv.slice(2));
+if (args.version) {
+  process.stdout.write(VERSION + "\n");
+  process.exit(0);
+}
+
+const cwd = process.cwd();
+const model = ALIASES[args.model] ?? args.model ?? DEFAULT_MODEL;
+const sessionId = args.resume ?? args["session-id"] ?? randomUUID();
+const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.tmpdir(), "fake-claude-config");
+const transcriptPath = path.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+const delayMs = Number(process.env.FAKE_CLAUDE_DELAY_MS ?? 50);
+const modeMarker = MODE_MARKERS[process.env.FAKE_CLAUDE_MODE ?? "normal"] ?? process.env.FAKE_CLAUDE_MODE ?? "";
+
+if (process.env.FAKE_CLAUDE_LOG) {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => k.startsWith("PG_") || k.startsWith("CLAUDE") || /HERMETIC/.test(k) || k === "TERM"),
+  );
+  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ argv: process.argv.slice(2), cwd, pid: process.pid, env }) + "\n");
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------- settings / hooks
+function loadSettings() {
+  if (!args.settings) return {};
+  const raw = args.settings.trim().startsWith("{") ? args.settings : fs.readFileSync(args.settings, "utf8");
+  return JSON.parse(raw);
+}
+const settings = loadSettings();
+
+/** Runs every matching hook command for `event` with the JSON payload on stdin, like Claude Code. */
+async function runHooks(event, payload, toolName) {
+  const groups = settings.hooks?.[event] ?? [];
+  const body = JSON.stringify({ session_id: sessionId, transcript_path: transcriptPath, cwd, hook_event_name: event, ...payload });
+  for (const group of groups) {
+    if (toolName && group.matcher && group.matcher !== "*" && !new RegExp(`^(${group.matcher})$`).test(toolName)) continue;
+    for (const h of group.hooks ?? []) {
+      if (h.type !== "command") continue;
+      await new Promise((resolve) => {
+        const child = spawn("sh", ["-c", h.command], { cwd, env: process.env, stdio: ["pipe", "ignore", "ignore"] });
+        const timer = setTimeout(() => child.kill("SIGKILL"), (h.timeout ?? 60) * 1000);
+        child.on("close", () => (clearTimeout(timer), resolve()));
+        child.on("error", () => (clearTimeout(timer), resolve()));
+        child.stdin.on("error", () => {});
+        child.stdin.end(body);
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------- transcript
+let parentUuid = null;
+function appendTranscript(entry) {
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  const uuid = randomUUID();
+  const line = { parentUuid, isSidechain: false, sessionId, cwd, version: VERSION, uuid, timestamp: new Date().toISOString(), ...entry };
+  parentUuid = uuid;
+  fs.appendFileSync(transcriptPath, JSON.stringify(line) + "\n");
+}
+function writeUser(text) {
+  appendTranscript({ type: "user", message: { role: "user", content: text } });
+}
+function writeAssistant(text) {
+  appendTranscript({
+    type: "assistant",
+    message: {
+      id: `msg_fake_${randomUUID().slice(0, 8)}`,
+      type: "message",
+      role: "assistant",
+      model,
+      content: [{ type: "text", text }],
+      stop_reason: "end_turn",
+      usage: USAGE,
+    },
+  });
+}
+function previousAssistantText() {
+  if (!fs.existsSync(transcriptPath)) return null;
+  const lines = fs.readFileSync(transcriptPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const last = lines.reverse().find((l) => l.type === "assistant");
+  return last?.message?.content?.find((c) => c.type === "text")?.text ?? null;
+}
+
+// ---------------------------------------------------------------------------- markers
+// [[fail]] exit 1 · [[crash]] exit 0 without Stop · [[hang]] never finish the turn · [[ask]] / [[ask:msg]]
+// Notification then wait for a line of input · [[idle]] idle Notification after Stop · [[write:path:content]]
+// Write tool · [[bash:cmd]] Bash tool (runs cmd) · [[tool:Name]] PreToolUse only · [[sleep:ms]] ·
+// [[reply:text]] exact reply · [[marker:TOKEN]] reply ends with TOKEN · [[recall]] reply = previous answer
+// (for --resume tests) · [[exit]] exit 0 after Stop · [[judge:false]] headless boolean fields = false.
+function parseMarkers(text) {
+  const re = /\[\[(\w+)(?::([^\]]*))?\]\]/g;
+  const out = [];
+  for (const m of text.matchAll(re)) out.push({ name: m[1], arg: m[2] ?? "" });
+  return out;
+}
+
+// ---------------------------------------------------------------------------- TUI
+const C = { dim: "\x1b[2m", reset: "\x1b[0m", orange: "\x1b[38;5;208m", blue: "\x1b[34m", yellow: "\x1b[33m" };
+const out = (s) => process.stdout.write(s);
+function banner() {
+  out(`${C.orange}╭──────────────────────────────────────╮\r\n│ ✻ Fake Claude Code                   │\r\n╰──────────────────────────────────────╯${C.reset}\r\n`);
+  out(`${C.dim}  model: ${model} · session: ${sessionId}${C.reset}\r\n\r\n`);
+}
+const promptLine = () => out(`${C.dim}> ${C.reset}`);
+
+// ---------------------------------------------------------------------------- input
+const input = { queue: [], waiters: [] };
+function nextLine() {
+  if (input.queue.length) return Promise.resolve(input.queue.shift());
+  return new Promise((r) => input.waiters.push(r));
+}
+
+// ---------------------------------------------------------------------------- turns
+async function runTurn(message) {
+  const effective = `${message} ${modeMarker}`;
+  const markers = parseMarkers(effective);
+  const has = (n) => markers.find((m) => m.name === n);
+  out(`${C.blue}> ${message}${C.reset}\r\n`);
+  writeUser(message);
+  await sleep(delayMs);
+
+  if (has("fail")) {
+    out(`${C.yellow}API Error: fake failure${C.reset}\r\n`);
+    process.exit(1);
+  }
+  if (has("crash")) process.exit(0);
+
+  for (const m of markers) {
+    if (m.name === "sleep") await sleep(Number(m.arg) || 0);
+    if (m.name === "tool") {
+      await runHooks("PreToolUse", { tool_name: m.arg, tool_input: {} }, m.arg);
+      out(`● ${m.arg}()\r\n`);
+    }
+    if (m.name === "write") {
+      const [file, ...rest] = m.arg.split(":");
+      const content = rest.join(":");
+      await runHooks("PreToolUse", { tool_name: "Write", tool_input: { file_path: path.resolve(cwd, file), content } }, "Write");
+      fs.mkdirSync(path.dirname(path.resolve(cwd, file)), { recursive: true });
+      fs.writeFileSync(path.resolve(cwd, file), content);
+      out(`● Write(${file})\r\n`);
+    }
+    if (m.name === "bash") {
+      await runHooks("PreToolUse", { tool_name: "Bash", tool_input: { command: m.arg, description: "fake" } }, "Bash");
+      out(`● Bash(${m.arg})\r\n`);
+      await new Promise((r) => spawn("sh", ["-c", m.arg], { cwd, stdio: "ignore" }).on("close", r));
+    }
+  }
+
+  let answer = null;
+  const ask = has("ask");
+  if (ask) {
+    const msg = ask.arg || "Claude needs your permission";
+    out(`${C.yellow}? ${msg}${C.reset}\r\n`);
+    await runHooks("Notification", { message: msg, notification_type: "permission_prompt" });
+    answer = await nextLine();
+    out(`${C.dim}(answered: ${answer})${C.reset}\r\n`);
+  }
+
+  if (has("hang")) return new Promise(() => {});
+
+  const reply = has("reply")?.arg
+    ?? (has("recall") ? previousAssistantText() ?? "I do not remember anything." : null)
+    ?? (message.startsWith("/") ? `Ran ${message.split(/\s/)[0]}` : `Done: ${message.replace(/\[\[[^\]]*\]\]/g, "").trim().slice(0, 60)}`)
+    ;
+  const marker = has("marker");
+  const text = `${reply}${answer ? ` (answer: ${answer})` : ""}${marker ? `\n${marker.arg}` : ""}`;
+  writeAssistant(text);
+  out(`● ${text.replace(/\n/g, "\r\n  ")}\r\n\r\n`);
+  await runHooks("Stop", { last_assistant_message: text, stop_hook_active: false, permission_mode: args["permission-mode"] ?? "default" });
+
+  if (has("idle")) {
+    await sleep(delayMs);
+    await runHooks("Notification", { message: "Claude is waiting for your input", notification_type: "idle_prompt" });
+  }
+  if (has("exit")) process.exit(0);
+  promptLine();
+}
+
+// ---------------------------------------------------------------------------- trust dialog
+function isTrusted() {
+  if (process.env.FAKE_CLAUDE_CHECK_TRUST !== "1") return true;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(configDir, ".claude.json"), "utf8"));
+    return cfg.projects?.[cwd]?.hasTrustDialogAccepted === true;
+  } catch {
+    return false;
+  }
+}
+
+async function trustDialog() {
+  out(`Do you trust the files in this folder?\r\n\r\n${cwd}\r\n\r\n❯ 1. Yes, I trust this folder\r\n  2. No, exit\r\n`);
+  const line = (await nextLine()).trim();
+  if (line !== "1" && !/^y/i.test(line)) process.exit(1);
+}
+
+// ---------------------------------------------------------------------------- headless
+function synthesize(schema, prompt) {
+  if (process.env.FAKE_CLAUDE_STRUCTURED) return JSON.parse(process.env.FAKE_CLAUDE_STRUCTURED);
+  const boolValue = !/\[\[judge:false\]\]/.test(prompt);
+  const value = (name, s) => {
+    switch (s?.type) {
+      case "boolean": return boolValue;
+      case "number": case "integer": return 0;
+      case "array": return [];
+      case "object": return synthesize(s, prompt);
+      default: return `fake ${name}`;
+    }
+  };
+  return Object.fromEntries(Object.entries(schema.properties ?? {}).map(([k, s]) => [k, value(k, s)]));
+}
+
+async function headless() {
+  let prompt = args.positional.join(" ");
+  if (!process.stdin.isTTY) {
+    const chunks = [];
+    for await (const c of process.stdin) chunks.push(c);
+    const piped = Buffer.concat(chunks).toString("utf8");
+    prompt = prompt ? `${prompt}\n\n${piped}` : piped;
+  }
+  const failing = /\[\[fail\]\]/.test(prompt + modeMarker);
+  await sleep(delayMs);
+  const schema = args["json-schema"] ? JSON.parse(args["json-schema"]) : null;
+  const structured = schema && !failing ? synthesize(schema, prompt) : undefined;
+  const result = failing ? "fake failure" : structured ? JSON.stringify(structured) : `Done: ${prompt.trim().slice(0, 60)}`;
+  if ((args["output-format"] ?? "text") === "text") {
+    process.stdout.write(result + "\n");
+    process.exit(failing ? 1 : 0);
+  }
+  const envelope = {
+    type: "result",
+    subtype: failing ? "error_during_execution" : "success",
+    is_error: failing,
+    duration_ms: delayMs,
+    num_turns: 1,
+    result,
+    session_id: sessionId,
+    total_cost_usd: 0.0123,
+    usage: USAGE,
+    modelUsage: { [model]: { inputTokens: USAGE.input_tokens, outputTokens: USAGE.output_tokens, costUSD: 0.0123 } },
+    ...(structured !== undefined ? { structured_output: structured } : {}),
+  };
+  process.stdout.write(JSON.stringify(envelope) + "\n");
+  process.exit(failing ? 1 : 0);
+}
+
+// ---------------------------------------------------------------------------- main
+async function interactive() {
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  rl.on("line", (line) => {
+    const clean = line.replace(/\r$/, "");
+    const waiter = input.waiters.shift();
+    if (waiter) waiter(clean);
+    else input.queue.push(clean);
+  });
+  rl.on("close", () => process.exit(0));
+  for (const sig of ["SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(143));
+
+  if (!isTrusted()) await trustDialog();
+  banner();
+  await runHooks("SessionStart", { source: args.resume ? "resume" : "startup", model });
+  const initial = args.positional.join(" ");
+  if (initial) await runTurn(initial);
+  else promptLine();
+
+  for (;;) {
+    const line = await nextLine();
+    if (line.trim() === "/exit") {
+      out("Goodbye!\r\n");
+      process.exit(0);
+    }
+    if (line.trim()) await runTurn(line.trim());
+  }
+}
+
+if (args.print) await headless();
+else await interactive();

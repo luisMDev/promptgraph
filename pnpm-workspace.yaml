@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+onlyBuiltDependencies:
+  - node-pty
+  - better-sqlite3
+  - esbuild
