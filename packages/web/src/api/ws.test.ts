@@ -40,6 +40,25 @@ describe("WsClient", () => {
     vi.useRealTimers();
   });
 
+  it("stops reconnecting once the server refuses the session (restarted server)", async () => {
+    let valid: boolean | null = null;
+    const client = new WsClient(() => "ws://test/ws", async () => valid);
+    const states: boolean[] = [];
+    client.onConnection((c) => states.push(c));
+    client.connect();
+    FakeSocket.instances[0]!.close(); // server down: keep retrying
+    await vi.advanceTimersByTimeAsync(600);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(client.stopped()).toBe(false);
+    valid = false; // back up with a new token
+    FakeSocket.instances[1]!.close();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(client.stopped()).toBe(true);
+    client.connect();
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
   it("decodes pty data for attached listeners and drops invalid frames", () => {
     const client = new WsClient(() => "ws://test/ws");
     const received: ServerMessage[] = [];

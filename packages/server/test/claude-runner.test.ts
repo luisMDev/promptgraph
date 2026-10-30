@@ -10,6 +10,7 @@ import { HookRouter } from "../src/hooks/hook-router.js";
 import { hookToken } from "../src/hooks/hook-token.js";
 import { PtyManager } from "../src/pty/pty-manager.js";
 import { ClaudeRunner } from "../src/runners/claude/claude-runner.js";
+import { buildClaudeArgs } from "../src/runners/claude/args.js";
 import { INTERRUPTED_MESSAGE } from "../src/runners/claude/context.js";
 import { installPgHook } from "../src/runners/claude/pg-hook.js";
 import type { RunnerResult } from "../src/runners/types.js";
@@ -222,7 +223,7 @@ describe("ClaudeRunner (fake claude)", () => {
     const { ctx, exec } = start(s, { prompt: "forever [[hang]]", completion: auto0 });
     await waitFor(() => ctx.current.sessionId && s.hookCalls.includes("session-start"));
     await exec.controls.cancel();
-    expect(await exec.result).toEqual({ status: "cancelled" });
+    expect(await exec.result).toMatchObject({ status: "cancelled" });
     expect(s.ptys.get("nr-n1")!.isLive).toBe(false);
   });
 
@@ -230,7 +231,7 @@ describe("ClaudeRunner (fake claude)", () => {
     const s = await setup();
     const { ctx, exec } = start(s, { prompt: "x", completion: auto0 });
     ctx.abort.abort();
-    expect(await exec.result).toEqual({ status: "cancelled" });
+    expect(await exec.result).toMatchObject({ status: "cancelled" });
     expect(s.invocations()).toEqual([]);
   });
 
@@ -272,6 +273,29 @@ describe("ClaudeRunner (fake claude)", () => {
     expect(s.invocations()[2]!.argv.slice(0, 3)).toEqual([INTERRUPTED_MESSAGE, "--resume", sid]);
   });
 
+  it("retrying an attempt interrupted after its turn finished resumes without a message and keeps the output", async () => {
+    const s = await setup();
+    const first = start(s, { prompt: "say ready [[reply:ready]]", completion: auto0 }, { id: "a" });
+    await first.exec.result;
+    const { sessionId, transcriptPath } = first.ctx.current;
+    expect(transcriptPath).toBeTruthy();
+    const previous = makeNodeRun("old", "a", { status: "interrupted", sessionId, transcriptPath, output: { text: "ready" } });
+    const retry = start(s, { prompt: "say ready [[reply:ready]]", completion: auto0 }, { id: "a", previousAttempt: previous });
+    expect(await retry.exec.result).toMatchObject({ status: "succeeded", output: { text: "ready" } });
+    const argv = s.invocations()[1]!.argv;
+    expect(argv.slice(0, 2)).toEqual(["--resume", sessionId]);
+    expect(argv).not.toContain(INTERRUPTED_MESSAGE);
+  });
+
+  it("keeps the planned session id and never puts an option-like id into argv", async () => {
+    const s = await setup();
+    const { ctx, exec } = start(s, { prompt: "x", completion: auto0 });
+    const planned = await waitFor(() => ctx.current.sessionId);
+    await exec.result;
+    expect(ctx.current.sessionId).toBe(planned);
+    expect(() => buildClaudeArgs({ message: "m", sessionId: "x", resumeSessionId: "--dangerously-skip-permissions", name: "n", settingsPath: "s", permissionMode: "manual" })).toThrow(/Invalid session id/);
+  });
+
   it("context resume in a later loop iteration continues its own session with the new context block", async () => {
     const s = await setup();
     const first = start(s, { prompt: "fix it", completion: auto0 }, { id: "fix" });
@@ -304,19 +328,29 @@ describe("ClaudeRunner (fake claude)", () => {
     const s = await setup();
     const { ctx, exec, run } = start(s, { prompt: "x", completion: auto0, permissionMode: "plan" });
     await exec.result;
-    const ptyId = s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir);
+    const first = await s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir);
+    const ptyId = first.ptyId;
     expect(ptyId).toMatch(/^reopen-/);
+    expect(first.notice).toBeNull();
     const h = s.ptys.get(ptyId)!;
     expect(h.isLive).toBe(true);
     await waitFor(() => s.invocations().length === 2);
     expect(s.invocations()[1]!.argv).toEqual(["--resume", ctx.current.sessionId, "--permission-mode", "plan"]);
     // A second click returns the live session instead of starting another one on the same transcript.
-    expect(s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir)).toBe(ptyId);
+    expect((await s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir)).ptyId).toBe(ptyId);
     expect(s.runner.closeReopened("reopen-unknown")).toBe(false);
     expect(s.runner.closeReopened(ptyId)).toBe(true);
     await h.exited;
-    expect(s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir)).not.toBe(ptyId);
+    // Worktree gone: main checkout, asks before edits, with a notice.
+    const fallback = await s.runner.reopen(run, ctx.current, makeLane(path.join(s.dir, "gone")), s.dir);
+    expect(fallback.ptyId).not.toBe(ptyId);
+    expect(fallback.notice).toMatch(/main checkout/);
+    await waitFor(() => s.invocations().length === 3);
+    expect(s.invocations()[2]!.argv).toEqual(["--resume", ctx.current.sessionId, "--permission-mode", "default"]);
+    expect(s.invocations()[2]!.cwd).toBe(fs.realpathSync(s.dir));
+    s.runner.closeReopened(fallback.ptyId);
+    await s.ptys.get(fallback.ptyId)!.exited;
     expect(fs.existsSync(ptyLogPath(s.paths, run.id, ptyId))).toBe(true);
-    expect(() => s.runner.reopen(run, makeNodeRun("z", "n1"), null, s.dir)).toThrow(/no Claude session/);
+    await expect(s.runner.reopen(run, makeNodeRun("z", "n1"), null, s.dir)).rejects.toThrow(/no Claude session/);
   });
 });

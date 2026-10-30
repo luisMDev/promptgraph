@@ -126,6 +126,9 @@ export class FakeLanes {
   async prune(): Promise<void> {
     this.calls.push("prune");
   }
+  async shortIdHasBranches(): Promise<boolean> {
+    return false;
+  }
 }
 
 export interface Setup {
@@ -135,7 +138,7 @@ export interface Setup {
   bus: EventBus;
   lanes: FakeLanes;
   ptys: { killAll: ReturnType<typeof vi.fn> };
-  claude: { reopen: ReturnType<typeof vi.fn> };
+  claude: { reopen: ReturnType<typeof vi.fn>; isSessionActive: ReturnType<typeof vi.fn> };
   events: Array<{ name: keyof BusEvents; payload: unknown }>;
   attention: Array<BusEvents["attention"]>;
   makeEngine: (runners: RunnerRegistry) => Engine;
@@ -153,7 +156,7 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2 } = {}): Se
   const graphs = new GraphStore(t.dir, bus);
   const lanes = new FakeLanes(store, bus, path.join(t.dir, "wt"));
   const ptys = { killAll: vi.fn(async () => {}) };
-  const claude = { reopen: vi.fn(() => "reopen-x") };
+  const claude = { reopen: vi.fn(async () => ({ ptyId: "reopen-x", notice: null })), isSessionActive: vi.fn(() => false) };
   const makeEngine = (r: RunnerRegistry) =>
     new Engine({
       store,

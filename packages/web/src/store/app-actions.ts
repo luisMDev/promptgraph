@@ -1,5 +1,5 @@
-import { createEmptyGraph, isFinalRunStatus, slugifyGraphId, type NodeRun, type ServerMessage } from "@promptgraph/shared";
-import { ApiRequestError, api, errorMessage } from "../api/rest";
+import { createEmptyGraph, isFinalRunStatus, slugifyGraphId, type NodeRun, type ServerMessage, nodeDisplayLabel } from "@promptgraph/shared";
+import { ApiRequestError, api, errorMessage, onUnauthorized } from "../api/rest";
 import { wsClient } from "../api/ws";
 import { enteredMergeConflict } from "../lib/run-view";
 import { useAppStore } from "./app-store";
@@ -143,9 +143,20 @@ export async function cleanupRun(runId: string): Promise<void> {
 /** PTY ids of "Reopen session" terminals (CONTRACTS § PTY ids). */
 const REOPEN_PTY_PREFIX = "reopen-";
 
+/**
+ * Tab title of a node run's terminal: the label plus the run's short id and the attempt, so tabs of
+ * earlier runs (or retries) with the same label stay distinguishable.
+ */
+export function terminalTitle(nodeRun: NodeRun, label: string): string {
+  const detail = useRunStore.getState().detail;
+  const shortId = detail?.run.id === nodeRun.runId ? detail.run.shortId : null;
+  const attempt = nodeRun.attempt > 0 ? ` try ${nodeRun.attempt + 1}` : "";
+  return shortId ? `${label} · #${shortId}${attempt}` : `${label}${attempt}`;
+}
+
 export function openNodeTerminal(nodeRun: NodeRun, label: string): void {
   if (!nodeRun.ptyId) return;
-  useUiStore.getState().openTerminal(nodeRun.ptyId, { title: label, nodeRunId: nodeRun.id });
+  useUiStore.getState().openTerminal(nodeRun.ptyId, { title: terminalTitle(nodeRun, label), nodeRunId: nodeRun.id });
 }
 
 /** Workspace setup PTY of a lane's first node run (CONTRACTS § PTY ids). */
@@ -155,8 +166,9 @@ export function openSetupTerminal(nodeRun: NodeRun, label: string): void {
 
 export async function reopenSession(nodeRunId: string, label: string): Promise<void> {
   try {
-    const { ptyId } = await api.reopen(nodeRunId);
+    const { ptyId, notice } = await api.reopen(nodeRunId);
     useUiStore.getState().openTerminal(ptyId, { title: `${label} (reopened)`, nodeRunId: null });
+    if (notice) useUiStore.getState().toast("info", notice);
   } catch (err) {
     reportError("Could not reopen the session", err);
   }
@@ -194,7 +206,7 @@ export async function nodeControl(nodeRunId: string, control: NodeControl): Prom
 function openMergeShell(nodeRun: NodeRun): void {
   const node = useRunStore.getState().detail?.run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId);
   if (!nodeRun.ptyId) return;
-  useUiStore.getState().openTerminal(nodeRun.ptyId, { title: `${node?.label || "Merge"} (merge shell)`, nodeRunId: nodeRun.id });
+  useUiStore.getState().openTerminal(nodeRun.ptyId, { title: terminalTitle(nodeRun, `${node ? nodeDisplayLabel(node) : "Merge"} (merge shell)`), nodeRunId: nodeRun.id });
 }
 
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -250,11 +262,16 @@ export function handleServerMessage(msg: ServerMessage): void {
 /** Connects the shared socket and routes server messages into the stores. Returns teardown. */
 export function startLiveUpdates(): () => void {
   const offMsg = wsClient.onMessage(handleServerMessage);
-  const offConn = wsClient.onConnection((c) => useAppStore.getState().setConnected(c));
+  const offConn = wsClient.onConnection((c) => {
+    useAppStore.getState().setConnected(c);
+    if (!c && wsClient.stopped()) useAppStore.getState().setSessionExpired();
+  });
+  const offAuth = onUnauthorized(() => useAppStore.getState().setSessionExpired());
   wsClient.connect();
   return () => {
     offMsg();
     offConn();
+    offAuth();
     wsClient.close();
   };
 }

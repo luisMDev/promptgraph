@@ -14,20 +14,28 @@ import {
   type PermissionMode,
   type Run,
 } from "@promptgraph/shared";
-import { childEnv, claudeBin } from "../../config/child-env.js";
+import { childEnv, claudeBin, type PgHookEnv } from "../../config/child-env.js";
 import { hooksSettingsPath, ptyLogPath, runDir, type PgPaths } from "../../config/paths.js";
 import type { HookMessage, HookRouter } from "../../hooks/hook-router.js";
 import { hookToken } from "../../hooks/hook-token.js";
 import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
 import type { NodeRunPatch } from "../../store/store.js";
 import { newId, newSessionId } from "../../util/ids.js";
-import { stripAnsi } from "../../util/text.js";
+import { stripAnsi, errorMessage } from "../../util/text.js";
 import type { NodeControls, NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
 import { buildClaudeArgs, toCliPermissionMode } from "./args.js";
 import { CompletionController } from "./completion.js";
 import { buildInitialMessage, INTERRUPTED_MESSAGE } from "./context.js";
 import { writeHooksSettings } from "./hooks-settings.js";
-import { assistantMessageIds, lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "./transcript.js";
+import {
+  assistantMessageIds,
+  isClaudeTranscriptPath,
+  lastAssistantText,
+  turnWritten,
+  usageFromTranscript,
+  waitForLastAssistantText,
+  waitForTurnWritten,
+} from "./transcript.js";
 import { preTrustDirectory, TRUST_DIALOG_PATTERN } from "./trust.js";
 
 export interface ServerEndpoint {
@@ -76,6 +84,16 @@ const KILL_WAIT_MS = 2000;
 const ENTER_DELAY_MS = 100;
 const TRUST_WINDOW_CHARS = 4096;
 const TRUST_MESSAGE = "Claude Code asks whether you trust this folder. Answer in the terminal.";
+/** Claude Code session ids are UUIDs; anything else (e.g. from a forged hook) is never used in argv. */
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** No SessionStart hook this long after the spawn: hooks are probably not reaching the server. */
+const HOOK_LIVENESS_MS = 45_000;
+const HOOKS_MISSING_MESSAGE =
+  "No status reports from Claude Code yet: its hooks may not reach promptgraph (is curl installed?). Check the terminal, then mark the node Done or Failed.";
+
+export function isSessionId(id: string): boolean {
+  return SESSION_ID_PATTERN.test(id);
+}
 
 /**
  * prompt/command nodes (§7). Per start:
@@ -98,30 +116,68 @@ const TRUST_MESSAGE = "Claude Code asks whether you trust this folder. Answer in
  */
 export class ClaudeRunner implements Runner {
   /** Live "Reopen session" PTYs by node run id: one per node run. */
-  private readonly reopened = new Map<string, PtyHandle>();
+  private readonly reopened = new Map<string, { handle: PtyHandle; sessionId: string }>();
+  /** Session ids used by live run-owned executions (with a count: one session may be resumed twice). */
+  private readonly activeSessions = new Map<string, number>();
 
   constructor(private readonly deps: ClaudeRunnerDeps) {}
 
   start(ctx: RunnerContext): NodeExecution {
-    const execution = new ClaudeExecution(this.deps, ctx);
+    const execution = new ClaudeExecution(this.deps, ctx, {
+      claim: (sid) => this.claimSession(sid),
+    });
     return { result: execution.result, controls: execution.controls };
+  }
+
+  /** True while a run-owned execution uses the session (Reopen would write to the same transcript). */
+  isSessionActive(sessionId: string): boolean {
+    return (this.activeSessions.get(sessionId) ?? 0) > 0;
+  }
+
+  /**
+   * An execution is about to use `sessionId`: a live reopened PTY on it is ended first (two processes
+   * must not append to one transcript). Returns the release callback.
+   */
+  private async claimSession(sessionId: string): Promise<() => void> {
+    for (const r of this.reopened.values()) {
+      if (r.sessionId !== sessionId || !r.handle.isLive) continue;
+      r.handle.kill("SIGTERM");
+      if (!(await exitsWithin(r.handle, REOPEN_KILL_MS))) r.handle.kill("SIGKILL");
+    }
+    this.activeSessions.set(sessionId, (this.activeSessions.get(sessionId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = (this.activeSessions.get(sessionId) ?? 1) - 1;
+      if (n > 0) this.activeSessions.set(sessionId, n);
+      else this.activeSessions.delete(sessionId);
+    };
   }
 
   /**
    * "Reopen session" (§7.3): `claude --resume <nodeRun.sessionId>` in a new PTY in the lane worktree
-   * (or the repo if the worktree is gone), not tracked by the run. Returns its ptyId (`reopen-<id>`); while
-   * that PTY is live, the same id is returned instead of starting a second session on the transcript.
+   * (or the repo if the worktree is gone), not tracked by the run. Returns its ptyId (`reopen-<id>`) and,
+   * when it runs in the main checkout, a notice; while that PTY is live, the same id is returned instead
+   * of starting a second session on the transcript. In the main checkout the session asks before every
+   * edit (permission mode "default"), whatever the node's mode was. Callers refuse while a run-owned
+   * execution uses the session (isSessionActive).
    */
-  reopen(run: Run, nodeRun: NodeRun, lane: Lane | null, repoPath: string): string {
-    if (!nodeRun.sessionId) throw new Error("This node run has no Claude session to reopen");
+  async reopen(run: Run, nodeRun: NodeRun, lane: Lane | null, repoPath: string): Promise<{ ptyId: string; notice: string | null }> {
+    const sessionId = nodeRun.sessionId;
+    if (!sessionId) throw new Error("This node run has no Claude session to reopen");
+    if (!isSessionId(sessionId)) throw new Error("This node run's session id is not valid");
     const existing = this.reopened.get(nodeRun.id);
-    if (existing?.isLive) return existing.id;
+    if (existing?.handle.isLive) return { ptyId: existing.handle.id, notice: null };
     const env = this.deps.env ?? process.env;
-    const cwd = lane && fs.existsSync(lane.worktreePath) ? lane.worktreePath : repoPath;
+    const inWorktree = !!lane && fs.existsSync(lane.worktreePath);
+    const cwd = inWorktree ? lane.worktreePath : repoPath;
+    if (inWorktree && run.graphSnapshot.settings.autoTrustWorktrees) await preTrustDirectory(cwd, env);
     const node = run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId);
     const defaults = run.graphSnapshot.settings.defaults;
     const opts = node && isClaudeNode(node) ? resolveClaudeOptions(node, defaults) : null;
-    const args = ["--resume", nodeRun.sessionId, "--permission-mode", toCliPermissionMode(opts?.permissionMode ?? defaults.permissionMode)];
+    const mode = inWorktree ? toCliPermissionMode(opts?.permissionMode ?? defaults.permissionMode) : "default";
+    const args = ["--resume", sessionId, "--permission-mode", mode];
     if (opts?.model) args.push("--model", opts.model);
     if (opts?.effort) args.push("--effort", opts.effort);
     const id = `reopen-${newId()}`;
@@ -135,16 +191,19 @@ export class ClaudeRunner implements Runner {
       rows: PTY_ROWS,
       logPath: ptyLogPath(this.deps.paths, run.id, id),
     });
-    this.reopened.set(nodeRun.id, handle);
+    this.reopened.set(nodeRun.id, { handle, sessionId });
     void handle.exited.then(() => {
-      if (this.reopened.get(nodeRun.id) === handle) this.reopened.delete(nodeRun.id);
+      if (this.reopened.get(nodeRun.id)?.handle === handle) this.reopened.delete(nodeRun.id);
     });
-    return id;
+    const notice = inWorktree
+      ? null
+      : `The run's worktree is gone: this session runs in your main checkout (${repoPath}) and asks before every edit.`;
+    return { ptyId: id, notice };
   }
 
   /** Ends a live reopened session (its terminal tab was closed). False when no such PTY is live. */
   closeReopened(ptyId: string): boolean {
-    const handle = [...this.reopened.values()].find((h) => h.id === ptyId);
+    const handle = [...this.reopened.values()].map((r) => r.handle).find((h) => h.id === ptyId);
     if (!handle?.isLive) return false;
     handle.kill("SIGTERM");
     void exitsWithin(handle, REOPEN_KILL_MS).then((exited) => exited || handle.kill("SIGKILL"));
@@ -162,6 +221,15 @@ interface LaunchPlan {
   resumeSessionId?: string;
   /** Transcript of the resumed session, when known before the start. */
   resumeTranscriptPath?: string | null;
+  /**
+   * Retry of an attempt interrupted after its turn had finished (idle / grace period): the session is
+   * resumed without a message and the previous output stands, as if that turn just stopped.
+   */
+  resumeIdle?: { text: string | null };
+}
+
+interface SessionRegistry {
+  claim(sessionId: string): Promise<() => void>;
 }
 
 /** One live Claude node run: PTY + hooks + completion policy. */
@@ -188,10 +256,14 @@ class ClaudeExecution {
   private hold: boolean;
   private hookChain: Promise<void> = Promise.resolve();
   private readonly cleanups: Array<() => void> = [];
+  private plannedSessionId: string | null = null;
+  private resumeIdle: LaunchPlan["resumeIdle"] = undefined;
+  private sessionStarted = false;
 
   constructor(
     private readonly deps: ClaudeRunnerDeps,
     private readonly ctx: RunnerContext,
+    private readonly sessions: SessionRegistry,
   ) {
     this.env = deps.env ?? process.env;
     this.status = ctx.nodeRun.status;
@@ -224,6 +296,10 @@ class ClaudeExecution {
     try {
       const plan = this.plan();
       const { run, lane, nodeRun } = this.ctx;
+      this.plannedSessionId = plan.sessionId;
+      this.resumeIdle = plan.resumeIdle;
+      if (plan.resumeSessionId && !isSessionId(plan.resumeSessionId)) throw new Error("The session to resume has an invalid id");
+      this.cleanups.push(await this.sessions.claim(plan.sessionId));
       const settingsPath = writeHooksSettings(hooksSettingsPath(this.deps.paths, run.id), this.deps.pgHookPath);
       const autoTrust = run.graphSnapshot.settings.autoTrustWorktrees;
       if (autoTrust) await preTrustDirectory(lane.worktreePath, this.env);
@@ -262,19 +338,21 @@ class ClaudeExecution {
         file: claudeBin(this.env),
         args,
         cwd: lane.worktreePath,
-        env: childEnv({ PG_PORT: String(endpoint.port), PG_HOOK_HEADER_FILE: headerFile, PG_NODE_RUN_ID: nodeRun.id }, this.env),
+        env: childEnv({ PG_PORT: String(endpoint.port), PG_HOOK_HEADER_FILE: headerFile, PG_NODE_RUN_ID: nodeRun.id } satisfies PgHookEnv, this.env),
         cols: PTY_COLS,
         rows: PTY_ROWS,
         logPath: ptyLogPath(this.deps.paths, run.id, nodeRun.id),
       });
       this.update({ ptyId: this.handle.id, sessionId: plan.sessionId });
       if (!autoTrust) this.watchTrustDialog(this.handle);
+      this.watchHookLiveness();
 
       const exit = await this.handle.exited;
       await this.hookChain;
       this.settle(this.endingResult(exit.code));
     } catch (err) {
-      this.settle({ status: "failed", error: err instanceof Error ? err.message : String(err), output: this.finalOutput() });
+      if (this.ending?.kind === "cancelled") this.settle({ status: "cancelled", output: this.finalOutput() });
+      else this.settle({ status: "failed", error: errorMessage(err), output: this.finalOutput() });
     }
   }
 
@@ -284,7 +362,13 @@ class ClaudeExecution {
     const options = resolveClaudeOptions(node, run.graphSnapshot.settings.defaults);
     if (previousAttempt?.status === "interrupted" && previousAttempt.sessionId) {
       const sid = previousAttempt.sessionId;
-      return { node, options, message: INTERRUPTED_MESSAGE, sessionId: sid, resumeSessionId: sid, resumeTranscriptPath: previousAttempt.transcriptPath };
+      const transcript = previousAttempt.transcriptPath;
+      const resume = { node, options, sessionId: sid, resumeSessionId: sid, resumeTranscriptPath: transcript };
+      // The turn had already finished (idle, awaiting Done, or in the grace period): nothing to continue.
+      if (previousAttempt.output?.text && transcript && turnWritten(transcript)) {
+        return { ...resume, message: "", resumeIdle: { text: previousAttempt.output.text } };
+      }
+      return { ...resume, message: INTERRUPTED_MESSAGE };
     }
     const message = buildInitialMessage(node, predecessors, options.completion);
     if (node.config.context === "resume") {
@@ -315,12 +399,24 @@ class ClaudeExecution {
   private async onHook(m: HookMessage): Promise<void> {
     if (this.ending) return;
     switch (m.event) {
-      case "session-start":
-        this.transcriptPath = m.payload.transcript_path ?? this.transcriptPath;
+      case "session-start": {
+        this.sessionStarted = true;
+        this.transcriptPath = this.acceptTranscript(m.payload.transcript_path);
         // Fallback when the resumed transcript was unknown at start: SessionStart precedes the first turn.
         if (this.resuming && !this.usageBaseline && this.transcriptPath) this.usageBaseline = assistantMessageIds(this.transcriptPath);
-        this.update({ sessionId: m.payload.session_id, transcriptPath: this.transcriptPath, status: "running", waitingReason: null });
+        // Only a well-formed id is kept: it is later passed to `claude --resume`.
+        const sessionId = isSessionId(m.payload.session_id) ? m.payload.session_id : (this.plannedSessionId ?? undefined);
+        this.update({ sessionId, transcriptPath: this.transcriptPath, status: "running", waitingReason: null });
+        if (this.resumeIdle) {
+          const { text } = this.resumeIdle;
+          this.resumeIdle = undefined;
+          this.turnEnded = true;
+          if (text !== null) this.output = { ...this.output, text };
+          this.update({ output: this.output });
+          this.controller?.onStop(text);
+        }
         return;
+      }
       case "activity":
         this.turnEnded = false;
         this.controller?.onActivity();
@@ -339,9 +435,12 @@ class ClaudeExecution {
         });
         return;
       case "stop": {
-        this.transcriptPath = m.payload.transcript_path ?? this.transcriptPath;
+        this.transcriptPath = this.acceptTranscript(m.payload.transcript_path);
         const transcript = this.transcriptPath;
-        const text = m.payload.last_assistant_message ?? (transcript ? await waitForLastAssistantText(transcript) : null);
+        const hookText = m.payload.last_assistant_message;
+        const text = hookText ?? (transcript ? await waitForLastAssistantText(transcript) : null);
+        // The text came from the hook, but the usage needs the turn's line in the transcript.
+        if (hookText !== undefined && transcript) await waitForTurnWritten(transcript);
         if (this.ending) return;
         this.turnEnded = true;
         this.output = { ...this.output, ...(text !== null ? { text } : {}), ...(transcript ? { usage: this.usageOf(transcript) } : {}) };
@@ -350,6 +449,22 @@ class ClaudeExecution {
         return;
       }
     }
+  }
+
+  /** A hook-reported transcript path is used only when it looks like Claude Code's own. */
+  private acceptTranscript(reported: string | undefined): string | null {
+    if (reported !== undefined && reported !== this.transcriptPath && isClaudeTranscriptPath(reported, this.env)) return reported;
+    return this.transcriptPath;
+  }
+
+  /** No SessionStart in time → waiting_input with a reason, so the node does not sit in "running" silently. */
+  private watchHookLiveness(): void {
+    const timer = setTimeout(() => {
+      if (this.sessionStarted || this.ending || this.status !== "running") return;
+      this.update({ status: "waiting_input", waitingReason: { kind: "other", message: HOOKS_MISSING_MESSAGE } });
+    }, HOOK_LIVENESS_MS);
+    timer.unref?.();
+    this.cleanups.push(() => clearTimeout(timer));
   }
 
   private onUserInput(): void {
@@ -405,7 +520,7 @@ class ClaudeExecution {
     if (!ending) {
       return { status: "failed", error: `Claude exited unexpectedly (code ${exitCode ?? "signal"})`, output: this.finalOutput() };
     }
-    if (ending.kind === "cancelled") return { status: "cancelled" };
+    if (ending.kind === "cancelled") return { status: "cancelled", output: this.finalOutput() };
     if (ending.kind === "failed") return { status: "failed", error: ending.reason, output: this.finalOutput() };
     return { status: "succeeded", output: this.finalOutput() };
   }

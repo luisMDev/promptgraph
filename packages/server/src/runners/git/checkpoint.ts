@@ -1,5 +1,6 @@
 import { git, gitOk } from "../../git/exec.js";
 import { mergeInProgress } from "../../git/merge-state.js";
+import { isDirty } from "../../git/repo.js";
 
 /** Subject prefix of checkpoint commits (§9.3). */
 export const CHECKPOINT_PREFIX = "pg: checkpoint";
@@ -26,8 +27,7 @@ export function squashMergeMessage(message: string, sourceSha: string): string {
  * @throws when the worktree is in the middle of a merge (committing would conclude it, markers included).
  */
 export async function checkpointIfDirty(cwd: string, afterLabel: string): Promise<string | null> {
-  const status = await gitOk(cwd, ["status", "--porcelain", "--untracked-files=all"]);
-  if (!status) return null;
+  if (!(await isDirty(cwd))) return null;
   if (await mergeInProgress(cwd)) {
     throw new Error(`The worktree ${cwd} is in the middle of a merge: finish or abort it (git merge --abort) first`);
   }

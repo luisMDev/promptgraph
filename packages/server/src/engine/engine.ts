@@ -29,6 +29,7 @@ import {
   type RunDetail,
   type RunStatus,
   type Topology,
+  nodeDisplayLabel,
 } from "@promptgraph/shared";
 import { childEnv } from "../config/child-env.js";
 import { ptyLogPath, type PgPaths } from "../config/paths.js";
@@ -45,6 +46,7 @@ import { ActivationTracker, type LoopIteration } from "./activation.js";
 import { markInterrupted } from "./recovery.js";
 import { Scheduler, type SchedulerItem } from "./scheduler.js";
 import { assertTransition, RUN_TRANSITIONS } from "./state.js";
+import { errorMessage } from "../util/text.js";
 
 export interface EngineDeps {
   store: Store;
@@ -133,8 +135,7 @@ interface LiveRun {
   loopsJson: string;
 }
 
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-const labelOf = (node: GraphNode): string => node.label || node.id;
+const labelOf = (node: GraphNode): string => nodeDisplayLabel(node);
 
 /** `p`, rejected as soon as `signal` aborts. */
 function unlessAborted(p: Promise<void>, signal: AbortSignal): Promise<void> {
@@ -213,11 +214,12 @@ export class Engine {
 
     const plan = computeLanePlan(graph);
     const runId = newId();
+    const shortId = await this.uniqueShortId(graph);
     const tracker = new ActivationTracker(graph);
     const loops = tracker.loopStates();
     const run = store.transaction(() => {
       store.setKnownGraphHash(repo.path, graphId, loaded.hash);
-      store.insertRun({ id: runId, repoPath: repo.path, graph, graphHash: loaded.hash, shortId: newShortId(), startedAt: this.now() });
+      store.insertRun({ id: runId, repoPath: repo.path, graph, graphHash: loaded.hash, shortId, startedAt: this.now() });
       const r = loops.length > 0 ? store.updateRun(runId, { loops }) : store.getRun(runId)!;
       for (const node of graph.nodes) {
         store.insertNodeRun({ id: newId(), runId, nodeId: node.id, iteration: 0, attempt: 0, laneId: plan.laneOf.get(node.id) ?? null, status: "pending" });
@@ -248,8 +250,7 @@ export class Engine {
 
   getRun(runId: string): RunDetail {
     const { store } = this.deps;
-    const run = store.getRun(runId);
-    if (!run) throw new EngineError("not_found", `Run ${runId} not found`);
+    const run = this.requireRun(runId);
     const detail: RunDetail = { run, lanes: store.listLanes(runId), nodeRuns: store.listNodeRuns(runId) };
     if (run.graphSnapshot.edges.some((e) => e.loop)) {
       // Counters of every loop edge (persisted ones win; edges never reached report iteration 0).
@@ -295,10 +296,19 @@ export class Engine {
     this.emitRun(runId);
   }
 
+  /** A short id (branch names, §9.1) no run of this repository and no existing branch uses yet. */
+  private async uniqueShortId(graph: Graph): Promise<string> {
+    for (let i = 0; i < 64; i++) {
+      const id = newShortId();
+      if (!this.deps.store.shortIdInUse(this.deps.repo.path, id) && !(await this.deps.lanes.shortIdHasBranches(graph, id))) return id;
+    }
+    throw new EngineError("invalid_state", "Could not find an unused run id for branch names: clean up old runs and branches");
+  }
+
   /** Active (running or paused) run of a graph, if any. Graphs are read-only while one exists. */
   activeRunForGraph(graphId: string): string | null {
     const { store, repo } = this.deps;
-    const run = store.listRunsByStatus(["running", "paused"]).find((r) => r.repoPath === repo.path && r.graphId === graphId);
+    const run = store.listRunsByStatus(["running", "paused"], { repoPath: repo.path }).find((r) => r.graphId === graphId);
     return run?.id ?? null;
   }
 
@@ -328,7 +338,7 @@ export class Engine {
       throw new EngineError("invalid_state", "The node failed because its loop reached its limit: retrying would fail again; skip it to continue");
     }
 
-    const next = store.insertNodeRun({
+    let next = store.insertNodeRun({
       id: newId(),
       runId: nr.runId,
       nodeId: nr.nodeId,
@@ -337,6 +347,8 @@ export class Engine {
       laneId: nr.laneId,
       status: "pending",
     });
+    // Hold set on the interrupted attempt keeps the resumed session open (Claude nodes).
+    if (nr.hold && nr.status === "interrupted") next = store.updateNodeRun(next.id, { hold: true });
     store.appendEvent(nr.runId, nr.id, "node.action", { action: "retry", newNodeRunId: next.id });
     this.deps.bus.emit("node:update", { nodeRun: next });
     this.resumeIfPaused(run);
@@ -358,6 +370,12 @@ export class Engine {
     const live = this.ensureLive(run);
     if (live.tracker.isResolved(nr.nodeId)) throw new EngineError("invalid_state", "The failure was already routed downstream");
     if (nr.status === "ready") live.scheduler.remove(nr.id);
+    // A merge interrupted while it waited on conflicts leaves the lane mid-merge: drop that half-done
+    // merge, or the next commit would conclude it with the conflict markers.
+    const lane = live.nodes.get(nr.nodeId)?.type === "merge" && nr.laneId ? this.deps.store.getLane(nr.runId, nr.laneId) : undefined;
+    if (lane && (await this.deps.lanes.resetInterruptedMerge(lane))) {
+      this.deps.store.appendEvent(nr.runId, nr.id, "merge:reset_interrupted", { laneId: lane.id });
+    }
     this.deps.store.appendEvent(nr.runId, nr.id, USER_SKIP_EVENT, null);
     this.patchNodeRun(nr.id, { status: "skipped", output: { ...nr.output, skippedByUser: true }, finishedAt: this.now() });
     this.resumeIfPaused(run);
@@ -453,9 +471,19 @@ export class Engine {
     if (!nr.sessionId) throw new EngineError("invalid_state", "This node has no Claude session");
     const run = this.requireRun(nr.runId);
     const lane = nr.laneId ? (this.deps.store.getLane(nr.runId, nr.laneId) ?? null) : null;
-    const ptyId = this.deps.claude.reopen(run, nr, lane, this.deps.repo.path);
+    // A running node of the run continues this session (context "resume", retry, loop iteration).
+    if (this.deps.claude.isSessionActive(nr.sessionId)) {
+      throw new EngineError("invalid_state", "A running node is using this Claude session; reopen it once that node has finished");
+    }
+    let reopened;
+    try {
+      reopened = await this.deps.claude.reopen(run, nr, lane, this.deps.repo.path);
+    } catch (err) {
+      throw new EngineError("invalid_state", errorMessage(err));
+    }
+    const { ptyId, notice } = reopened;
     this.deps.store.appendEvent(nr.runId, nr.id, "node.action", { action: "reopen", ptyId });
-    return { ptyId };
+    return { ptyId, notice };
   }
 
   /** Ends a "Reopen session" PTY (its terminal tab was closed). not_found unless one is live. */
@@ -471,7 +499,7 @@ export class Engine {
 
   /** Startup: markInterrupted + LaneManager.prune. */
   async recover(): Promise<void> {
-    markInterrupted(this.deps.store, this.now());
+    markInterrupted(this.deps.store, { repoPath: this.deps.repo.path }, this.now());
     await this.deps.lanes.prune();
   }
 
@@ -486,7 +514,9 @@ export class Engine {
     await withTimeout(Promise.allSettled(execs.map((e) => e.controls?.cancel())), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
     await this.deps.ptys.killAll();
     await withTimeout(Promise.allSettled([...this.chains]), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
-    for (const runId of markInterrupted(this.deps.store, this.now())) this.emitRun(runId);
+    // Only this engine's own runs: another instance (another repository) may share the DB.
+    const own = { repoPath: this.deps.repo.path, runIds: [...this.live.keys()] };
+    for (const runId of markInterrupted(this.deps.store, own, this.now())) this.emitRun(runId);
     this.live.clear();
   }
 
@@ -603,7 +633,7 @@ export class Engine {
     const nodeRun = this.requireNodeRun(exec.nodeRunId);
     const node = live.nodes.get(nodeRun.nodeId)!;
     const runner = this.deps.runners[node.type];
-    if (!runner) return { status: "failed", error: `Node type "${node.type}" is not supported yet` };
+    if (!runner) return { status: "failed", error: `Node type "${node.type}" has no runner` };
     if (!nodeRun.laneId) return { status: "failed", error: "Node has no lane" };
 
     const lane = await this.ensureLane(live, nodeRun.laneId);
@@ -670,7 +700,11 @@ export class Engine {
   }
 
   private async finishNode(live: LiveRun, exec: LiveExecution, result: RunnerResult): Promise<void> {
-    if (this.shuttingDown) return; // shutdown marks everything interrupted
+    if (this.shuttingDown) {
+      // Shutdown marks everything interrupted; keep what the runner measured (e.g. Claude usage so far).
+      if (result.status === "cancelled" && result.output) this.deps.store.updateNodeRun(exec.nodeRunId, { output: result.output });
+      return;
+    }
     live.inflight++;
     // Stamped before the release starts the next queued node, so finishedAt <= its startedAt.
     const finishedAt = this.now();
@@ -725,7 +759,7 @@ export class Engine {
         if ((node.onError ?? "pause") === "fail-run") await this.terminate(live, "failed", `Node "${labelOf(node)}" failed: ${result.error}`);
       }
     } else {
-      this.patchNodeRun(nr.id, { status: "cancelled", finishedAt });
+      this.patchNodeRun(nr.id, { status: "cancelled", finishedAt, ...(result.output ? { output: { ...nr.output, ...result.output } } : {}) });
     }
     if (!live.terminating) this.persistLoops(live);
   }
@@ -1155,13 +1189,16 @@ export class Engine {
 
   private requireNodeRun(id: string): NodeRun {
     const nr = this.deps.store.getNodeRun(id);
-    if (!nr) throw new EngineError("not_found", `Node run ${id} not found`);
+    if (!nr || this.deps.store.getRunRepoPath(nr.runId) !== this.deps.repo.path) {
+      throw new EngineError("not_found", `Node run ${id} not found`);
+    }
     return nr;
   }
 
+  /** Runs of other repositories (the DB is shared) are not_found: this server only manages its own (§4). */
   private requireRun(id: string): Run {
     const run = this.deps.store.getRun(id);
-    if (!run) throw new EngineError("not_found", `Run ${id} not found`);
+    if (!run || run.repoPath !== this.deps.repo.path) throw new EngineError("not_found", `Run ${id} not found`);
     return run;
   }
 

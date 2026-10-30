@@ -8,9 +8,10 @@ import { gitPath, hasMergeHead, hasPendingSquash, unmergedFiles } from "../../gi
 import { revParse } from "../../git/repo.js";
 import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
-import { Interruption } from "../approval-runner.js";
+import { Interruption } from "../interruption.js";
 import type { NodeControls, NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
 import { squashMergeMessage } from "./checkpoint.js";
+import { errorMessage } from "../../util/text.js";
 
 /** Prompt given to Claude on conflict (§9.5). */
 export function conflictPrompt(files: string[]): string {
@@ -82,7 +83,7 @@ class MergeExecution {
     this.hold = ctx.nodeRun.hold;
     this.result = this.run().catch(
       (err: unknown): RunnerResult =>
-        this.stop.outcome(this.output()) ?? { status: "failed", error: err instanceof Error ? err.message : String(err), output: this.output() },
+        this.stop.outcome(this.output()) ?? { status: "failed", error: errorMessage(err), output: this.output() },
     );
     this.controls = {
       done: () => (this.claude ? this.claude.done() : this.onDone?.()),
@@ -256,7 +257,7 @@ class MergeExecution {
     try {
       await this.deps.lanes.withLaneLock(this.ctx.lane, () => gitOk(cwd, ["reset", "-q", "--hard", head]));
     } catch (err) {
-      this.ctx.event("merge:abort_failed", { error: err instanceof Error ? err.message : String(err) });
+      this.ctx.event("merge:abort_failed", { error: errorMessage(err) });
     }
   }
 

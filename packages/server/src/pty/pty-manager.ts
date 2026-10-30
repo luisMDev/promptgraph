@@ -56,6 +56,8 @@ const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 40;
 /** node-pty may deliver the last output chunks just after onExit; wait before flushing the log. */
 const EXIT_DRAIN_MS = 50;
+/** Exited handles kept in memory (get() after exit); older ones are forgotten, attach() reads their log. */
+const KEEP_EXITED = 64;
 /** killAll: SIGKILL stragglers after this long. */
 const KILL_ALL_GRACE_MS = 2000;
 
@@ -139,6 +141,8 @@ class ManagedPty implements PtyHandle {
  */
 export class PtyManager {
   private readonly handles = new Map<string, ManagedPty>();
+  /** Ids of exited handles, oldest first (bounded by KEEP_EXITED). */
+  private readonly exitedIds: string[] = [];
   private readonly inputListeners = new Set<UserInputListener>();
 
   constructor(
@@ -167,11 +171,21 @@ export class PtyManager {
         await flushLog(h.logPath, h.ring.snapshot(), { cols: h.cols, rows: h.rows });
         // attach() of a finished PTY reads the log: the buffer would only hold memory from now on.
         h.ring.clear();
+        this.forgetExited(id, h);
         this.bus.emit("pty:exit", { ptyId: id, code: exit.code });
       },
     );
     this.handles.set(id, handle);
     return handle;
+  }
+
+  private forgetExited(id: string, h: ManagedPty): void {
+    this.exitedIds.push(id);
+    while (this.exitedIds.length > KEEP_EXITED) {
+      const old = this.exitedIds.shift()!;
+      const handle = this.handles.get(old);
+      if (handle && !handle.isLive && (old !== id || handle !== h)) this.handles.delete(old);
+    }
   }
 
   get(id: string): PtyHandle | undefined {
@@ -232,9 +246,10 @@ export function logSizePath(logPath: string): string {
 
 async function flushLog(logPath: string, data: Buffer, size: { cols: number; rows: number }): Promise<void> {
   try {
-    await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
-    await fs.promises.writeFile(logPath, data);
-    await fs.promises.writeFile(logSizePath(logPath), JSON.stringify(size));
+    // Terminal logs hold everything typed and printed: readable by the user only.
+    await fs.promises.mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
+    await fs.promises.writeFile(logPath, data, { mode: 0o600 });
+    await fs.promises.writeFile(logSizePath(logPath), JSON.stringify(size), { mode: 0o600 });
   } catch {
     // A missing log only loses the replay of a finished terminal.
   }

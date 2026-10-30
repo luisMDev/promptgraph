@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "review-loop",
+  "name": "Review until no blocking issues",
+  "settings": {
+    "baseBranch": "main",
+    "defaults": { "permissionMode": "acceptEdits" }
+  },
+  "nodes": [
+    {
+      "id": "implement",
+      "type": "prompt",
+      "label": "Implement",
+      "position": { "x": 0, "y": 0 },
+      "config": { "prompt": "Implement the feature described in TODO.md, with tests." }
+    },
+    {
+      "id": "review",
+      "type": "command",
+      "label": "Code review",
+      "position": { "x": 300, "y": 0 },
+      "config": { "command": "/code-review" }
+    },
+    {
+      "id": "blocking",
+      "type": "condition",
+      "label": "Blocking issues?",
+      "position": { "x": 600, "y": 0 },
+      "config": { "evaluator": { "kind": "judge", "question": "Did the review report any blocking issue?", "model": "haiku" } }
+    },
+    {
+      "id": "address",
+      "type": "prompt",
+      "label": "Address findings",
+      "position": { "x": 900, "y": 200 },
+      "config": { "prompt": "Address the blocking findings of the review above.", "context": "fresh" }
+    },
+    {
+      "id": "approve",
+      "type": "approval",
+      "label": "Looks good?",
+      "position": { "x": 900, "y": 0 },
+      "config": { "message": "Check the diff before committing.", "showDiff": true }
+    },
+    {
+      "id": "commit",
+      "type": "commit",
+      "label": "Commit",
+      "position": { "x": 1200, "y": 0 },
+      "config": { "generateMessage": true }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "implement", "target": "review" },
+    { "id": "e2", "source": "review", "target": "blocking" },
+    { "id": "e3", "source": "blocking", "sourcePort": "true", "target": "address" },
+    { "id": "e4", "source": "blocking", "sourcePort": "false", "target": "approve" },
+    { "id": "e5", "source": "approve", "target": "commit" },
+    { "id": "loop", "source": "address", "target": "review", "loop": { "maxIterations": 3, "onExhausted": "fail" } }
+  ]
+}

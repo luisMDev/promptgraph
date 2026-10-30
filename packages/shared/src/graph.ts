@@ -13,6 +13,15 @@ export const CLAUDE_NODE_TYPES = ["prompt", "command"] as const satisfies readon
 /** Node types introduced by Phase 2; rejected by the validator in phase 1 mode. */
 export const PHASE2_NODE_TYPES = ["condition"] as const satisfies readonly NodeType[];
 
+/** Name shown for a node everywhere (cards, inspector, lanes, terminal tabs, dialogs, messages): label, else id. */
+export function nodeDisplayLabel(node: { id: string; label?: string | null }): string {
+  return node.label?.trim() || node.id;
+}
+
+export function isPhase2NodeType(type: NodeType): boolean {
+  return (PHASE2_NODE_TYPES as readonly NodeType[]).includes(type);
+}
+
 export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
 export type Effort = z.infer<typeof EffortSchema>;
 

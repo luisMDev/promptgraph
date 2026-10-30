@@ -1,4 +1,4 @@
-import { buildTopology, computeLanePlan, type Graph, type Lane, type LaneSetupState, type NodeRun } from "@promptgraph/shared";
+import { buildTopology, computeLanePlan, type Graph, type Lane, type LaneSetupState, type NodeRun, nodeDisplayLabel } from "@promptgraph/shared";
 
 /**
  * Lane colours and lane views for the run canvas. Lane ids and indexes come from the snapshot's lane plan
@@ -64,7 +64,7 @@ export function nodeLanes(graph: Graph, lanes: Readonly<Record<string, Lane>>, c
 /** Legend of the run panel: every planned lane (plus unplanned created ones), in index order. */
 export function laneLegend(graph: Graph, lanes: Readonly<Record<string, Lane>>, currentByNode: Readonly<Record<string, NodeRun>>): LaneLegendEntry[] {
   const plan = computeLanePlan(graph);
-  const label = new Map(graph.nodes.map((n) => [n.id, n.label || n.type] as const));
+  const label = new Map(graph.nodes.map((n) => [n.id, nodeDisplayLabel(n)] as const));
   const entries = new Map<string, LaneLegendEntry>();
   for (const p of plan.lanes) {
     const first = currentByNode[p.firstNodeId];
@@ -82,6 +82,6 @@ export function mergeInputLabels(graph: Pick<Graph, "nodes" | "edges">, mergeNod
   const topo = buildTopology(graph);
   return (topo.incoming.get(mergeNodeId) ?? []).map((e) => {
     const n = topo.nodes.get(e.source);
-    return n ? n.label || n.type : e.source;
+    return n ? nodeDisplayLabel(n) : e.source;
   });
 }

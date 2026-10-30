@@ -53,8 +53,11 @@ export interface CreateAppContextOptions {
 export async function createAppContext(opts: CreateAppContextOptions): Promise<AppContext> {
   const env = opts.env ?? process.env;
   const paths = getPaths(env);
-  fs.mkdirSync(paths.home, { recursive: true });
+  // Prompts, outputs, terminal logs and PR bodies live here: readable by the user only.
+  fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+  fs.chmodSync(paths.home, 0o700);
   const store = new Store(openDatabase(paths.stateDb));
+  fs.chmodSync(paths.stateDb, 0o600);
   const bus = new EventBus();
   const repo: RepoRef = { path: opts.repoPath, name: path.basename(opts.repoPath) };
   const graphs = new GraphStore(repo.path, bus);

@@ -1,6 +1,7 @@
 import {
   CLAUDE_NODE_TYPES,
   isClaudeNode,
+  isPhase2NodeType,
   edgeWhen,
   type CompletionPolicy,
   type Graph,
@@ -67,7 +68,7 @@ export function validateGraph(graph: Graph, options: ValidateOptions = {}): Vali
   checkCompletion(graph.settings.defaults.completion, out, null);
   checkBranchPrefix(graph.settings.branchPrefix, out);
   for (const node of graph.nodes) {
-    if (options.supportedNodeTypes && !options.supportedNodeTypes.includes(node.type) && !(phase === 1 && node.type === "condition")) {
+    if (options.supportedNodeTypes && !options.supportedNodeTypes.includes(node.type) && !(phase === 1 && isPhase2NodeType(node.type))) {
       out.error({
         code: "unsupported_node_type",
         message: `${node.type} nodes are not supported by this version yet.`,
@@ -209,7 +210,7 @@ function checkNodeConfig(graph: Graph, node: GraphNode, out: Collector, phase: 1
     case "merge":
       break;
     case "condition": {
-      if (phase === 1) {
+      if (phase === 1 && isPhase2NodeType(node.type)) {
         out.error({ code: "phase2_unsupported", message: "Condition nodes are not supported yet.", nodeId: node.id });
         break;
       }

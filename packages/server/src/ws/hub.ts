@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type { AppContext } from "../app/context.js";
 import { VERSION } from "../config/version.js";
 import { isAuthorized, isLocalRequest } from "../http/auth.js";
+import { errorMessage } from "../util/text.js";
 
 /** Replay is sent in chunks of at most this many bytes (before base64). */
 export const REPLAY_CHUNK_BYTES = 64 * 1024;
@@ -192,6 +193,3 @@ function rawToString(raw: RawData): string {
   return Buffer.isBuffer(raw) ? raw.toString("utf8") : Buffer.from(raw).toString("utf8");
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}

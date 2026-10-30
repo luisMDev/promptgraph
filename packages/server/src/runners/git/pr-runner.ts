@@ -4,10 +4,12 @@ import type { GraphNodeOf, NodeRunOutput } from "@promptgraph/shared";
 import { childEnv, ghBin } from "../../config/child-env.js";
 import { git, gitOk } from "../../git/exec.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
-import { ApprovalGate, approvalOutput, Interruption, rejectionError } from "../approval-runner.js";
+import { ApprovalGate, approvalOutput, rejectionError } from "../approval-runner.js";
+import { Interruption } from "../interruption.js";
 import type { NodeExecution, PredecessorOutput, Runner, RunnerContext, RunnerResult } from "../types.js";
 import { isCheckpointMessage } from "./checkpoint.js";
 import { generateMessage } from "./messages.js";
+import { errorMessage } from "../../util/text.js";
 
 export interface PrRunnerDeps {
   lanes: Pick<LaneManager, "withLaneLock" | "markPushed">;
@@ -45,7 +47,7 @@ export class PrRunner implements Runner {
     let output: NodeRunOutput = {};
     const result = this.run(ctx, stop, gate, (o) => (output = { ...output, ...o })).catch(
       (err: unknown): RunnerResult =>
-        stop.outcome(output) ?? { status: "failed", error: err instanceof Error ? err.message : String(err), output },
+        stop.outcome(output) ?? { status: "failed", error: errorMessage(err), output },
     );
     return {
       result,

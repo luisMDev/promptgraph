@@ -28,6 +28,10 @@ export function toCliPermissionMode(mode: PermissionMode): string {
  *  --allowedTools <t>...?]. The message comes first so a slash command is recognised (SPIKE A1).
  */
 export function buildClaudeArgs(spec: ClaudeLaunchSpec): string[] {
+  // Session ids go into argv: never let one look like an option (`--resume` takes an optional value).
+  for (const id of [spec.resumeSessionId, spec.sessionId]) {
+    if (id !== undefined && id.startsWith("-")) throw new Error(`Invalid session id: ${id}`);
+  }
   const args: string[] = [];
   // A leading "-" would be parsed as an option; the space is harmless for Claude.
   if (spec.message) args.push(spec.message.startsWith("-") ? ` ${spec.message}` : spec.message);

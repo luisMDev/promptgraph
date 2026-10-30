@@ -32,6 +32,27 @@ export class ApiRequestError extends Error {
   }
 }
 
+const unauthorizedListeners = new Set<() => void>();
+
+/**
+ * Called when the server answers 401: the session token is no longer valid (each promptgraph start
+ * makes a new one, so this tab belongs to a server that was restarted). Returns unsubscribe.
+ */
+export function onUnauthorized(listener: () => void): () => void {
+  unauthorizedListeners.add(listener);
+  return () => unauthorizedListeners.delete(listener);
+}
+
+/** Probes the session: false on 401, true when authorised, null when the server is unreachable. */
+export async function sessionValid(): Promise<boolean | null> {
+  try {
+    await request("GET", "/api/repo");
+    return true;
+  } catch (err) {
+    return err instanceof ApiRequestError ? err.status !== 401 : null;
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const token = devToken();
@@ -46,6 +67,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
   const text = await res.text();
   const json: unknown = text ? safeJson(text) : undefined;
+  if (res.status === 401) for (const l of unauthorizedListeners) l();
   if (!res.ok) {
     const err = isApiError(json) ? json : { error: text || `${res.status} ${res.statusText}` };
     throw new ApiRequestError(res.status, err);

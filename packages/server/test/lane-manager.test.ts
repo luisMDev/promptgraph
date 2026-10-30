@@ -78,6 +78,18 @@ describe("LaneManager", () => {
     expect(git(lane.worktreePath, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "main"));
   });
 
+  it("createLane never deletes an existing branch that carries its own commits", async () => {
+    const { repo, lanes, run, git } = setup();
+    git(repo, "checkout", "-q", "-b", "pg/demo/ab12/main");
+    git(repo, "commit", "-q", "--allow-empty", "-m", "precious work");
+    const precious = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-q", "main");
+    await expect(lanes.createLane(run, planned("main", 0), "main")).rejects.toThrow(/already exists with other commits/);
+    expect(git(repo, "rev-parse", "pg/demo/ab12/main")).toBe(precious);
+    expect(await lanes.shortIdHasBranches(run.graphSnapshot, "ab12")).toBe(true);
+    expect(await lanes.shortIdHasBranches(run.graphSnapshot, "cd34")).toBe(false);
+  });
+
   it("merges a lane and reports conflicts", async () => {
     const { lanes, run, git } = setup();
     const a = await lanes.createLane(run, planned("main", 0), "main");

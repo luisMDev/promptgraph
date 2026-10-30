@@ -1,4 +1,4 @@
-import type { ApprovalInfoResponse, DiffResponse } from "@promptgraph/shared";
+import { nodeDisplayLabel, type ApprovalInfoResponse, type DiffResponse } from "@promptgraph/shared";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiRequestError, errorMessage } from "../../api/rest";
 import { useAppStore } from "../../store/app-store";
@@ -177,7 +177,7 @@ function useGateContext(info: ApprovalInfoResponse | null): string | null {
   const fromPending = useAppStore((s) => (runId ? s.pendingRuns[runId] : undefined));
   if (!info || !nodeId) return null;
   if (fromDetail) {
-    const label = fromDetail.graphSnapshot.nodes.find((n) => n.id === nodeId)?.label || nodeId;
+    const label = nodeDisplayLabel(fromDetail.graphSnapshot.nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
     return `${label} · ${fromDetail.graphName} · run #${fromDetail.shortId}`;
   }
   if (fromPending) return `${fromPending.nodeLabels[nodeId] ?? nodeId} · ${fromPending.graphName} · run #${fromPending.shortId}`;

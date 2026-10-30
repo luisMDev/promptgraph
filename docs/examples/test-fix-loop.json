@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "test-fix-loop",
+  "name": "Implement, then test and fix until green",
+  "settings": {
+    "baseBranch": "main",
+    "defaults": { "permissionMode": "acceptEdits" }
+  },
+  "nodes": [
+    {
+      "id": "implement",
+      "type": "prompt",
+      "label": "Implement",
+      "position": { "x": 0, "y": 0 },
+      "config": { "prompt": "Implement the feature described in TODO.md." }
+    },
+    {
+      "id": "test",
+      "type": "shell",
+      "label": "Run tests",
+      "position": { "x": 300, "y": 0 },
+      "config": { "run": "npm test", "timeoutSec": 600 }
+    },
+    {
+      "id": "green",
+      "type": "condition",
+      "label": "Tests green?",
+      "position": { "x": 600, "y": 0 },
+      "config": { "evaluator": { "kind": "exitCode", "equals": 0 } }
+    },
+    {
+      "id": "commit",
+      "type": "commit",
+      "label": "Commit",
+      "position": { "x": 900, "y": 0 },
+      "config": { "generateMessage": true }
+    },
+    {
+      "id": "fix",
+      "type": "prompt",
+      "label": "Fix failing tests",
+      "position": { "x": 900, "y": 200 },
+      "config": { "prompt": "The tests above fail. Fix the code (not the tests) so they pass.", "context": "resume" }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "implement", "target": "test" },
+    { "id": "e2", "source": "test", "target": "green", "when": "always" },
+    { "id": "e3", "source": "green", "sourcePort": "true", "target": "commit" },
+    { "id": "e4", "source": "green", "sourcePort": "false", "target": "fix" },
+    { "id": "loop", "source": "fix", "target": "test", "loop": { "maxIterations": 3, "onExhausted": "fail" } }
+  ]
+}

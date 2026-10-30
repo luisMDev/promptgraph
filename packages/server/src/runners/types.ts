@@ -82,7 +82,8 @@ export type RunnerResult =
   | { status: "succeeded"; output: NodeRunOutput }
   | { status: "failed"; error: string; output?: NodeRunOutput }
   /** Phase 2 condition nodes report the chosen port inside output.port with status succeeded. */
-  | { status: "cancelled" };
+  /** `output`: what was measured before the stop (e.g. Claude usage), kept on the node run. */
+  | { status: "cancelled"; output?: NodeRunOutput };
 
 /** Manual controls routed by the engine to the live execution (§12.1 node-run actions). */
 export interface NodeControls {
@@ -109,5 +110,9 @@ export interface Runner {
   start(ctx: RunnerContext): NodeExecution;
 }
 
-/** One runner per node type; types not yet implemented are absent (engine fails the node). */
+/**
+ * One runner per node type. createRunnerRegistry fills every type; Partial is kept as an extension point
+ * (tests and future node types): a type without a runner is reported unsupported by validation
+ * (supportedNodeTypes) and fails at execution.
+ */
 export type RunnerRegistry = Partial<Record<NodeType, Runner>>;

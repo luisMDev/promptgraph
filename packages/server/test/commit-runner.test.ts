@@ -144,6 +144,28 @@ describe("checkpoint helpers: edge cases", () => {
 });
 
 describe("CommitRunner", () => {
+  it("refuses to commit a lane left in the middle of a merge", async () => {
+    const { dir, g, base } = repo();
+    g("checkout", "-q", "-b", "side");
+    fs.writeFileSync(path.join(dir, "f.txt"), "B\n");
+    g("add", "-A");
+    g("commit", "-q", "-m", "side");
+    g("checkout", "-q", "main");
+    fs.writeFileSync(path.join(dir, "f.txt"), "C\n");
+    g("add", "-A");
+    g("commit", "-q", "-m", "main");
+    try {
+      g("merge", "side");
+    } catch {
+      // conflict expected
+    }
+    const head = g("rev-parse", "HEAD");
+    const { exec } = runCommit(dir, base, { generateMessage: false, message: "after merge", squashCheckpoints: false });
+    const result = await exec.result;
+    expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("middle of a merge") });
+    expect(g("rev-parse", "HEAD")).toBe(head);
+  });
+
   it("nothing to commit → succeeded noop without a new commit", async () => {
     const { dir, g, base } = repo();
     const { exec, locks } = runCommit(dir, base, { generateMessage: false, message: "x" });

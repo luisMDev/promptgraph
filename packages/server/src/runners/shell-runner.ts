@@ -2,7 +2,7 @@ import type { GraphNodeOf } from "@promptgraph/shared";
 import { childEnv } from "../config/child-env.js";
 import { ptyLogPath, type PgPaths } from "../config/paths.js";
 import type { PtyHandle, PtyManager } from "../pty/pty-manager.js";
-import { stripAnsi, tailLines } from "../util/text.js";
+import { stripAnsi, tailLines, errorMessage } from "../util/text.js";
 import type { NodeExecution, Runner, RunnerContext, RunnerResult } from "./types.js";
 
 /** Lines of output kept in output.stdoutTail (§6.1). */
@@ -44,7 +44,7 @@ export class ShellRunner implements Runner {
         logPath: ptyLogPath(this.deps.paths, run.id, nodeRun.id),
       });
     } catch (err) {
-      const error = `Could not start the shell: ${err instanceof Error ? err.message : String(err)}`;
+      const error = `Could not start the shell: ${errorMessage(err)}`;
       const noop = () => undefined;
       return { result: Promise.resolve({ status: "failed", error }), controls: { done: noop, fail: noop, setHold: noop, cancel: async () => undefined } };
     }

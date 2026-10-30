@@ -217,6 +217,17 @@ export class Store {
     return run;
   }
 
+  /** Whether a run of the repository already uses this short id (branch names, §9.1). */
+  shortIdInUse(repoPath: string, shortId: string): boolean {
+    return this.db.prepare(`SELECT 1 FROM runs WHERE repo_path = ? AND short_id = ? LIMIT 1`).get(repoPath, shortId) !== undefined;
+  }
+
+  /** repo_path of a run (cheap: no snapshot parsing). */
+  getRunRepoPath(id: string): string | undefined {
+    const row = this.db.prepare(`SELECT repo_path FROM runs WHERE id = ?`).get(id) as { repo_path: string } | undefined;
+    return row?.repo_path;
+  }
+
   getRun(id: string): Run | undefined {
     const row = this.db.prepare(`SELECT * FROM runs WHERE id = ?`).get(id) as RunRow | undefined;
     return row && this.runFromRow(row);
@@ -242,11 +253,15 @@ export class Store {
     return rows.map((r) => this.summaryFromRow(r));
   }
 
-  listRunsByStatus(statuses: readonly RunStatus[]): Run[] {
+  /** `repoPath` restricts to one repository's runs (the DB is shared by every server instance). */
+  listRunsByStatus(statuses: readonly RunStatus[], filter: { repoPath?: string } = {}): Run[] {
     if (statuses.length === 0) return [];
+    const repo = filter.repoPath === undefined ? "" : " AND repo_path = ?";
+    const params: string[] = [...statuses];
+    if (filter.repoPath !== undefined) params.push(filter.repoPath);
     const rows = this.db
-      .prepare(`SELECT * FROM runs WHERE status IN (${statuses.map(() => "?").join(", ")}) ORDER BY started_at, rowid`)
-      .all(...statuses) as RunRow[];
+      .prepare(`SELECT * FROM runs WHERE status IN (${statuses.map(() => "?").join(", ")})${repo} ORDER BY started_at, rowid`)
+      .all(...params) as RunRow[];
     return rows.map((r) => this.runFromRow(r));
   }
 
@@ -361,12 +376,17 @@ export class Store {
     return rows.map(nodeRunFromRow);
   }
 
-  /** Across all runs (crash recovery, pending approvals). */
-  listNodeRunsByStatus(statuses: readonly NodeStatus[]): NodeRun[] {
+  /** Across all runs (crash recovery, pending approvals); `repoPath` restricts to one repository's runs. */
+  listNodeRunsByStatus(statuses: readonly NodeStatus[], filter: { repoPath?: string } = {}): NodeRun[] {
     if (statuses.length === 0) return [];
+    const repo = filter.repoPath === undefined ? "" : " AND run_id IN (SELECT id FROM runs WHERE repo_path = ?)";
+    const params: string[] = [...statuses];
+    if (filter.repoPath !== undefined) params.push(filter.repoPath);
     const rows = this.db
-      .prepare(`SELECT * FROM node_runs WHERE status IN (${statuses.map(() => "?").join(", ")}) ORDER BY run_id, node_id, iteration, attempt`)
-      .all(...statuses) as NodeRunRow[];
+      .prepare(
+        `SELECT * FROM node_runs WHERE status IN (${statuses.map(() => "?").join(", ")})${repo} ORDER BY run_id, node_id, iteration, attempt`,
+      )
+      .all(...params) as NodeRunRow[];
     return rows.map(nodeRunFromRow);
   }
 

@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { EngineError } from "../engine/engine.js";
 import { GraphLoadError, GraphNotFoundError } from "../graphs/graph-store.js";
+import { errorMessage } from "../util/text.js";
 
 /** An error with an explicit HTTP status, thrown by route handlers. */
 export class HttpError extends Error {
@@ -34,7 +35,7 @@ export function toApiError(err: unknown): { status: ContentfulStatusCode; body: 
   if (err instanceof EngineError) return { status: ENGINE_STATUS[err.code], body: apiError(err.message, err.code, err.details) };
   if (err instanceof GraphNotFoundError) return { status: 404, body: apiError(err.message, "not_found") };
   if (err instanceof GraphLoadError) return { status: 422, body: apiError(err.message, "invalid_graph", err.details) };
-  return { status: 500, body: apiError(err instanceof Error ? err.message : String(err), "internal") };
+  return { status: 500, body: apiError(errorMessage(err), "internal") };
 }
 
 function apiError(error: string, code: string, details?: unknown): ApiError {

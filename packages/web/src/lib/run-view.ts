@@ -10,6 +10,7 @@ import {
   type NodeOutcome,
   type NodeRun,
   type RunDetail,
+  nodeDisplayLabel,
 } from "@promptgraph/shared";
 
 /** Latest (highest iteration, then attempt) node run per node id. */
@@ -179,7 +180,7 @@ export interface RunInfo {
 }
 
 export function runInfoOf(detail: RunDetail): RunInfo {
-  const label = new Map(detail.run.graphSnapshot.nodes.map((n) => [n.id, n.label || n.type] as const));
+  const label = new Map(detail.run.graphSnapshot.nodes.map((n) => [n.id, nodeDisplayLabel(n)] as const));
   const prs = Object.values(currentNodeRuns(detail.nodeRuns)).flatMap((nr) =>
     nr.output?.prUrl ? [{ nodeId: nr.nodeId, label: label.get(nr.nodeId) ?? nr.nodeId, url: nr.output.prUrl }] : [],
   );

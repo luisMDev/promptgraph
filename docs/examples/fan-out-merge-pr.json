@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "fan-out-merge-pr",
+  "name": "Fan out, merge, review and open a PR",
+  "settings": {
+    "baseBranch": "main",
+    "maxParallelClaude": 3,
+    "keepWorktrees": "on-failure",
+    "defaults": { "permissionMode": "acceptEdits" }
+  },
+  "nodes": [
+    {
+      "id": "spec",
+      "type": "prompt",
+      "label": "Write the spec",
+      "position": { "x": 0, "y": 150 },
+      "config": { "prompt": "Write docs/spec.md describing a small /health endpoint (route, response, tests)." }
+    },
+    {
+      "id": "backend",
+      "type": "prompt",
+      "label": "Backend",
+      "position": { "x": 300, "y": 0 },
+      "config": { "prompt": "Implement the /health endpoint described in docs/spec.md, with unit tests." }
+    },
+    {
+      "id": "docs",
+      "type": "prompt",
+      "label": "Docs",
+      "position": { "x": 300, "y": 300 },
+      "config": { "prompt": "Document the /health endpoint from docs/spec.md in the README." }
+    },
+    {
+      "id": "merge",
+      "type": "merge",
+      "label": "Merge lanes",
+      "position": { "x": 600, "y": 150 },
+      "config": { "strategy": "merge", "onConflict": "claude" }
+    },
+    {
+      "id": "review",
+      "type": "command",
+      "label": "Review",
+      "position": { "x": 900, "y": 150 },
+      "config": { "command": "/code-review", "completion": { "mode": "manual" } }
+    },
+    {
+      "id": "commit",
+      "type": "commit",
+      "label": "Commit",
+      "position": { "x": 1200, "y": 150 },
+      "config": { "generateMessage": true, "squashCheckpoints": true }
+    },
+    {
+      "id": "pr",
+      "type": "pr",
+      "label": "Open PR",
+      "position": { "x": 1500, "y": 150 },
+      "config": { "draft": true, "requireApproval": true }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "spec", "target": "backend" },
+    { "id": "e2", "source": "spec", "target": "docs" },
+    { "id": "e3", "source": "backend", "target": "merge" },
+    { "id": "e4", "source": "docs", "target": "merge" },
+    { "id": "e5", "source": "merge", "target": "review" },
+    { "id": "e6", "source": "review", "target": "commit" },
+    { "id": "e7", "source": "commit", "target": "pr" }
+  ]
+}

@@ -9,8 +9,8 @@ import {
 } from "@promptgraph/shared";
 import vm from "node:vm";
 import { git } from "../git/exec.js";
-import { truncate } from "../util/text.js";
-import { Interruption } from "./approval-runner.js";
+import { truncate, errorMessage } from "../util/text.js";
+import { Interruption } from "./interruption.js";
 import { describePredecessor } from "./claude/context.js";
 import { runHeadless } from "./claude/headless.js";
 import { headlessUsage } from "./git/messages.js";
@@ -63,7 +63,7 @@ export class ConditionRunner implements Runner {
     const stop = new Interruption(ctx.signal);
     const result = this.evaluate(ctx, stop.signal).then(
       (output): RunnerResult => stop.outcome(output) ?? { status: "succeeded", output },
-      (err: unknown): RunnerResult => stop.outcome() ?? { status: "failed", error: err instanceof Error ? err.message : String(err) },
+      (err: unknown): RunnerResult => stop.outcome() ?? { status: "failed", error: errorMessage(err) },
     );
     return {
       result,
@@ -253,7 +253,7 @@ export async function laneDiffStat(cwd: string, baseBranch: string, baseRef: str
       .filter(Boolean)
       .join("\n");
   } catch (err) {
-    return `(diff unavailable: ${err instanceof Error ? err.message : String(err)})`;
+    return `(diff unavailable: ${errorMessage(err)})`;
   }
 }
 

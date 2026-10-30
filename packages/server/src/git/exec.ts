@@ -4,6 +4,8 @@ export interface GitResult {
   stdout: string;
   stderr: string;
   code: number;
+  /** stdout reached GitOptions.maxStdoutBytes: git was killed, stdout holds the first bytes only. */
+  truncated?: boolean;
 }
 
 export class GitError extends Error {
@@ -20,6 +22,8 @@ export interface GitOptions {
   /** Written to stdin. */
   input?: string;
   env?: Record<string, string>;
+  /** Stop reading (and kill git) once stdout exceeds this many bytes; the result is then `truncated`. */
+  maxStdoutBytes?: number;
 }
 
 /** Runs git (never through a shell). Resolves with the exit code; never throws on non-zero. */
@@ -32,12 +36,24 @@ export function git(cwd: string, args: readonly string[], opts: GitOptions = {})
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
-    child.stdout!.on("data", (c: Buffer) => out.push(c));
+    let outBytes = 0;
+    let truncated = false;
+    child.stdout!.on("data", (c: Buffer) => {
+      if (truncated) return;
+      out.push(c);
+      outBytes += c.length;
+      if (opts.maxStdoutBytes !== undefined && outBytes > opts.maxStdoutBytes) {
+        truncated = true;
+        child.kill("SIGKILL");
+      }
+    });
     child.stderr!.on("data", (c: Buffer) => err.push(c));
     child.on("error", reject);
-    child.on("close", (code) =>
-      resolve({ stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8"), code: code ?? 1 }),
-    );
+    child.on("close", (code) => {
+      const stdout = Buffer.concat(out).toString("utf8");
+      const stderr = Buffer.concat(err).toString("utf8");
+      resolve(truncated ? { stdout, stderr, code: 0, truncated } : { stdout, stderr, code: code ?? 1 });
+    });
     if (child.stdin) {
       // git may exit before reading its input (e.g. on a bad ref): the exit code reports that, not EPIPE.
       child.stdin.on("error", () => undefined);

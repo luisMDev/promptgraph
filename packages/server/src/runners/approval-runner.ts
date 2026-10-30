@@ -1,4 +1,5 @@
 import type { ApprovalRequest, NodeRunOutput } from "@promptgraph/shared";
+import { Interruption } from "./interruption.js";
 import type { NodeExecution, Runner, RunnerContext, RunnerResult } from "./types.js";
 
 /**
@@ -30,35 +31,6 @@ export function approvalOutput(req: ApprovalRequest): NodeRunOutput {
 export function rejectionError(what: string, req: ApprovalRequest): string {
   const comment = req.comment?.trim();
   return comment ? `${what} rejected: ${comment}` : `${what} rejected`;
-}
-
-/**
- * Stop handling shared by gate runners: fail() records the reason and aborts; the run's signal aborts
- * too. `outcome()` maps an abort to failed (with the reason) or cancelled.
- */
-export class Interruption {
-  readonly controller = new AbortController();
-  private failReason: string | null = null;
-
-  constructor(runSignal: AbortSignal) {
-    if (runSignal.aborted) this.controller.abort();
-    else runSignal.addEventListener("abort", () => this.controller.abort(), { once: true });
-  }
-
-  get signal(): AbortSignal {
-    return this.controller.signal;
-  }
-
-  fail(reason?: string): void {
-    this.failReason ??= reason || "Marked as failed by the user";
-    this.controller.abort();
-  }
-
-  /** Result for an aborted execution, or null when it was not aborted. */
-  outcome(output?: NodeRunOutput): RunnerResult | null {
-    if (this.failReason) return { status: "failed", error: this.failReason, ...(output ? { output } : {}) };
-    return this.controller.signal.aborted ? { status: "cancelled" } : null;
-  }
 }
 
 /**

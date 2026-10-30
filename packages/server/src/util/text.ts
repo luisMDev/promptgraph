@@ -17,3 +17,8 @@ export function tailLines(text: string, n: number): string {
 export function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n…[truncated ${text.length - max} chars]`;
 }
+
+/** Message of a thrown value (Error.message, else String(value)). */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

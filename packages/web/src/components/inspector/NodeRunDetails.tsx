@@ -8,6 +8,7 @@ import {
   type Lane,
   type NodeRun,
   type RunStatus,
+  nodeDisplayLabel,
 } from "@promptgraph/shared";
 import { elapsed, formatTime, formatTokens } from "../../lib/format";
 import { mergeInputLabels } from "../../lib/lanes";
@@ -40,7 +41,7 @@ export function NodeRunDetails({
   /** `nodeRun` belongs to a previous loop iteration: read-only (no controls besides its terminal). */
   historical?: boolean;
 }) {
-  const label = node.label || NODE_TYPE_META[node.type].title;
+  const label = nodeDisplayLabel(node);
   const attempts = iterations.find((e) => e.nodeRun.id === nodeRun?.id)?.attempts ?? 1;
   return (
     <div>

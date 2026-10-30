@@ -38,24 +38,35 @@ export function RunHistory() {
 
 function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
   const final = isFinalRunStatus(run.status);
-  const now = useNow(!final);
+  // A paused run (e.g. the server stopped) does not keep counting.
+  const now = useNow(!final && run.status !== "paused");
   const style = RUN_STATUS_STYLE[run.status];
   const attention = run.pendingApprovals + run.waitingInput;
   const [expanded, setExpanded] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const open = () => void useRunStore.getState().selectRun(run.id);
   return (
+    // The card is clickable for the mouse; keyboard and screen readers use the header button, so the
+    // nested controls (expand, Clean up) are not inside another interactive element.
     <div
-      role="button"
-      tabIndex={0}
       onClick={open}
-      onKeyDown={(e) => e.key === "Enter" && open()}
       className={`cursor-pointer rounded-md border px-2.5 py-2 text-xs ${selected ? "border-blue-500/60 bg-blue-500/10" : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50"}`}
     >
       <div className="flex items-center gap-2">
-        <StatusDot className={`${style.dot} ${run.status === "running" ? "animate-pulse" : ""}`} />
-        <span className={`font-medium ${style.text}`}>{style.label}</span>
-        <span className="font-mono text-zinc-500">#{run.shortId}</span>
+        <button
+          type="button"
+          aria-current={selected || undefined}
+          aria-label={`Open run #${run.shortId} (${style.label})`}
+          className="flex items-center gap-2 rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-blue-500"
+          onClick={(e) => {
+            e.stopPropagation();
+            open();
+          }}
+        >
+          <StatusDot className={`${style.dot} ${run.status === "running" ? "animate-pulse" : ""}`} />
+          <span className={`font-medium ${style.text}`}>{style.label}</span>
+          <span className="font-mono text-zinc-500">#{run.shortId}</span>
+        </button>
         {attention > 0 && <span className="rounded-full bg-amber-500/20 px-1.5 text-[10px] text-amber-300">{attention} waiting</span>}
         <button
           type="button"
@@ -77,7 +88,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         <span className="whitespace-nowrap tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
         <span className="ml-auto font-mono">{formatCostUsd(run.usage.costUsd)}</span>
       </div>
-      {run.error && <div className="mt-1 line-clamp-2 text-red-300/90">{run.error}</div>}
+      {run.error && <div className={`mt-1 line-clamp-2 ${run.status === "paused" ? "text-amber-300/90" : "text-red-300/90"}`}>{run.error}</div>}
       {expanded && <RunRowDetails runId={run.id} />}
       {final && (
         <div className="mt-1.5 flex items-center gap-2">

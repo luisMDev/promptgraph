@@ -29,8 +29,7 @@ export function registerRunRoutes(app: Hono, ctx: AppContext): void {
 
   app.get("/api/pending", (c) => {
     const nodeRuns = ctx.store
-      .listNodeRunsByStatus(["waiting_approval"])
-      .filter((nr) => ctx.store.getRun(nr.runId)?.repoPath === ctx.repo.path);
+      .listNodeRunsByStatus(["waiting_approval"], { repoPath: ctx.repo.path });
     return c.json<PendingResponse>({ nodeRuns });
   });
 }

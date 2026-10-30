@@ -1,4 +1,4 @@
-import type { AppSettings, GraphListItem, NodeRun, RepoInfoResponse, RunDetail, SlashCommand } from "@promptgraph/shared";
+import { nodeDisplayLabel, type AppSettings, type GraphListItem, type NodeRun, type RepoInfoResponse, type RunDetail, type SlashCommand } from "@promptgraph/shared";
 import { create } from "zustand";
 import { api, errorMessage } from "../api/rest";
 
@@ -17,7 +17,7 @@ export function pendingRunInfo(detail: RunDetail): PendingRunInfo {
     graphId: run.graphId,
     graphName: run.graphName,
     shortId: run.shortId,
-    nodeLabels: Object.fromEntries(run.graphSnapshot.nodes.map((n) => [n.id, n.label || n.type])),
+    nodeLabels: Object.fromEntries(run.graphSnapshot.nodes.map((n) => [n.id, nodeDisplayLabel(n)])),
   };
 }
 
@@ -33,6 +33,8 @@ export interface AppState {
   /** Run info of every run in `pending` (best effort: missing while loading or when the fetch failed). */
   pendingRuns: Record<string, PendingRunInfo>;
   connected: boolean;
+  /** The server refused this tab's session token (it was restarted: a new URL is printed). */
+  sessionExpired: boolean;
   bootError: string | null;
 
   boot(): Promise<void>;
@@ -41,6 +43,7 @@ export interface AppState {
   loadCommands(): Promise<void>;
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
   setConnected(connected: boolean): void;
+  setSessionExpired(): void;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -51,6 +54,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   pending: [],
   pendingRuns: {},
   connected: false,
+  sessionExpired: false,
   bootError: null,
 
   async boot() {
@@ -120,5 +124,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setConnected(connected) {
     set({ connected });
+  },
+
+  setSessionExpired() {
+    set({ sessionExpired: true });
   },
 }));

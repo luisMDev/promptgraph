@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import { parseCliArgs } from "../src/cli/args.js";
 import { checkPrereqs } from "../src/cli/prereqs.js";
 import { startServer } from "../src/cli/server.js";
+import { sessionCookieValue } from "../src/hooks/hook-token.js";
 import { LaneManager } from "../src/workspace/lane-manager.js";
 import { createTempRepo, FAKE_CLAUDE, FAKE_GH, fakeClaudeEnv, tempDir } from "./helpers.js";
 
@@ -38,6 +39,7 @@ describe("checkPrereqs", () => {
     expect(report.errors).toEqual(["git not found: promptgraph needs git on PATH"]);
     expect(report.warnings).toContainEqual(expect.stringContaining("Claude Code (/nonexistent/claude) not found"));
     expect(report.warnings).toContain("GitHub CLI (gh) not found: PR nodes will fail");
+    expect(report.warnings).toContainEqual(expect.stringContaining("curl not found"));
   });
 
   it("checks the gh binary set by PG_GH_BIN", async () => {
@@ -81,7 +83,7 @@ describe("startServer", () => {
 
     const opened = await fetch(server.url, { redirect: "manual" });
     expect(opened.status).toBe(302);
-    expect(opened.headers.get("set-cookie")).toContain(server.token);
+    expect(opened.headers.get("set-cookie")).toContain(`pg_token=${sessionCookieValue(server.token)}`);
 
     const hello = await new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws?t=${server.token}`);
@@ -105,6 +107,21 @@ describe("startServer", () => {
     const env = { ...process.env, ...fakeClaudeEnv(t.dir) };
     const first = await startServer({ repoPath: repo, port: 0, env });
     cleanups.push(() => first.close());
-    await expect(startServer({ repoPath: repo, port: first.port, env })).rejects.toThrow(`Port ${first.port} is already in use`);
+    const other = createTempRepo();
+    cleanups.push(other.cleanup);
+    await expect(startServer({ repoPath: other.repo, port: first.port, env })).rejects.toThrow(`Port ${first.port} is already in use`);
+    // The failed start released its instance lock.
+    const second = await startServer({ repoPath: other.repo, port: 0, env });
+    await second.close();
+  });
+
+  it("refuses a second instance for the same repository", async () => {
+    const { repo, cleanup } = createTempRepo();
+    const t = tempDir();
+    cleanups.push(cleanup, t.cleanup);
+    const env = { ...process.env, ...fakeClaudeEnv(t.dir) };
+    const first = await startServer({ repoPath: repo, port: 0, env });
+    cleanups.push(() => first.close());
+    await expect(startServer({ repoPath: repo, port: 0, env })).rejects.toThrow("already running");
   });
 });

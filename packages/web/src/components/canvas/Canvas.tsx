@@ -1,4 +1,4 @@
-import { NODE_TYPES, type Graph, type NodeType, type Position, type SourcePort } from "@promptgraph/shared";
+import { NODE_TYPES, type Graph, type NodeType, type Position, type SourcePort, nodeDisplayLabel } from "@promptgraph/shared";
 import {
   Background,
   BackgroundVariant,
@@ -213,7 +213,7 @@ function RunCanvas() {
     const nodeRun = useRunStore.getState().currentByNode[n.id];
     if (!nodeRun) return;
     if (nodeRun.status === "waiting_approval") useUiStore.getState().openApproval(nodeRun.id);
-    openNodeTerminal(nodeRun, n.data.node.label || n.data.node.type);
+    openNodeTerminal(nodeRun, nodeDisplayLabel(n.data.node));
   }, []);
 
   if (detailError) return <CenteredMessage tone="error">Could not load the run: {detailError}</CenteredMessage>;

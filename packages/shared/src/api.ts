@@ -190,7 +190,11 @@ export type DiffResponse = z.infer<typeof DiffResponseSchema>;
  * POST /api/node-runs/:id/reopen — spawns `claude --resume <session>` (not part of the run), or returns
  * the node run's reopened PTY while it is still live. DELETE /api/ptys/:ptyId ends it.
  */
-export const ReopenResponseSchema = z.object({ ptyId: z.string() });
+export const ReopenResponseSchema = z.object({
+  ptyId: z.string(),
+  /** Set when the session does not run where the node ran (e.g. the worktree is gone: main checkout). */
+  notice: z.string().nullable().optional(),
+});
 export type ReopenResponse = z.infer<typeof ReopenResponseSchema>;
 
 // --- Commands --------------------------------------------------------------

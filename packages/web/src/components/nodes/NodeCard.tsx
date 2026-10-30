@@ -1,4 +1,4 @@
-import { formatCostUsd, isActiveNodeStatus, type GraphNode, type NodeRun } from "@promptgraph/shared";
+import { formatCostUsd, isActiveNodeStatus, type GraphNode, type NodeRun, nodeDisplayLabel } from "@promptgraph/shared";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import { elapsed, formatTokens, prLabel } from "../../lib/format";
@@ -46,7 +46,7 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
           <NodeTypeIcon type={node.type} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] leading-tight font-semibold text-zinc-100">{node.label || <span className="text-zinc-500 italic">Untitled</span>}</div>
+          <div className="truncate text-[13px] leading-tight font-semibold text-zinc-100">{node.label?.trim() || <span className="text-zinc-500 italic">{nodeDisplayLabel(node)}</span>}</div>
           <div className="text-[10px] tracking-wide text-zinc-500 uppercase">{meta.title}</div>
         </div>
         {(hasErrors || hasWarnings) && (

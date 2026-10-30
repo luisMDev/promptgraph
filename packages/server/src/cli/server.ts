@@ -3,6 +3,8 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAdaptorServer } from "@hono/node-server";
 import { createAppContext, type AppContext } from "../app/context.js";
+import { InstanceLock } from "../config/instance-lock.js";
+import { getPaths } from "../config/paths.js";
 import { createHttpApp } from "../http/app.js";
 import { WsHub } from "../ws/hub.js";
 
@@ -28,20 +30,38 @@ export interface RunningServer {
 const HOST = "127.0.0.1";
 
 /**
- * createAppContext → GraphStore.ensureDir → Engine.recover → Notifier.start → Hono app on
- * @hono/node-server bound to 127.0.0.1:<port> (port 0 = random, for tests) → WsHub.attach.
+ * InstanceLock (one server per repository) → createAppContext → GraphStore.ensureDir → Hono app on
+ * @hono/node-server bound to 127.0.0.1:<port> (port 0 = random, for tests) → Engine.recover →
+ * Notifier.start → WsHub.attach. The port is bound before recovery so a start that fails on the port
+ * never touches the state DB.
  */
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
   const token = opts.token ?? randomBytes(24).toString("base64url");
-  const ctx = await createAppContext({ repoPath: opts.repoPath, token, warnings: opts.warnings, env: opts.env });
-  const closeDb = () => ctx.store.db.close();
+  const lock = InstanceLock.acquire(getPaths(opts.env ?? process.env), opts.repoPath);
+  let ctx: AppContext;
+  try {
+    ctx = await createAppContext({ repoPath: opts.repoPath, token, warnings: opts.warnings, env: opts.env });
+  } catch (err) {
+    lock.release();
+    throw err;
+  }
+  const closeDb = () => {
+    ctx.store.db.close();
+    lock.release();
+  };
   let server: Server;
   try {
     ctx.graphs.ensureDir();
-    await ctx.engine.recover();
     server = createAdaptorServer({ fetch: createHttpApp(ctx).fetch }) as Server;
     await listen(server, opts.port);
   } catch (err) {
+    closeDb();
+    throw err;
+  }
+  try {
+    await ctx.engine.recover();
+  } catch (err) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     closeDb();
     throw err;
   }

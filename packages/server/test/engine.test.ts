@@ -605,7 +605,9 @@ describe("Engine failure handling and manual controls", () => {
     await s.engine.submitApproval(p.id, { approved: true, headSha: "sha-reviewed" });
     expect(runner.last("p")!.calls).toEqual(["approve:true"]);
     s.store.updateNodeRun(a.id, { sessionId: "sess-1" });
-    await expect(s.engine.reopenSession(a.id)).resolves.toEqual({ ptyId: "reopen-x" });
+    await expect(s.engine.reopenSession(a.id)).resolves.toEqual({ ptyId: "reopen-x", notice: null });
+    s.claude.isSessionActive.mockReturnValueOnce(true);
+    await expect(s.engine.reopenSession(a.id)).rejects.toMatchObject({ code: "invalid_state" });
     expect(s.claude.reopen).toHaveBeenCalledWith(expect.objectContaining({ id: run.id }), expect.objectContaining({ id: a.id }), expect.objectContaining({ id: "main" }), s.graphs.repoPath);
     await expect(s.engine.getDiff("missing")).rejects.toMatchObject({ code: "not_found" });
   });

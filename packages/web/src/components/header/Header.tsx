@@ -9,6 +9,7 @@ import { PendingApprovals, RunControls, RunSelector } from "./RunControls";
 export function Header() {
   const repo = useAppStore((s) => s.repo);
   const connected = useAppStore((s) => s.connected);
+  const sessionExpired = useAppStore((s) => s.sessionExpired);
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-3">
       <div className="flex items-center gap-2 pr-1">
@@ -21,7 +22,13 @@ export function Header() {
       <RunSelector />
       <SaveState />
       <div className="ml-auto flex items-center gap-2">
-        {!connected && <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-300">Reconnecting…</span>}
+        {sessionExpired ? (
+          <span role="alert" className="rounded bg-red-500/10 px-2 py-1 text-xs text-red-300">
+            The promptgraph server was restarted: open the new URL it printed in your terminal.
+          </span>
+        ) : (
+          !connected && <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-300">Reconnecting…</span>
+        )}
         <RunControls />
         <PendingApprovals />
         <SettingsMenu />

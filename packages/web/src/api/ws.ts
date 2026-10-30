@@ -1,4 +1,5 @@
 import { ServerMessageSchema, decodeBase64, type ClientMessage, type ServerMessage } from "@promptgraph/shared";
+import { sessionValid } from "./rest";
 import { devToken } from "./token";
 
 export type ServerMessageListener = (msg: ServerMessage) => void;
@@ -14,7 +15,9 @@ const MAX_BACKOFF_MS = 5000;
 /**
  * Single shared WebSocket to /ws with automatic reconnect (backoff ≤5s). On reconnect it re-sends
  * `subscribe` for subscribed runs and `pty:attach` for attached ptys. Messages are validated with
- * ServerMessageSchema; invalid ones are dropped.
+ * ServerMessageSchema; invalid ones are dropped. Browsers hide the HTTP status of a refused upgrade, so
+ * after a failed connect `checkSession` (a REST probe) tells a restarted server (401: the token of this
+ * tab is gone) from a server that is down: on 401 it stops retrying (see stopped()).
  */
 export class WsClient {
   private socket: WebSocket | null = null;
@@ -26,16 +29,30 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private connected = false;
+  private opened = false;
+  /** Set once the session is known to be invalid: no more reconnects. */
+  private unauthorized = false;
 
-  constructor(private readonly url: () => string = defaultUrl) {}
+  constructor(
+    private readonly url: () => string = defaultUrl,
+    /** false = unauthorised (stop), true/null = keep retrying. */
+    private readonly checkSession: (() => Promise<boolean | null>) | null = null,
+  ) {}
+
+  /** True once the server refused this tab's session token (restarted server). */
+  stopped(): boolean {
+    return this.unauthorized;
+  }
 
   connect(): void {
     this.closed = false;
-    if (this.socket) return;
+    if (this.socket || this.unauthorized) return;
     const socket = new WebSocket(this.url());
     this.socket = socket;
+    this.opened = false;
     socket.onopen = () => {
       if (this.socket !== socket) return;
+      this.opened = true;
       this.backoff = 500;
       this.setConnected(true);
       for (const runId of this.runs) this.rawSend({ type: "subscribe", runId });
@@ -47,8 +64,11 @@ export class WsClient {
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
+      const neverOpened = !this.opened;
       this.setConnected(false);
-      if (!this.closed) this.scheduleReconnect();
+      if (this.closed) return;
+      if (neverOpened && this.checkSession) void this.checkThenReconnect(this.checkSession);
+      else this.scheduleReconnect();
     };
   }
 
@@ -139,6 +159,15 @@ export class WsClient {
     for (const l of this.listeners) l(msg);
   }
 
+  private async checkThenReconnect(check: () => Promise<boolean | null>): Promise<void> {
+    if ((await check()) === false) {
+      this.unauthorized = true;
+      this.setConnected(false);
+      return;
+    }
+    if (!this.closed) this.scheduleReconnect();
+  }
+
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     const delay = this.backoff;
@@ -162,4 +191,4 @@ function defaultUrl(): string {
   return `${proto}//${window.location.host}/ws${qs}`;
 }
 
-export const wsClient = new WsClient();
+export const wsClient = new WsClient(defaultUrl, sessionValid);

@@ -7,6 +7,7 @@ import { hookToken } from "../src/hooks/hook-token.js";
 import { createHttpApp } from "../src/http/app.js";
 import { createTempRepo, tempDir } from "./helpers.js";
 import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
+import { sessionCookieValue } from "../src/hooks/hook-token.js";
 
 vi.mock("../src/git/repo.js", () => ({
   currentBranch: vi.fn(async () => "main"),
@@ -70,17 +71,21 @@ describe("security middleware", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/runs?x=1");
     const cookie = res.headers.get("set-cookie") ?? "";
-    expect(cookie).toContain(`pg_token=${TEST_TOKEN}`);
+    expect(cookie).toContain(`pg_token=${sessionCookieValue(TEST_TOKEN)}`);
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
-    const ok = await app.request("/api/graphs", { headers: { ...HOST, cookie: `pg_token=${TEST_TOKEN}` } });
+    expect(cookie).not.toContain(TEST_TOKEN);
+    const ok = await app.request("/api/graphs", { headers: { ...HOST, cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}` } });
     expect(ok.status).toBe(200);
+    // The cookie value is no Bearer credential, and the raw token is no cookie.
+    expect((await app.request("/api/graphs", { headers: { ...HOST, authorization: `Bearer ${sessionCookieValue(TEST_TOKEN)}` } })).status).toBe(401);
+    expect((await app.request("/api/graphs", { headers: { ...HOST, cookie: `pg_token=${TEST_TOKEN}` } })).status).toBe(401);
     expect((await app.request("/?t=wrong", { headers: HOST })).status).toBe(401);
   });
 
   it("rejects other localhost ports once listening (cross-port CSRF) and non-JSON cookie writes", async () => {
     setup.ctx.port = 4777;
-    const cookie = { ...HOST, cookie: `pg_token=${TEST_TOKEN}` };
+    const cookie = { ...HOST, cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}` };
     const crossPort = { ...cookie, origin: "http://127.0.0.1:3000", "content-type": "text/plain" };
     expect((await app.request("/api/runs/x/cancel", { method: "POST", headers: crossPort, body: "{}" })).status).toBe(403);
     expect((await app.request("/api/graphs", { headers: { ...cookie, host: "127.0.0.1:3000" } })).status).toBe(403);

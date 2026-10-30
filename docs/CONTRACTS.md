@@ -1,9 +1,9 @@
 # promptgraph — Internal contracts
 
-> Audience: the builders implementing M1–M6 in parallel. `DESIGN.md` is the product spec, `SPIKE.md`
-> overrides it where they differ. This file fixes **module boundaries, file paths and interfaces**.
-> Every server file listed here exists as a compiling stub (`throw new Error("not implemented")`) whose
-> doc comment is part of the contract. Change a signature only together with all its callers and this file.
+> Audience: maintainers. `DESIGN.md` is the product spec, `SPIKE.md` overrides it where they differ. This
+> file fixes **module boundaries, file paths and interfaces**. Milestones M0–M6 are implemented: every
+> module listed here is complete, and its doc comment is part of the contract. Change a signature only
+> together with all its callers and this file. User documentation is in the top-level `README.md`.
 
 ## 1. Workspace
 
@@ -38,7 +38,7 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 
 | File | Exports (main) |
 |---|---|
-| `graph.ts` | `GraphSchema`, `NodeSchema` (discriminated by `type`), per-type `*ConfigSchema` with §6.1 defaults, `EdgeSchema` (`sourcePort`, Phase-2 `when`/`loop` optional), `GraphSettingsSchema` (incl. `autoTrustWorktrees` default true, `allowPrWithoutApproval` default false), `CompletionPolicySchema`, types `Graph`, `GraphInput`, `GraphNode`, `GraphNodeOf<T>`, `ClaudeNode`, `GraphEdge`, `NodeConfigMap`; helpers `defaultNodeConfig`, `resolveBranchPrefix`, `slugifyGraphId`, `edgeWhen`, `edgeMatches`, `NodeOutcome`, `compareCanvasOrder`, `createEmptyGraph`, `isClaudeNode` |
+| `graph.ts` | `GraphSchema`, `NodeSchema` (discriminated by `type`), per-type `*ConfigSchema` with §6.1 defaults, `EdgeSchema` (`sourcePort`, Phase-2 `when`/`loop` optional), `GraphSettingsSchema` (incl. `autoTrustWorktrees` default true, `allowPrWithoutApproval` default false), `CompletionPolicySchema`, types `Graph`, `GraphInput`, `GraphNode`, `GraphNodeOf<T>`, `ClaudeNode`, `GraphEdge`, `NodeConfigMap`; helpers `defaultNodeConfig`, `resolveBranchPrefix`, `slugifyGraphId`, `edgeWhen`, `edgeMatches`, `NodeOutcome`, `compareCanvasOrder`, `createEmptyGraph`, `isClaudeNode`, `nodeDisplayLabel` (label, else id: the one fallback everywhere), `PHASE2_NODE_TYPES` + `isPhase2NodeType` (the validator and the web palette derive phase-2 handling from it) |
 | `status.ts` | `NodeStatus` (§8.2; `ready` = queued), `RunStatus` (§8.3), `LaneStatus`, `ACTIVE_/FINAL_/ATTENTION_NODE_STATUSES`, `isFinalRunStatus` |
 | `run.ts` | `TokenUsage`, `NodeRunOutput`, `WaitingReason`, `NodeRun`, `Lane`, `RunSummary`, `Run` (= summary + `graphSnapshot`), `RunDetail` (+ Phase-2 `loops?: LoopState[]`), `LoopState`, `RunEvent` |
 | `pricing.ts` | `PRICE_TABLE`, `MODEL_ALIASES`, `priceFor`, `RawUsage`, `costFromUsage`, `emptyUsage`, `accumulateUsage`, `sumUsage`, `formatCostUsd` |
@@ -49,6 +49,10 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 | `ws.ts` | `ServerMessageSchema`, `ClientMessageSchema` (discriminated unions), `encodeBase64`/`decodeBase64` |
 | `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
+
+The request/payload/config type aliases (e.g. `SaveGraphRequest`, `StartRunRequest`, `StopPayload`,
+`PromptConfig`, `ServerMessageOf`) are kept on purpose as the shared package's public API, even where only the
+schemas are used today. `docs/examples/*.json` must validate (`packages/shared/test/examples.test.ts`).
 
 Semantics fixed here (do not re-implement elsewhere):
 
@@ -94,62 +98,64 @@ Semantics fixed here (do not re-implement elsewhere):
 
 ## 4. Server module map (`packages/server/src`)
 
-| Path | Exports | Milestone |
-|---|---|---|
-| `config/paths.ts` ✅ | `pgHome`, `getPaths` → `PgPaths`, `runDir`, `ptyLogPath`, `hooksSettingsPath`, `worktreePath`, `graphsDir`, `claudeConfigFile`, `PG_HOOK_SOURCE`, `webDistDir` | done |
-| `config/child-env.ts` ✅ | `claudeBin`, `childEnv`, `PgHookEnv` | done |
-| `config/version.ts` ✅ | `VERSION`, `SUPPORTED_PHASE` (= 2) | done (M5 bumped the phase) |
-| `config/app-settings.ts` | `AppSettingsStore {get, update}` | M2 |
-| `events/bus.ts` ✅ | `EventBus`, `BusEvents`, `AttentionKind` | done |
-| `util/ids.ts`, `util/text.ts` ✅ | see §3 | done |
-| `store/schema.ts` ✅ | `MIGRATIONS` (user_version based; #2 adds `runs.loops`) | done (M6) |
-| `store/store.ts` | `openDatabase`, `Store` DAO, `NewRun`, `RunPatch`, `NewLane`, `LanePatch`, `NewNodeRun`, `NodeRunPatch` | M1 |
-| `graphs/graph-store.ts` | `GraphStore {ensureDir, list, get, save, delete, watch}`, `hashContent`, `serializeGraph`, `GraphNotFoundError`, `GraphLoadError` | M1 |
-| `git/exec.ts` ✅ | `git`, `gitOk`, `GitError` | M1 |
-| `git/repo.ts` ✅ | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` | M1 |
-| `git/merge-state.ts` ✅ | `gitPath`, `hasMergeHead`, `hasPendingSquash`, `unmergedFiles`, `mergeInProgress` | M3 fixes |
-| `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) | M1 |
-| `pty/pty-manager.ts` | `PtyManager`, `PtyHandle`, `SpawnPtyOptions`, `PtyAttachResult`, `logSizePath` | M1 |
-| `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` | M1 |
-| `runners/types.ts` ✅ | `Runner`, `RunnerContext`, `RunnerResult`, `NodeControls`, `NodeExecution`, `PredecessorOutput`, `RunnerRegistry` | done |
-| `runners/claude/args.ts` | `buildClaudeArgs`, `toCliPermissionMode`, `ClaudeLaunchSpec` | M1 |
-| `runners/claude/context.ts` | `buildInitialMessage`, `markerInstruction`, `INTERRUPTED_MESSAGE`, `CONTEXT_OUTPUT_LIMIT` | M1 |
-| `runners/claude/hooks-settings.ts` | `buildHooksSettings`, `writeHooksSettings` | M1 |
-| `runners/claude/pg-hook.ts` | `installPgHook` | M1 |
-| `runners/claude/trust.ts` | `preTrustDirectory`, `TRUST_DIALOG_PATTERN` | M1 |
-| `runners/claude/transcript.ts` | `lastAssistantText`, `waitForLastAssistantText`, `usageFromTranscript` | M1 (usage M2) |
-| `runners/claude/completion.ts` | `CompletionController` | M1 |
-| `runners/claude/headless.ts` | `runHeadless` | M1 (commit messages) |
-| `runners/claude/claude-runner.ts` | `ClaudeRunner {start, reopen}`, `ClaudeRunnerDeps`, `ServerEndpoint` | M1 (reopen M2) |
-| `runners/shell-runner.ts` | `ShellRunner`, `SHELL_TAIL_LINES` | M1 |
-| `runners/git/messages.ts` | `generateMessage` | M1 (commit), M4 (pr) |
-| `runners/git/commit-runner.ts` | `CommitRunner` | M1 |
-| `runners/git/merge-runner.ts` | `MergeRunner`, `MergeRunnerDeps`, `conflictPrompt`, `mergeMessage` | M3 (done) |
-| `runners/git/pr-runner.ts` | `PrRunner`, `PrRunnerDeps` | M4 (done) |
-| `runners/approval-runner.ts` | `ApprovalRunner`, `ApprovalGate`, `Interruption`, `approvalOutput`, `rejectionError` | M4 (done) |
-| `runners/condition-runner.ts` ✅ | `ConditionRunner` (+ `evaluatedPredecessor`, `evaluateExitCode`, `evaluateRegex`, `buildJudgePrompt`, `parseJudgeVerdict`, `laneDiffStat`) | M5 |
-| `runners/registry.ts` | `createRunnerRegistry` | M1 (+ each milestone adds its runner) |
-| `workspace/lane-manager.ts` | `LaneManager`, `RepoRef`, `MergeAttempt` | M1 (single lane) / M3 (forks, merge, cleanup) |
-| `workspace/setup.ts` | `runWorkspaceSetup` | M3 |
-| `engine/state.ts` ✅ | `NODE_TRANSITIONS`, `canTransition`, `assertTransition`, `RUN_TRANSITIONS` | done |
-| `engine/activation.ts` ✅ | `ActivationTracker`, `ActivationDelta`, `LoopIteration` | M1 (skips/dead paths M5, loops M6) |
-| `engine/scheduler.ts` | `Scheduler`, `SchedulerItem` | M1 (cap matters from M3) |
-| `engine/recovery.ts` | `markInterrupted` | M4 (crash resume) — M1 may implement early |
-| `engine/engine.ts` | `Engine`, `EngineDeps`, `EngineError` | M1 |
-| `notify/notifier.ts` | `Notifier`, `detectNotifyPlatform`, `sendDesktopNotification` | M2 |
-| `commands/discover.ts` | `listSlashCommands` | M2 |
-| `app/context.ts` | `AppContext`, `createAppContext` (composition root) | M1 |
-| `http/auth.ts` | `tokenAuth`, `localhostOnly`, `isAuthorized` | M1 |
-| `http/app.ts` | `createHttpApp` | M1 |
-| `http/routes/{graphs,runs,node-runs,misc,hooks}.ts` | `register*Routes(app, ctx)` | M1 (routes added per milestone) |
-| `http/static.ts` | `registerStatic` | M1 |
-| `ws/hub.ts` | `WsHub {attach, close}` | M1 |
-| `cli/args.ts` | `parseCliArgs`, `CliOptions`, `USAGE` | M1 |
-| `cli/prereqs.ts` | `checkPrereqs` (git, `claudeBin`, `ghBin` `--version`) | M1 |
-| `cli/server.ts` | `startServer` → `RunningServer {ctx, url, port, token, close}` | M1 |
-| `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it) | M1 |
+| Path | Exports |
+|---|---|
+| `config/paths.ts` | `pgHome`, `getPaths` → `PgPaths`, `runDir`, `ptyLogPath`, `hooksSettingsPath`, `worktreePath`, `graphsDir`, `claudeConfigFile`, `PG_HOOK_SOURCE`, `webDistDir` |
+| `config/child-env.ts` | `claudeBin`, `childEnv`, `PgHookEnv` |
+| `config/version.ts` | `VERSION`, `SUPPORTED_PHASE` (= 2) |
+| `config/app-settings.ts` | `AppSettingsStore {get, update}` |
+| `events/bus.ts` | `EventBus`, `BusEvents`, `AttentionKind` |
+| `util/ids.ts`, `util/text.ts` | see §3 (`util/text.ts` also exports `errorMessage(err)`) |
+| `store/schema.ts` | `MIGRATIONS` (user_version based; #2 adds `runs.loops`) |
+| `store/store.ts` | `openDatabase`, `Store` DAO, `NewRun`, `RunPatch`, `NewLane`, `LanePatch`, `NewNodeRun`, `NodeRunPatch` |
+| `graphs/graph-store.ts` | `GraphStore {ensureDir, list, get, save, delete, watch}`, `hashContent`, `serializeGraph`, `GraphNotFoundError`, `GraphLoadError` |
+| `git/exec.ts` | `git`, `gitOk`, `GitError` |
+| `git/repo.ts` | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` |
+| `git/merge-state.ts` | `gitPath`, `hasMergeHead`, `hasPendingSquash`, `unmergedFiles`, `mergeInProgress` |
+| `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) |
+| `pty/pty-manager.ts` | `PtyManager`, `PtyHandle`, `SpawnPtyOptions`, `PtyAttachResult`, `logSizePath` |
+| `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` |
+| `hooks/hook-token.ts` | `hookToken(token, nodeRunId)`, `sessionCookieValue(token)` |
+| `runners/types.ts` | `Runner`, `RunnerContext`, `RunnerResult`, `NodeControls`, `NodeExecution`, `PredecessorOutput`, `RunnerRegistry` |
+| `runners/claude/args.ts` | `buildClaudeArgs`, `toCliPermissionMode`, `ClaudeLaunchSpec` |
+| `runners/claude/context.ts` | `buildInitialMessage`, `markerInstruction`, `INTERRUPTED_MESSAGE`, `CONTEXT_OUTPUT_LIMIT` |
+| `runners/claude/hooks-settings.ts` | `buildHooksSettings`, `writeHooksSettings` |
+| `runners/claude/pg-hook.ts` | `installPgHook` |
+| `runners/claude/trust.ts` | `preTrustDirectory`, `TRUST_DIALOG_PATTERN` |
+| `runners/claude/transcript.ts` | `lastAssistantText`, `waitForLastAssistantText`, `turnWritten`, `waitForTurnWritten`, `assistantMessageIds`, `usageFromTranscript`, `isClaudeTranscriptPath` |
+| `runners/claude/completion.ts` | `CompletionController` |
+| `runners/claude/headless.ts` | `runHeadless` |
+| `runners/claude/claude-runner.ts` | `ClaudeRunner {start, reopen, closeReopened, isSessionActive}`, `ClaudeRunnerDeps`, `ServerEndpoint`, `isSessionId` |
+| `runners/shell-runner.ts` | `ShellRunner`, `SHELL_TAIL_LINES` |
+| `runners/git/messages.ts` | `generateMessage` |
+| `runners/git/commit-runner.ts` | `CommitRunner` |
+| `runners/git/merge-runner.ts` | `MergeRunner`, `MergeRunnerDeps`, `conflictPrompt`, `mergeMessage` |
+| `runners/git/pr-runner.ts` | `PrRunner`, `PrRunnerDeps` |
+| `runners/approval-runner.ts` | `ApprovalRunner`, `ApprovalGate`, `approvalOutput`, `rejectionError` |
+| `runners/interruption.ts` | `Interruption` (stop handling shared by the approval, pr, merge, condition and commit runners) |
+| `runners/condition-runner.ts` | `ConditionRunner` (+ `evaluatedPredecessor`, `evaluateExitCode`, `evaluateRegex`, `buildJudgePrompt`, `parseJudgeVerdict`, `laneDiffStat`) |
+| `runners/registry.ts` | `createRunnerRegistry` |
+| `workspace/lane-manager.ts` | `LaneManager`, `RepoRef`, `MergeAttempt` |
+| `workspace/setup.ts` | `runWorkspaceSetup` |
+| `engine/state.ts` | `NODE_TRANSITIONS`, `canTransition`, `assertTransition`, `RUN_TRANSITIONS` |
+| `engine/activation.ts` | `ActivationTracker`, `ActivationDelta`, `LoopIteration` |
+| `engine/scheduler.ts` | `Scheduler`, `SchedulerItem` |
+| `engine/recovery.ts` | `markInterrupted(store, scope: InterruptScope, now?)`, `InterruptScope {repoPath, runIds?}`, `INTERRUPTED_RUN_ERROR`, `INTERRUPTED_NODE_ERROR` |
+| `config/instance-lock.ts` | `InstanceLock {acquire(paths, repoPath), release}`: one live server per repository (`<PG_HOME>/locks/<hash>.pid`) |
+| `engine/engine.ts` | `Engine`, `EngineDeps`, `EngineError` |
+| `notify/notifier.ts` | `Notifier`, `detectNotifyPlatform`, `sendDesktopNotification` |
+| `commands/discover.ts` | `listSlashCommands` |
+| `app/context.ts` | `AppContext`, `createAppContext` (composition root) |
+| `http/auth.ts` | `tokenAuth`, `localhostOnly`, `isAuthorized` |
+| `http/app.ts` | `createHttpApp` |
+| `http/routes/{graphs,runs,node-runs,misc,hooks}.ts` | `register*Routes(app, ctx)` |
+| `http/static.ts` | `registerStatic` |
+| `ws/hub.ts` | `WsHub {attach, close}` |
+| `cli/args.ts` | `parseCliArgs`, `CliOptions`, `USAGE` |
+| `cli/prereqs.ts` | `checkPrereqs` (git, `claudeBin`, `ghBin`, curl `--version`) |
+| `cli/server.ts` | `startServer` → `RunningServer {ctx, url, port, token, close}` |
+| `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it) |
 
-✅ = implemented in the foundation (do not rewrite; extend if needed).
 
 ## 5. Event bus (`events/bus.ts`)
 
@@ -213,13 +219,28 @@ Before `pr` and `merge` nodes the engine checkpoints dirty lanes (§18 Q1; merge
 **Usage**: Claude runners put `output.usage` (partial output allowed while running). The engine emits
 `run:update` whenever a node run's output changes so `RunSummary.usage` (sum) stays live.
 
-**Recovery** (§8.6): `recover()` calls `markInterrupted(store)` and `lanes.prune()`. Interrupted runs are
+**Instances**: `~/.promptgraph/state.db` is shared by every promptgraph process. Each server only touches
+runs of its own repository: `requireRun`/`requireNodeRun` answer `not_found` for other repositories' runs,
+`/api/pending` and `listRunsByStatus`/`listNodeRunsByStatus` take `{repoPath}`, and `startServer` holds an
+`InstanceLock` (a second server for the same repository is refused) and binds its port before `recover()`.
+
+**Recovery** (§8.6): `recover()` calls `markInterrupted(store, {repoPath})` and `lanes.prune()`. Interrupted runs are
 `paused` with no in-memory state; the first retry/skip on such a run rebuilds it with
 `ActivationTracker.restore` from the stored node runs and re-enqueues `pending` nodes whose inputs are resolved. Retrying an interrupted
-Claude node resumes its session (`--resume <sessionId>` + `INTERRUPTED_MESSAGE`).
+Claude node resumes its session (`--resume <sessionId>` + `INTERRUPTED_MESSAGE`); when the interrupted attempt's
+turn had already ended (it has output text and the transcript ends with an assistant text line), the session is
+resumed without a message, the previous output stands and the completion policy runs as after a Stop. A retry
+copies `hold` from an interrupted attempt. Skipping an interrupted merge node resets its lane's half-done merge
+(`resetInterruptedMerge`); the commit runner refuses a lane that is mid-merge.
 
 **Shutdown** (SIGINT, §4.5): `controls.cancel()` on every live execution concurrently (Claude: `/exit`, ≤3s,
-kill), overall ≤5s, then `ptys.killAll()`; node runs → `interrupted`, runs → `paused`.
+kill), overall ≤5s, then `ptys.killAll()`; node runs → `interrupted`, runs → `paused`, only for this engine's
+live runs (`markInterrupted(store, {repoPath, runIds})`). A `cancelled` RunnerResult may carry `output` (Claude
+usage so far), which is kept on the interrupted node run.
+
+**Short ids**: `startRun` picks a `shortId` that no run of the repository and no `refs/heads/<prefix>/<shortId>/`
+branch uses (`LaneManager.shortIdHasBranches`); `createLane` deletes a leftover branch only when its tip is an
+ancestor of the new base, and fails otherwise (kept work is never deleted).
 
 Helper modules: `ActivationTracker` (pure, §8.1), `Scheduler` (FIFO, `maxParallelClaude` for prompt/command,
 uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `state.ts` transition table
@@ -382,8 +403,18 @@ running it may `ctx.update({status: "running" | "idle" | "waiting_input" | "wait
 - Ending (success/done/fail/cancel) → `"/exit\r"` only when Claude sits at its input prompt (a Stop and no
   activity/input/dialog since); otherwise SIGTERM directly, since Enter in a permission or trust dialog
   accepts its default "Yes". Then wait 3s, kill. PTY exit before success (and not cancelled) → failed.
-- `reopen()` (M2): `claude --resume <sessionId>` in a new PTY `reopen-<id>` (not part of the run); while it is
-  live the same ptyId is returned. `closeReopened(ptyId)` (DELETE `/api/ptys/:ptyId`) SIGTERMs it.
+- `reopen()` (async): `claude --resume <sessionId>` in a new PTY `reopen-<id>` (not part of the run), pre-trusting
+  the worktree when `autoTrustWorktrees`; while it is live the same ptyId is returned. When the worktree is gone it
+  runs in the main checkout with permission mode `default` and returns a `notice` (`ReopenResponse.notice`).
+  `closeReopened(ptyId)` (DELETE `/api/ptys/:ptyId`) SIGTERMs it. `Engine.reopenSession` refuses (`invalid_state`)
+  while a run-owned execution uses the session (`isSessionActive`); an execution that resumes a session ends a
+  live reopened PTY on it first.
+- Hook payloads are untrusted: a `session_id` that is not a UUID is ignored (session ids go into argv after
+  `--resume`; `buildClaudeArgs` rejects ids starting with `-`), and a `transcript_path` is used only when it is an
+  absolute `.jsonl` path under `~/.claude/projects` or `$CLAUDE_CONFIG_DIR/projects` (transcripts above 256 MB are
+  not read). On a Stop that carries `last_assistant_message`, usage is read once the turn is in the transcript
+  (`waitForTurnWritten`). No SessionStart within 45 s of the spawn → `waiting_input` (kind `other`): hooks are not
+  reaching the server.
 
 **ShellRunner**: `sh -c <run>` in a PTY (id = nodeRun.id); output `{exitCode, stdoutTail, timedOut?}`.
 
@@ -409,7 +440,8 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   (node fails) instead of overwriting.
 - `PtyManager`: spawning an id that is still live throws; `get()` also returns exited handles; exit `code` is null
   when killed by a signal. Reopen PTYs log to `ptyLogPath(paths, run.id, "reopen-<id>")` — the composition root's
-  `resolveLogPath` must map those after a restart.
+  `resolvePtyLogPath` must map those after a restart. PtyManager keeps the last 64 exited handles in memory;
+  older ones are forgotten (attach() reads their log). Logs are written 0600, `~/.promptgraph` is 0700.
 - Commit messages are generated from `ctx.laneOutputs`: every ancestor back to (excluding) the previous
   commit node that ran in this iteration, walking through merge nodes into all their inputs (merge nodes left
   out), canvas order (§6.1).
@@ -587,7 +619,11 @@ PTYs only; else `pty:error`). Most recent attach/resize drives PTY size.
   `forbidden_content_type`), forcing a CORS preflight for cross-origin pages.
 - `/hooks/<nodeRunId>/*` also accepts `hookToken(token, nodeRunId)` (`hooks/hook-token.ts`, HMAC); that token is
   refused everywhere else. It is the only credential Claude PTYs receive.
-- Cookie name is `TOKEN_COOKIE` (`pg_token`). `isAuthorized` also accepts `Authorization: Bearer`.
+- Cookie name is `TOKEN_COOKIE` (`pg_token`); its value is `sessionCookieValue(token)` (HMAC, `hooks/hook-token.ts`),
+  never the token: cookies are sent to every server on 127.0.0.1, and the cookie value is no Bearer credential and
+  cannot derive hook tokens. `isAuthorized` also accepts `Authorization: Bearer <token>` and `?t=<token>`.
+- The web client treats a 401 (REST, or a WS connect that fails while `/api/repo` answers 401) as fatal: it stops
+  reconnecting and the header says the server was restarted and its new URL must be opened.
 - `AppContext.env` (new): the server's base env (commands discovery, `PG_WEB_DIST`). `resolvePtyLogPath(store,
   paths, ptyId)` in `app/context.ts` maps node PTYs, `setup-`/`shell-<nodeRunId>` and (by scanning run dirs)
   `reopen-*` PTYs to their logs after a restart.
@@ -628,8 +664,9 @@ components/approval/             approval dialog: message, diff2html diff, prede
 components/settings/             app settings (notifications toggle) + graph settings form
 ```
 
-The UI is English. Only `errors` disable Run; `warnings` are shown but non-blocking. The store files currently
-hold only state interfaces; builders add the zustand stores there.
+The UI is English. Only `errors` disable Run; `warnings` are shown but non-blocking. The `store/` files are
+zustand stores (app, editor, run, ui) plus `app-actions.ts` (REST/WS side effects). Node names come from
+`nodeDisplayLabel(node)` (shared: label, else id) everywhere.
 
 **Implementation notes (web, minimal extensions):**
 - Stores extend the contract interfaces: `EditorStore extends EditorState` adds `phase`, `graphId` (also set when

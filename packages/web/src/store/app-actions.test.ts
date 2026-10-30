@@ -26,7 +26,7 @@ describe("app actions: live updates", () => {
     handleServerMessage({ type: "node:update", nodeRun: paused });
     const ui = useUiStore.getState();
     expect(ui.terminalTabs).toEqual(["shell-nm"]);
-    expect(ui.tabMeta["shell-nm"]).toEqual({ title: "Join (merge shell)", nodeRunId: "nm" });
+    expect(ui.tabMeta["shell-nm"]).toEqual({ title: "Join (merge shell) · #ab12", nodeRunId: "nm" });
     expect(useRunStore.getState().currentByNode.m!.status).toBe("waiting_input");
 
     // Later updates of the same pause do not reopen a tab the user closed.

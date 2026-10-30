@@ -5,6 +5,7 @@ import {
   resolveBranchPrefix,
   type DiffFile,
   type DiffResponse,
+  type Graph,
   type KeepWorktrees,
   type Lane,
   type MergeConfig,
@@ -13,7 +14,7 @@ import {
 } from "@promptgraph/shared";
 import type { EventBus } from "../events/bus.js";
 import { worktreePath, type PgPaths } from "../config/paths.js";
-import { git, gitOk } from "../git/exec.js";
+import { git, GitError, gitOk } from "../git/exec.js";
 import { gitPath, mergeInProgress, unmergedFiles } from "../git/merge-state.js";
 import { revParse } from "../git/repo.js";
 import { checkpointIfDirty, squashMergeMessage } from "../runners/git/checkpoint.js";
@@ -62,6 +63,12 @@ export class LaneManager {
     return `${resolveBranchPrefix(run.graphSnapshot)}/${run.shortId}/${laneId}`;
   }
 
+  /** Whether any branch `<prefix>/<shortId>/…` exists (kept branches of earlier runs carry work). */
+  async shortIdHasBranches(graph: Graph, shortId: string): Promise<boolean> {
+    const res = await git(this.deps.repo.path, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/heads/${resolveBranchPrefix(graph)}/${shortId}/`]);
+    return res.code !== 0 || res.stdout.trim() !== "";
+  }
+
   /**
    * `git worktree add -b <branch> <path> <fromRef>`; persists the lane (status active) with
    * baseRef = resolved sha of fromRef. fromRef: baseBranch for roots, parent lane head (after
@@ -75,7 +82,7 @@ export class LaneManager {
     const dir = worktreePath(paths, repo.name, run.id, planned.id);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     await this.withLaneLock(REPO_LOCK, async () => {
-      await removeLeftovers(repo.path, branch, dir);
+      await removeLeftovers(repo.path, branch, dir, baseRef);
       await gitOk(repo.path, ["worktree", "add", "-q", "-b", branch, dir, baseRef]);
     });
     const lane = store.insertLane({ id: planned.id, runId: run.id, index: planned.index, branch, worktreePath: dir, baseRef });
@@ -115,13 +122,7 @@ export class LaneManager {
     const mergeBase = await git(cwd, ["merge-base", baseBranch, "HEAD"]);
     const base = mergeBase.code === 0 ? mergeBase.stdout.trim() : lane.baseRef;
     if (opts.committedOnly) {
-      const common = ["diff", "-M", "--no-color", "--no-ext-diff", base, head];
-      const [patch, numstat, nameStatus] = await Promise.all([
-        gitOk(cwd, common),
-        gitOk(cwd, [...common, "--numstat", "-z"]),
-        gitOk(cwd, [...common, "--name-status", "-z"]),
-      ]);
-      return diffResponse(base, head, numstat, nameStatus, patch, maxBytes);
+      return lanePatch(cwd, ["diff", ...DIFF_FLAGS, base, head], {}, base, head, maxBytes);
     }
     // A throwaway index (HEAD + every worktree change) lets `diff --cached` show untracked files
     // without touching the lane's real index.
@@ -130,13 +131,7 @@ export class LaneManager {
       const env = { GIT_INDEX_FILE: path.join(tmp, "index") };
       await gitOk(cwd, ["read-tree", "HEAD"], { env });
       await gitOk(cwd, ["add", "-A"], { env });
-      const common = ["diff", "--cached", "-M", "--no-color", "--no-ext-diff", base];
-      const [patch, numstat, nameStatus] = await Promise.all([
-        gitOk(cwd, common, { env }),
-        gitOk(cwd, [...common, "--numstat", "-z"], { env }),
-        gitOk(cwd, [...common, "--name-status", "-z"], { env }),
-      ]);
-      return diffResponse(base, head, numstat, nameStatus, patch, maxBytes);
+      return await lanePatch(cwd, ["diff", "--cached", ...DIFF_FLAGS, base], env, base, head, maxBytes);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -241,15 +236,24 @@ export class LaneManager {
 }
 
 /** Removes the worktree `dir` and `branch` of a lane that was never persisted (see createLane). */
-async function removeLeftovers(repoPath: string, branch: string, dir: string): Promise<void> {
+/**
+ * Leftovers of an earlier attempt to create this lane: its worktree dir, and its branch only when the
+ * branch has no commits of its own (its tip is an ancestor of `baseRef`). A branch with other commits is
+ * never deleted (it may be the kept work of another run): the lane creation fails instead.
+ */
+async function removeLeftovers(repoPath: string, branch: string, dir: string, baseRef: string): Promise<void> {
   if (fs.existsSync(dir)) {
     await git(repoPath, ["worktree", "remove", "--force", dir]);
     fs.rmSync(dir, { recursive: true, force: true });
   }
   await gitOk(repoPath, ["worktree", "prune"]);
-  if ((await git(repoPath, ["rev-parse", "-q", "--verify", `refs/heads/${branch}`])).code === 0) {
-    await gitOk(repoPath, ["branch", "-D", branch]);
+  const tip = await git(repoPath, ["rev-parse", "-q", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (tip.code !== 0) return;
+  // Safe to delete only when every commit of the branch is also reachable from the new base.
+  if ((await git(repoPath, ["merge-base", "--is-ancestor", tip.stdout.trim(), baseRef])).code !== 0) {
+    throw new Error(`Branch ${branch} already exists with other commits; promptgraph will not delete it. Rename or delete it, then retry`);
   }
+  await gitOk(repoPath, ["branch", "-D", branch]);
 }
 
 async function hasOwnCommits(repoPath: string, lane: Lane): Promise<boolean> {
@@ -265,12 +269,28 @@ const STATUS_BY_LETTER: Record<string, DiffFile["status"]> = {
   C: "copied",
 };
 
-function diffResponse(base: string, head: string, numstat: string, nameStatus: string, patch: string, maxBytes: number): DiffResponse {
-  const truncated = Buffer.byteLength(patch) > maxBytes;
+const DIFF_FLAGS = ["-M", "--no-color", "--no-ext-diff"];
+/** Files above this size are diffed as binary (no line counts, no textual patch): keeps huge generated files cheap. */
+const BIG_FILE_THRESHOLD = "-c core.bigFileThreshold=8m".split(" ");
+
+/**
+ * Patch (read until maxBytes, then git is stopped), file list and line counts. base/head are known
+ * already, so a failed or truncated patch still yields them (a pr gate needs head to be approved).
+ */
+async function lanePatch(cwd: string, diffArgs: string[], env: Record<string, string>, base: string, head: string, maxBytes: number): Promise<DiffResponse> {
+  const args = [...BIG_FILE_THRESHOLD, ...diffArgs];
+  const [patchRes, numstat, nameStatus] = await Promise.all([
+    git(cwd, args, { env, maxStdoutBytes: maxBytes }),
+    git(cwd, [...args, "--numstat", "-z"], { env }),
+    git(cwd, [...args, "--name-status", "-z"], { env }),
+  ]);
+  if (nameStatus.code !== 0) throw new GitError([...args, "--name-status"], nameStatus.code, nameStatus.stderr);
+  const patch = patchRes.code === 0 ? patchRes.stdout.trimEnd() : `(patch unavailable: ${patchRes.stderr.trim()})`;
+  const truncated = patchRes.truncated === true || Buffer.byteLength(patch) > maxBytes;
   return {
     base,
     head,
-    files: parseDiffFiles(numstat, nameStatus),
+    files: parseDiffFiles(numstat.code === 0 ? numstat.stdout.trim() : "", nameStatus.stdout.trim()),
     patch: truncated ? Buffer.from(patch).subarray(0, maxBytes).toString("utf8") : patch,
     truncated,
   };

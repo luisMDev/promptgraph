@@ -8,6 +8,7 @@ import {
   type LoopSpec,
   type OnError,
   type SourcePort,
+  nodeDisplayLabel,
 } from "@promptgraph/shared";
 import { useEffect, useState } from "react";
 import { formatDuration } from "../../lib/format";
@@ -170,7 +171,7 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
   const phase = useEditorStore((s) => s.phase);
   const validation = useEditorStore((s) => s.validation);
   const edgeIssues = { errors: validation.errors.filter((i) => i.edgeId === edge.id), warnings: validation.warnings.filter((i) => i.edgeId === edge.id) };
-  const label = (id: string) => graph.nodes.find((n) => n.id === id)?.label || id;
+  const label = (id: string) => nodeDisplayLabel(graph.nodes.find((n) => n.id === id) ?? { id });
   const update = (fn: (e: GraphEdge) => GraphEdge) => useEditorStore.getState().updateEdge(edge.id, fn);
   const errorPort = edge.sourcePort === "error";
   return (
@@ -292,7 +293,7 @@ function RunOverview() {
         </div>
         {run.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-200">{run.error}</pre>}
         {run.status === "paused" && (
-          <p className="text-xs text-amber-200/90">The run is paused: select a failed node to retry or skip it, or cancel the run.</p>
+          <p className="text-xs text-amber-200/90">The run is paused: select a failed or interrupted node to retry or skip it, or cancel the run.</p>
         )}
         <p className="text-xs text-zinc-500">Click a node to see its details and open its terminal.</p>
       </Section>

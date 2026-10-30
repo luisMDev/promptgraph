@@ -47,7 +47,7 @@ async function setup() {
 describe.runIf(process.env.PG_REAL_CLAUDE === "1")("ClaudeRunner (real claude)", () => {
   it("runs a tiny prompt to success via hooks and /exit", { timeout: 180_000 }, async () => {
     const { runner, repo } = await setup();
-    const run = makeRun({ nodes: [{ id: "n", type: "prompt", label: "Ping", config: { prompt: "Reply with exactly PONG", completion: { mode: "auto", graceSec: 0 } } } as never] });
+    const run = makeRun({ nodes: [{ id: "n", type: "prompt", label: "Ping", config: { prompt: "Reply with exactly PONG", model: "haiku", completion: { mode: "auto", graceSec: 0 } } } as never] });
     const ctx = makeCtx({ run, node: run.graphSnapshot.nodes[0]!, lane: makeLane(repo) });
     const result = await runner.start(ctx).result;
     expect(result).toMatchObject({ status: "succeeded", output: { text: expect.stringContaining("PONG") } });

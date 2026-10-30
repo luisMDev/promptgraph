@@ -1,6 +1,9 @@
 import type { GraphNodeOf, NodeRunOutput } from "@promptgraph/shared";
 import { git, gitOk } from "../../git/exec.js";
+import { mergeInProgress } from "../../git/merge-state.js";
+import { errorMessage } from "../../util/text.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
+import { Interruption } from "../interruption.js";
 import type { NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
 import { squashTarget } from "./checkpoint.js";
 import { generateMessage } from "./messages.js";
@@ -22,35 +25,21 @@ export class CommitRunner implements Runner {
   constructor(private readonly deps: CommitRunnerDeps) {}
 
   start(ctx: RunnerContext): NodeExecution {
-    const abort = new AbortController();
-    const onAbort = () => abort.abort();
-    if (ctx.signal.aborted) abort.abort();
-    else ctx.signal.addEventListener("abort", onAbort, { once: true });
-    let failReason: string | null = null;
-
+    const stop = new Interruption(ctx.signal);
     const result = this.deps.lanes
-      .withLaneLock(ctx.lane, () => this.commit(ctx, abort.signal))
+      .withLaneLock(ctx.lane, () => this.commit(ctx, stop.signal))
       .then(
-        (output): RunnerResult => (failReason ? { status: "failed", error: failReason, output } : { status: "succeeded", output }),
-        (err: unknown): RunnerResult => {
-          if (failReason) return { status: "failed", error: failReason };
-          if (abort.signal.aborted) return { status: "cancelled" };
-          return { status: "failed", error: err instanceof Error ? err.message : String(err) };
-        },
-      )
-      .finally(() => ctx.signal.removeEventListener("abort", onAbort));
-
+        (output): RunnerResult => stop.outcome(output) ?? { status: "succeeded", output },
+        (err: unknown): RunnerResult => stop.outcome() ?? { status: "failed", error: errorMessage(err) },
+      );
     return {
       result,
       controls: {
         done: () => undefined,
         setHold: () => undefined,
-        fail: (reason) => {
-          failReason ??= reason || "Marked as failed by the user";
-          abort.abort();
-        },
+        fail: (reason) => stop.fail(reason),
         cancel: async () => {
-          abort.abort();
+          stop.controller.abort();
           await result;
         },
       },
@@ -63,6 +52,11 @@ export class CommitRunner implements Runner {
     const checkAborted = () => {
       if (signal.aborted) throw new Error("aborted");
     };
+    // `git commit` would conclude a half-done merge (crash while a merge node waited on conflicts, then
+    // skipped), conflict markers included.
+    if (await mergeInProgress(cwd)) {
+      throw new Error("The lane is in the middle of a merge (conflict markers may be present): retry the merge node, or abort the merge first");
+    }
 
     if (node.config.squashCheckpoints) {
       const target = await squashTarget(cwd, ctx.lane.baseRef, ctx.forkPoints);

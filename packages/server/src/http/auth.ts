@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { TOKEN_COOKIE, type ApiError } from "@promptgraph/shared";
 import type { MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import { hookToken } from "../hooks/hook-token.js";
+import { hookToken, sessionCookieValue } from "../hooks/hook-token.js";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 /** Paths that never get the `?t=` cookie flow (API clients send the Bearer header). */
@@ -42,12 +42,6 @@ function parseHost(host: string): URL | null {
   }
 }
 
-/** Host header (or Origin URL) whose hostname is a loopback name. */
-export function isLoopbackHost(host: string | null | undefined): boolean {
-  const url = host ? parseHost(host) : null;
-  return !!url && LOOPBACK_HOSTS.has(url.hostname);
-}
-
 /** Loopback host on exactly `port` (0 = not listening yet: any port). */
 function isOwnHost(host: string | null | undefined, port: number): boolean {
   const url = host ? parseHost(host) : null;
@@ -74,11 +68,13 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
  * Requires `Authorization: Bearer <token>` or the `pg_token` cookie. A request to `/` (or any non-API
  * page) with `?t=<token>` sets the cookie (HttpOnly, SameSite=Strict, Path=/) and redirects to drop `t`.
+ * The cookie holds sessionCookieValue(token), never the token: other local servers receive it too.
  * `/hooks/<nodeRunId>/*` also accepts that node run's hookToken (the only credential Claude PTYs get).
  * Cookie-authenticated API writes must be `application/json` so a cross-origin form/`text/plain` POST
  * cannot pass without a CORS preflight. 401/403 ApiError otherwise. Constant-time comparison.
  */
 export function tokenAuth(token: string): MiddlewareHandler {
+  const cookieSecret = sessionCookieValue(token);
   return async (c, next) => {
     const url = new URL(c.req.url);
     const hook = HOOK_PATH.exec(url.pathname);
@@ -96,19 +92,19 @@ export function tokenAuth(token: string): MiddlewareHandler {
     const t = url.searchParams.get("t");
     const isPage = c.req.method === "GET" && !NON_PAGE_PREFIXES.some((p) => url.pathname.startsWith(p));
     if (isPage && t !== null && tokenMatches(token, t)) {
-      setCookie(c, TOKEN_COOKIE, token, { httpOnly: true, sameSite: "Strict", path: "/" });
+      setCookie(c, TOKEN_COOKIE, cookieSecret, { httpOnly: true, sameSite: "Strict", path: "/" });
       url.searchParams.delete("t");
       return c.redirect(`${url.pathname}${url.search}`, 302);
     }
     if (tokenMatches(token, bearer(c.req.header("authorization")))) return next();
-    if (tokenMatches(token, getCookie(c, TOKEN_COOKIE))) {
+    if (tokenMatches(cookieSecret, getCookie(c, TOKEN_COOKIE))) {
       const contentType = c.req.header("content-type") ?? "";
       if (url.pathname.startsWith("/api/") && !SAFE_METHODS.has(c.req.method) && !/^application\/json\b/i.test(contentType)) {
         return c.json(deny("Forbidden: API writes must send Content-Type: application/json", "forbidden_content_type"), 403);
       }
       return next();
     }
-    if (isPage) return c.text("promptgraph: unauthorized. Open the URL printed by the promptgraph command.", 401);
+    if (isPage) return c.text("promptgraph: unauthorized. Each start of promptgraph prints a new URL (the old one stops working when the server restarts): open the URL printed by the promptgraph command.", 401);
     return c.json(deny("Unauthorized: missing or invalid session token", "unauthorized"), 401);
   };
 }
@@ -131,7 +127,7 @@ export function isAuthorized(token: string, req: { headers: Record<string, strin
     return Array.isArray(v) ? v[0] : v;
   };
   if (tokenMatches(token, bearer(header("authorization")))) return true;
-  if (tokenMatches(token, cookieValue(header("cookie"), TOKEN_COOKIE))) return true;
+  if (tokenMatches(sessionCookieValue(token), cookieValue(header("cookie"), TOKEN_COOKIE))) return true;
   const t = req.url ? new URL(req.url, "http://localhost").searchParams.get("t") : null;
   return tokenMatches(token, t);
 }

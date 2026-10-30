@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "linear",
+  "name": "Plan, implement, test, commit",
+  "settings": {
+    "baseBranch": "main",
+    "maxParallelClaude": 1,
+    "defaults": { "model": "sonnet", "permissionMode": "acceptEdits", "completion": { "mode": "auto", "graceSec": 5 } }
+  },
+  "nodes": [
+    {
+      "id": "plan",
+      "type": "prompt",
+      "label": "Plan",
+      "position": { "x": 0, "y": 0 },
+      "config": { "prompt": "Read the codebase and write a short implementation plan for: add a --verbose flag to the CLI. Do not edit files yet.", "permissionMode": "plan" }
+    },
+    {
+      "id": "implement",
+      "type": "prompt",
+      "label": "Implement",
+      "position": { "x": 300, "y": 0 },
+      "config": { "prompt": "Implement the plan above. Keep the change small and add tests.", "context": "resume" }
+    },
+    {
+      "id": "test",
+      "type": "shell",
+      "label": "Run tests",
+      "position": { "x": 600, "y": 0 },
+      "config": { "run": "npm test", "timeoutSec": 600 }
+    },
+    {
+      "id": "commit",
+      "type": "commit",
+      "label": "Commit",
+      "position": { "x": 900, "y": 0 },
+      "config": { "generateMessage": true, "squashCheckpoints": true }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "plan", "target": "implement" },
+    { "id": "e2", "source": "implement", "target": "test" },
+    { "id": "e3", "source": "test", "target": "commit" }
+  ]
+}
