@@ -89,16 +89,22 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
     for (const i of input.validation.warnings) if (i.edgeId) warnEdges.set(i.edgeId, [...(warnEdges.get(i.edgeId) ?? []), i.message]);
   }
   const selected = new Set(input.selectedEdgeIds);
+  // Inline strokes override React Flow's selected colour: selection gets a wider stroke and a blue halo.
+  const halo = "drop-shadow(0 0 3px rgb(96 165 250))";
   return input.graph.edges.map((edge) => {
     const failure = edgeWhen(edge) === "failure";
     let stroke = failure ? "#ef4444" : edge.loop ? "#a78bfa" : "#71717a";
     let animated = false;
     let opacity: number | undefined;
     let state: EdgeRunState | undefined;
+    let looped = false;
     const loop = input.run?.loops?.[edge.id];
     if (input.run) {
       state = edgeRunState(edge, input.run.currentByNode[edge.source], loop);
       ({ stroke, animated, opacity } = RUN_EDGE_STYLE[state]);
+      // A loop that did loop back stays violet even when its source was skipped in the last pass.
+      looped = !!edge.loop && state === "dead" && (loop?.iteration ?? 0) > 0 && !loop?.exhausted;
+      if (looped) ({ stroke, opacity } = { stroke: "#a78bfa", opacity: 0.7 });
     } else if (errorEdges.has(edge.id)) {
       stroke = "#ef4444";
     } else if (warnEdges.has(edge.id)) {
@@ -119,7 +125,8 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
       style: {
         stroke,
-        strokeWidth: errorEdges.has(edge.id) ? 2.5 : 2,
+        strokeWidth: selected.has(edge.id) ? 3.5 : errorEdges.has(edge.id) ? 2.5 : 2,
+        ...(selected.has(edge.id) ? { filter: halo } : {}),
         ...(dash ? { strokeDasharray: dash } : {}),
         ...(opacity !== undefined ? { opacity } : {}),
       },
@@ -129,6 +136,7 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
         loop: !!edge.loop,
         badge: input.run && edge.loop ? loopBadge(loop ?? { iteration: 0, maxIterations: edge.loop.maxIterations, exhausted: false }) : undefined,
         ...(state ? { runState: state } : {}),
+        ...(looped ? { looped } : {}),
       },
     };
   });

@@ -62,8 +62,8 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
 
       {node.type === "condition" ? (
         <>
-          <PortHandle id="true" top="35%" color="!bg-green-500" label="true" labelColor="text-green-400" runMode={runMode} taken={nodeRun?.output?.port === "true"} />
-          <PortHandle id="false" top="65%" color="!bg-zinc-400" label="false" labelColor="text-zinc-400" runMode={runMode} taken={nodeRun?.output?.port === "false"} />
+          <PortHandle id="true" top="28px" color="!bg-green-500" label="true" labelColor="text-green-400" runMode={runMode} taken={nodeRun?.output?.port === "true"} />
+          <PortHandle id="false" top="52px" color="!bg-zinc-400" label="false" labelColor="text-zinc-400" runMode={runMode} taken={nodeRun?.output?.port === "false"} />
         </>
       ) : (
         <Handle type="source" position={Position.Right} id="out" className={`${handleBase} !bg-zinc-300`} isConnectable={!runMode} />
@@ -82,7 +82,10 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
   );
 });
 
-/** Condition output port with its label inside the card edge; in run mode the taken branch is highlighted. */
+/**
+ * Condition output port with its label inside the card edge (fixed offsets beside the header, so the run
+ * footer below never runs under the labels); in run mode the taken branch is highlighted.
+ */
 function PortHandle({ id, top, color, label, labelColor, runMode, taken }: { id: string; top: string; color: string; label: string; labelColor: string; runMode: boolean; taken: boolean }) {
   return (
     <>

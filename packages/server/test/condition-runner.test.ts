@@ -8,6 +8,7 @@ import {
   ConditionRunner,
   buildJudgePrompt,
   evaluatedPredecessor,
+  execRegex,
   laneDiffStat,
   parseJudgeVerdict,
 } from "../src/runners/condition-runner.js";
@@ -118,6 +119,28 @@ describe("ConditionRunner regex", () => {
     expect(await start(ev, [pred({ text: "a" })]).exec.result).toMatchObject({ output: { port: "true" } });
     const bad = await start({ kind: "regex", pattern: "(", flags: "" }, [pred({ text: "a" })]).exec.result;
     expect(bad).toMatchObject({ status: "failed", error: expect.stringMatching(/^Invalid regex: /) });
+  });
+
+  it("a catastrophically backtracking pattern fails the node after the timeout instead of blocking", async () => {
+    const t0 = Date.now();
+    const r = await start({ kind: "regex", pattern: "^(a+)+$", flags: "" }, [pred({ text: `${"a".repeat(40)}!` })]).exec.result;
+    expect(r).toMatchObject({ status: "failed", error: expect.stringContaining("timed out") });
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(execRegex("b+", "", "abbbc")).toBe("bbb");
+    expect(execRegex("x", "", "abc")).toBeNull();
+  });
+});
+
+describe("ConditionRunner with a predecessor skipped by the user", () => {
+  it("exitCode and regex treat it as success (true port)", async () => {
+    const skipped = pred({ skippedByUser: true }, { status: "skipped" });
+    expect(await start({ kind: "exitCode", equals: 0 }, [skipped]).exec.result).toMatchObject({
+      status: "succeeded",
+      output: { port: "true", text: '"Tests" was skipped by you; treated as success.' },
+    });
+    expect(await start({ kind: "regex", pattern: "x", flags: "" }, [skipped]).exec.result).toMatchObject({ output: { port: "true" } });
+    // A dead-path skip is still not evaluable.
+    expect(await start({ kind: "exitCode", equals: 0 }, [pred(null, { status: "skipped" })]).exec.result).toMatchObject({ status: "failed" });
   });
 });
 

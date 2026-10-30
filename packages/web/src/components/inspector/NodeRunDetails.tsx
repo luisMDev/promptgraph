@@ -127,8 +127,12 @@ function Controls({ node, nodeRun, label, runFinal, historical }: { node: GraphN
   // A previous iteration is history: only its terminal log and session can be opened.
   const live = !historical;
   const active = live && isActiveNodeStatus(s);
-  const canRetry = live && !runFinal && (s === "failed" || s === "interrupted" || s === "cancelled");
-  const canSkip = live && !runFinal && (s === "failed" || s === "interrupted" || s === "pending" || s === "ready");
+  // A failure handled downstream (failure/always edge, loop back-edge) already moved the flow on.
+  const handled = s === "failed" && !!nodeRun.output?.failureHandled;
+  // Failed because its loop reached the limit: a retry would fail the same way (skip continues past the loop).
+  const canRetry = live && !runFinal && !handled && !nodeRun.output?.loopExhausted && (s === "failed" || s === "interrupted" || s === "cancelled");
+  // A condition has no single port to "treat as success": retry it, or skip the branch to follow.
+  const canSkip = live && !runFinal && !handled && node.type !== "condition" && (s === "failed" || s === "interrupted" || s === "pending" || s === "ready");
   const canDone = live && (s === "idle" || s === "waiting_input" || (s === "running" && isClaudeNode(node)));
   const canHold = live && isClaudeNode(node) && !runFinal && (active || s === "pending" || s === "ready");
   // Any node with a Claude session: prompt/command nodes, and merges that resolved conflicts with Claude.

@@ -79,7 +79,7 @@ describe("Engine Phase 2: edge conditions (§15.1)", () => {
     expect(statusOf(s, run.id)).toEqual({ build: "failed", deploy: "skipped", fix: "succeeded" });
     const fix = runner.last("fix")!.ctx;
     expect(fix.predecessors).toEqual([
-      expect.objectContaining({ nodeId: "build", status: "failed", error: "Exit code 2", output: { exitCode: 2, stdoutTail: "error TS2304" } }),
+      expect.objectContaining({ nodeId: "build", status: "failed", error: "Exit code 2", output: { exitCode: 2, stdoutTail: "error TS2304", failureHandled: true } }),
     ]);
     // The routed failure cannot be retried (its flow already continued).
     await expect(s.engine.retry(runsOf(s, run.id, "build")[0]!.id)).rejects.toMatchObject({ code: "invalid_state" });
@@ -187,8 +187,9 @@ describe("Engine Phase 2: loops (§15.4)", () => {
     await waitRun(s, run.id, "paused");
     const fixes = runsOf(s, run.id, "fix");
     expect(fixes.map((n) => [n.iteration, n.status])).toEqual([[0, "succeeded"], [1, "failed"]]);
-    expect(fixes[1]!.error).toBe('Loop back to "TEST" reached its limit of 1 iteration');
-    expect(fixes[1]!.output).toEqual({ text: "out:fix" }); // the work is kept
+    expect(fixes[1]!.error).toBe('Loop back to "TEST" exhausted (looped back 1 of 1 time)');
+    expect(fixes[1]!.output).toEqual({ text: "out:fix", loopExhausted: true }); // the work is kept
+    await expect(s.engine.retry(fixes[1]!.id)).rejects.toMatchObject({ code: "invalid_state" });
     expect(s.engine.getRun(run.id).loops).toEqual([{ edgeId: "loop-fix-test", iteration: 1, maxIterations: 1, exhausted: true }]);
     expect(statusOf(s, run.id).commit).toBe("pending");
 
@@ -203,7 +204,7 @@ describe("Engine Phase 2: loops (§15.4)", () => {
     const { run } = await s.engine.startRun("flow");
     await waitRun(s, run.id, "succeeded");
     expect(statusOf(s, run.id)).toEqual({ impl: "succeeded", test: "succeeded", cond: "succeeded", fix: "failed", commit: "skipped", giveup: "succeeded" });
-    expect(runner.last("giveup")!.ctx.predecessors[0]).toMatchObject({ nodeId: "fix", status: "failed", error: expect.stringContaining("limit") });
+    expect(runner.last("giveup")!.ctx.predecessors[0]).toMatchObject({ nodeId: "fix", status: "failed", error: expect.stringContaining("exhausted") });
   });
 
   it('exhausted with "continue": the loop edge delivers a skip and the flow goes on', async () => {
@@ -336,5 +337,142 @@ describe("Engine Phase 2: loops (§15.4)", () => {
     expect(runner.started.map((e) => [e.ctx.node.id, e.ctx.nodeRun.iteration])).toEqual([["test", 1], ["cond", 1], ["commit", 0]]);
     expect(runner.byNode("test")[0]!.ctx.predecessors.at(-1)).toMatchObject({ nodeId: "fix", output: { text: "fixed" } });
     expect(engine.getRun(run.id).loops![0]!.iteration).toBe(1);
+  });
+});
+
+describe("Engine Phase 2: review fixes", () => {
+  const selfLoop = (onExhausted: "fail" | "continue"): EdgeSpec => ({
+    id: "retry",
+    source: "flaky",
+    target: "flaky",
+    sourcePort: "error",
+    loop: { maxIterations: 1, onExhausted },
+  });
+
+  it('an exhausted failure loop with "continue" handles the failure: the flow goes on', async () => {
+    const runner = scripted({ flaky: [failed("flake")] });
+    const s = flow(runner, [{ id: "flaky", type: "shell" }, { id: "next" }], [["flaky", "next"], selfLoop("continue")]);
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "succeeded");
+    expect(runsOf(s, run.id, "flaky").map((n) => [n.status, n.output?.failureHandled])).toEqual([["failed", true], ["failed", true]]);
+    expect(statusOf(s, run.id)).toEqual({ flaky: "failed", next: "skipped" });
+    expect(s.engine.getRun(run.id).loops).toEqual([{ edgeId: "retry", iteration: 1, maxIterations: 1, exhausted: true }]);
+  });
+
+  it('an exhausted failure loop with "fail" is marked exhausted before onError pauses', async () => {
+    const runner = scripted({ flaky: [failed("flake")] });
+    const s = flow(runner, [{ id: "flaky", type: "shell" }, { id: "next" }], [["flaky", "next"], selfLoop("fail")]);
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "paused");
+    expect(s.engine.getRun(run.id).loops).toEqual([{ edgeId: "retry", iteration: 1, maxIterations: 1, exhausted: true }]);
+    expect(s.store.listEvents(run.id).filter((e) => e.type === "loop.exhausted")).toHaveLength(1);
+    expect(s.store.getRun(run.id)!.error).toBe('Node "FLAKY" failed: flake');
+  });
+
+  /** Skipping the pending loop source while the body's first node still runs: its cancel takes `cancelMs`. */
+  async function skipSourceMidIteration(cancelMs: number) {
+    const log: string[] = [];
+    const runner = new FakeRunner((e) => {
+      const id = `${e.ctx.node.id}#${e.ctx.nodeRun.iteration}`;
+      log.push(`start ${id}`);
+      if (id === "test#0") return; // stays running until cancelled
+      queueMicrotask(() => e.finish(e.ctx.node.id === "cond" ? yes : { status: "succeeded", output: { text: id } }));
+    });
+    const start = runner.start.bind(runner);
+    runner.start = (ctx) => {
+      const execution = start(ctx);
+      const cancel = execution.controls.cancel;
+      execution.controls.cancel = async () => {
+        log.push(`cancel-begin ${ctx.node.id}#${ctx.nodeRun.iteration}`);
+        await new Promise((r) => setTimeout(r, cancelMs));
+        await cancel();
+        log.push(`cancel-end ${ctx.node.id}#${ctx.nodeRun.iteration}`);
+      };
+      return execution;
+    };
+    const s = flow(runner, TEST_FIX_NODES, testFixEdges(3));
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => runner.byNode("test").length === 1);
+    await s.engine.skip(runsOf(s, run.id, "fix")[0]!.id);
+    await waitRun(s, run.id, "succeeded");
+    return { s, run, log };
+  }
+
+  it("a new iteration waits for the cancelled execution of the previous one", async () => {
+    const { s, run, log } = await skipSourceMidIteration(100);
+    expect(log.indexOf("cancel-end test#0")).toBeLessThan(log.indexOf("start test#1"));
+    expect(runsOf(s, run.id, "test").map((n) => n.status)).toEqual(["cancelled", "succeeded"]);
+    expect(statusOf(s, run.id)).toMatchObject({ commit: "succeeded" });
+  });
+
+  it("the run still ends when a cancelled execution settles after the next iteration finished", async () => {
+    // Longer than stopTimeoutMs (500): the new iteration starts anyway and finishes first.
+    const { log } = await skipSourceMidIteration(800);
+    await waitFor(() => log.includes("cancel-end test#0"));
+    expect(log.indexOf("start commit#0")).toBeLessThan(log.indexOf("cancel-end test#0"));
+  });
+
+  it("crash before dead-path skips were persisted: the restored run marks them skipped and finishes", async () => {
+    const runner0 = scripted({ cond: [yes] });
+    const s = flow(
+      runner0,
+      [
+        { id: "check", type: "shell", x: 0 },
+        { id: "cond", type: "condition", x: 100 },
+        { id: "ok", x: 200, y: 0 },
+        { id: "ok2", x: 200, y: 100 },
+        { id: "bad", x: 200, y: 200 },
+      ],
+      [["check", "cond"], port("cond", "ok", "true"), { id: "cond-true-ok2", source: "cond", target: "ok2", sourcePort: "true" }, port("cond", "bad", "false")],
+    );
+    s.lanes.gate = { laneIds: ["l2"], until: new Promise(() => {}) };
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => s.lanes.calls.some((c) => c.startsWith("checkpoint:main:COND")));
+    await s.engine.shutdown();
+    expect(statusOf(s, run.id)).toMatchObject({ cond: "succeeded", bad: "pending" });
+
+    s.lanes.gate = null;
+    const runner = scripted({});
+    const engine = s.makeEngine(registry(runner));
+    await engine.recover();
+    await engine.resumeRun(run.id);
+    await waitRun(s, run.id, "succeeded");
+    expect(statusOf(s, run.id)).toEqual({ check: "succeeded", cond: "succeeded", ok: "succeeded", ok2: "succeeded", bad: "skipped" });
+  });
+
+  it("resume context: a dead-path skip in between does not lose the node's session", async () => {
+    // test → c1; c1.false → fix → j; c1.true → j; j.false ⟲ test.
+    const runner = scripted({ c1: [no, yes, no], j: [no, no, yes] }, (e) => e.ctx.update({ sessionId: `sess-${e.ctx.nodeRun.id}` }));
+    const s = flow(
+      runner,
+      [
+        { id: "test", type: "shell", x: 0 },
+        { id: "c1", type: "condition", x: 100 },
+        { id: "fix", x: 200, y: 100, config: { prompt: "fix it", context: "resume" } },
+        { id: "j", type: "condition", x: 300, config: { evaluator: { kind: "regex", pattern: "ok" } } },
+      ],
+      [["test", "c1"], port("c1", "fix", "false"), port("c1", "j", "true"), ["fix", "j"], { ...loop("j", "test", 3), sourcePort: "false" }],
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "succeeded");
+    expect(runsOf(s, run.id, "fix").map((n) => n.status)).toEqual(["succeeded", "skipped", "succeeded"]);
+    const fixes = runner.byNode("fix");
+    expect(fixes[1]!.ctx.previousIteration).toMatchObject({ id: fixes[0]!.ctx.nodeRun.id, iteration: 0 });
+  });
+
+  it("refuses to skip a condition and to retry or skip a failure that was already routed", async () => {
+    const runner = scripted({ build: [failed("Exit code 2")], cond: [failed("Judge returned no verdict")] });
+    const s = flow(
+      runner,
+      [{ id: "build", type: "shell", x: 0 }, { id: "fixb", x: 100, y: 100 }, { id: "cond", type: "condition", x: 200, config: { evaluator: { kind: "regex", pattern: "ok" } } }, { id: "t", x: 300, y: 0 }, { id: "f", x: 300, y: 100 }],
+      [port("build", "fixb", "error"), ["fixb", "cond"], port("cond", "t", "true"), port("cond", "f", "false")],
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "paused");
+    const build = runsOf(s, run.id, "build")[0]!;
+    await expect(s.engine.skip(build.id)).rejects.toMatchObject({ code: "invalid_state" });
+    await expect(s.engine.retry(build.id)).rejects.toMatchObject({ code: "invalid_state" });
+    await expect(s.engine.skip(runsOf(s, run.id, "cond")[0]!.id)).rejects.toMatchObject({ code: "invalid_state", message: expect.stringContaining("condition") });
+    expect(statusOf(s, run.id)).toMatchObject({ build: "failed", cond: "failed", t: "pending", f: "pending" });
   });
 });

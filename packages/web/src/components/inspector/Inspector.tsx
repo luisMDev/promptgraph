@@ -9,6 +9,7 @@ import {
   type OnError,
   type SourcePort,
 } from "@promptgraph/shared";
+import { useEffect, useState } from "react";
 import { formatDuration } from "../../lib/format";
 import { DEFAULT_LOOP, setEdgeLoop, setEdgeWhen } from "../../lib/graph-ops";
 import { NODE_TYPE_META } from "../../lib/node-meta";
@@ -132,6 +133,38 @@ const EXHAUSTED_OPTIONS: readonly { value: LoopSpec["onExhausted"]; label: strin
 
 const PORT_LABEL: Record<SourcePort, string> = { out: "output", true: "true", false: "false", error: "error" };
 
+/** Loop settings of edges whose "Loop back-edge" box was unchecked in this session (restored on recheck). */
+const lastLoopSpec = new Map<string, LoopSpec>();
+
+/**
+ * Integer 1–100 kept as local text while typing (clearing the field does not snap back to 1); valid values
+ * are committed as typed, anything else is reverted on blur.
+ */
+function MaxIterationsInput({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (n: number) => void }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const parse = (t: string): number | null => {
+    const n = Number(t);
+    return t.trim() !== "" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
+  };
+  return (
+    <input
+      type="number"
+      min={1}
+      max={100}
+      className={inputClass}
+      value={text}
+      disabled={disabled}
+      onChange={(ev) => {
+        setText(ev.target.value);
+        const n = parse(ev.target.value);
+        if (n !== null && n !== value) onChange(n);
+      }}
+      onBlur={() => setText(String(value))}
+    />
+  );
+}
+
 function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean }) {
   const graph = useEditorStore((s) => s.graph!);
   const phase = useEditorStore((s) => s.phase);
@@ -171,7 +204,11 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
             checked={!!edge.loop}
             disabled={disabled}
             label="Loop back-edge"
-            onChange={(on) => update((e) => setEdgeLoop(e, on ? { ...DEFAULT_LOOP } : null))}
+            onChange={(on) => {
+              // Unchecking and rechecking restores the settings the user had chosen.
+              if (!on && edge.loop) lastLoopSpec.set(edge.id, edge.loop);
+              update((e) => setEdgeLoop(e, on ? { ...(lastLoopSpec.get(edge.id) ?? DEFAULT_LOOP) } : null));
+            }}
           />
           <p className="text-[11px] leading-snug text-zinc-500">
             A loop edge points back to an earlier node: when it activates, the nodes from its target to its source run again as a new iteration.
@@ -184,17 +221,10 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
           {edge.loop && (
             <div className="grid grid-cols-2 gap-2">
               <Field label="Max iterations">
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  className={inputClass}
+                <MaxIterationsInput
                   value={edge.loop.maxIterations}
                   disabled={disabled}
-                  onChange={(ev) => {
-                    const n = Math.min(100, Math.max(1, Math.round(ev.target.valueAsNumber || 1)));
-                    update((e) => ({ ...e, loop: { ...e.loop!, maxIterations: n } }));
-                  }}
+                  onChange={(n) => update((e) => ({ ...e, loop: { ...e.loop!, maxIterations: n } }))}
                 />
               </Field>
               <Field label="When exhausted">

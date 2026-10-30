@@ -43,6 +43,10 @@ export const NodeRunOutputSchema = z.object({
   result: z.boolean().optional(),
   /** skipped: the user skipped the node (treated as success downstream), not a dead path. */
   skippedByUser: z.boolean().optional(),
+  /** failed (Phase 2): the failure was handled downstream (failure/always edge or loop back-edge); retry/skip do not apply. */
+  failureHandled: z.boolean().optional(),
+  /** failed (Phase 2): the node succeeded but its loop back-edge reached maxIterations (onExhausted "fail"); retry would fail again. */
+  loopExhausted: z.boolean().optional(),
   /** Claude nodes (and headless helpers run on behalf of the node). */
   usage: TokenUsageSchema.optional(),
 });

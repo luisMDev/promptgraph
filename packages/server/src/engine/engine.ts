@@ -12,6 +12,7 @@ import {
   type ApprovalRequest,
   type DiffResponse,
   type Graph,
+  type GraphEdge,
   type GraphNode,
   type GraphNodeOf,
   type Lane,
@@ -323,6 +324,9 @@ export class Engine {
     this.requireCurrent(nr);
     const live = this.ensureLive(run);
     if (live.tracker.isResolved(nr.nodeId)) throw new EngineError("invalid_state", "The failure was already routed downstream");
+    if (nr.output?.loopExhausted) {
+      throw new EngineError("invalid_state", "The node failed because its loop reached its limit: retrying would fail again; skip it to continue");
+    }
 
     const next = store.insertNodeRun({
       id: newId(),
@@ -347,7 +351,12 @@ export class Engine {
     const run = this.requireActiveRun(nr.runId);
     if (!SKIPPABLE.has(nr.status)) throw new EngineError("invalid_state", `Cannot skip a ${nr.status} node`);
     this.requireCurrent(nr);
+    // "Treat as success" has no port to follow: both branches would be dead (§15.2).
+    if (run.graphSnapshot.nodes.find((n) => n.id === nr.nodeId)?.type === "condition") {
+      throw new EngineError("invalid_state", "A condition cannot be skipped: retry it, or skip the nodes of the branch to follow");
+    }
     const live = this.ensureLive(run);
+    if (live.tracker.isResolved(nr.nodeId)) throw new EngineError("invalid_state", "The failure was already routed downstream");
     if (nr.status === "ready") live.scheduler.remove(nr.id);
     this.deps.store.appendEvent(nr.runId, nr.id, USER_SKIP_EVENT, null);
     this.patchNodeRun(nr.id, { status: "skipped", output: { ...nr.output, skippedByUser: true }, finishedAt: this.now() });
@@ -526,14 +535,20 @@ export class Engine {
     for (const nr of currentByNode(store.listNodeRuns(run.id)).values()) {
       if (nr.status === "succeeded") finished.push({ nodeId: nr.nodeId, outcome: { kind: "success", port: nr.output?.port } });
       else if (nr.status === "skipped") finished.push({ nodeId: nr.nodeId, outcome: userSkipped.has(nr.id) ? { kind: "success" } : "skipped" });
-      else if (nr.status === "failed" && (this.hasFailureRoute(topo, nr.nodeId) || probe.loopsBack(nr.nodeId, { kind: "failure" }))) {
+      else if (nr.status === "failed" && (this.hasFailureRoute(topo, nr.nodeId) || probe.loopHandlesFailure(nr.nodeId))) {
         finished.push({ nodeId: nr.nodeId, outcome: { kind: "failure" } });
       }
     }
     const tracker = ActivationTracker.restore(graph, finished, loopStates);
     const live = this.createLive(run, computeLanePlan(graph), tracker);
+    // A node finished just before the crash: its dead-path skips were never persisted.
+    const current = this.currentNodeRuns(run.id);
+    for (const id of tracker.takeRestoredSkips()) {
+      const nr = current.get(id);
+      if (nr?.status === "pending") this.patchNodeRun(nr.id, { status: "skipped", finishedAt: this.now() });
+    }
     // A loop source finished just before the crash: its new iteration was never persisted.
-    for (const it of tracker.takeRestoredLoops()) this.startIteration(live, it);
+    for (const it of tracker.takeRestoredLoops()) void this.startIteration(live, it);
     this.persistLoops(live);
     if (graph.settings.workspaceSetup) {
       // A lane is set up once one of its node runs completed the setup; otherwise the next node retries it.
@@ -624,7 +639,9 @@ export class Engine {
 
     const ownRuns = store.listNodeRuns(live.runId).filter((r) => r.nodeId === nodeRun.nodeId);
     const previousAttempt = ownRuns.filter((r) => r.iteration === nodeRun.iteration && r.attempt < nodeRun.attempt).at(-1) ?? null;
-    const previousIteration = ownRuns.filter((r) => r.iteration < nodeRun.iteration).at(-1) ?? null;
+    // The latest earlier iteration that ran (a dead-path skip in between has no session to continue).
+    const previousIteration =
+      ownRuns.filter((r) => r.iteration < nodeRun.iteration && (r.status === "succeeded" || r.status === "failed" || r.sessionId)).at(-1) ?? null;
     const ctx: RunnerContext = {
       run: this.requireRun(live.runId),
       node,
@@ -652,8 +669,7 @@ export class Engine {
     return execution.result;
   }
 
-  private async finishNode(live: LiveRun, exec: LiveExecution, settled: RunnerResult): Promise<void> {
-    let result = settled;
+  private async finishNode(live: LiveRun, exec: LiveExecution, result: RunnerResult): Promise<void> {
     if (this.shuttingDown) return; // shutdown marks everything interrupted
     live.inflight++;
     // Stamped before the release starts the next queued node, so finishedAt <= its startedAt.
@@ -662,39 +678,63 @@ export class Engine {
     live.scheduler.release(exec.nodeRunId);
     try {
       const nr = this.requireNodeRun(exec.nodeRunId);
-      if (isFinalNodeStatus(nr.status)) return; // already settled by cancel/terminate
-      const node = live.nodes.get(nr.nodeId)!;
-      if (result.status === "succeeded" && !live.terminating) {
-        // §15.4: the loop edge would loop back once more but its limit is reached → the source fails.
-        const exhausted = live.tracker.exhaustedFailLoop(node.id, { kind: "success", port: result.output.port });
-        if (exhausted) {
-          live.tracker.markExhausted(exhausted.id);
-          const target = live.nodes.get(exhausted.target);
-          const error = `Loop back to "${target ? labelOf(target) : exhausted.target}" reached its limit of ${exhausted.loop!.maxIterations} iteration${exhausted.loop!.maxIterations === 1 ? "" : "s"}`;
-          this.deps.store.appendEvent(live.runId, nr.id, "loop.exhausted", { edgeId: exhausted.id, onExhausted: "fail" });
-          result = { status: "failed", error, output: result.output };
-        }
-      }
-      if (result.status === "succeeded") {
-        this.patchNodeRun(nr.id, { status: "succeeded", output: { ...nr.output, ...result.output }, finishedAt });
-        if (!live.terminating) await this.advance(live, node.id, { kind: "success", port: result.output.port });
-      } else if (result.status === "failed") {
-        const output = result.output ? { ...nr.output, ...result.output } : undefined;
-        this.patchNodeRun(nr.id, { status: "failed", error: result.error, output, finishedAt });
-        if (live.terminating) return;
-        if (this.hasFailureRoute(live.topo, node.id) || live.tracker.loopsBack(node.id, { kind: "failure" })) {
-          await this.advance(live, node.id, { kind: "failure" });
-        } else if ((node.onError ?? "pause") === "fail-run") {
-          await this.terminate(live, "failed", `Node "${labelOf(node)}" failed: ${result.error}`);
-        }
-      } else {
-        this.patchNodeRun(nr.id, { status: "cancelled", finishedAt });
-      }
-      this.persistLoops(live);
+      // Already settled by cancel/terminate or by a new loop iteration (startIteration): only the
+      // progress check below remains (this may be the last execution to settle).
+      if (!isFinalNodeStatus(nr.status)) await this.settleNode(live, nr, result, finishedAt);
     } finally {
       live.inflight--;
     }
     await this.checkProgress(live);
+  }
+
+  /** finishNode: persists the result of a node run that was still unsettled and advances the flow. */
+  private async settleNode(live: LiveRun, nr: NodeRun, settled: RunnerResult, finishedAt: number): Promise<void> {
+    let result = settled;
+    const node = live.nodes.get(nr.nodeId)!;
+    let loopExhausted = false;
+    if (result.status === "succeeded" && !live.terminating) {
+      // §15.4: the loop edge would loop back once more but its limit is reached → the source fails.
+      const exhausted = live.tracker.exhaustedFailLoop(node.id, { kind: "success", port: result.output.port });
+      if (exhausted) {
+        live.tracker.markExhausted(exhausted.id);
+        this.deps.store.appendEvent(live.runId, nr.id, "loop.exhausted", { edgeId: exhausted.id, onExhausted: "fail" });
+        result = { status: "failed", error: this.exhaustedMessage(live, exhausted), output: result.output };
+        loopExhausted = true;
+      }
+    }
+    if (result.status === "succeeded") {
+      this.patchNodeRun(nr.id, { status: "succeeded", output: { ...nr.output, ...result.output }, finishedAt });
+      if (!live.terminating) await this.advance(live, node.id, { kind: "success", port: result.output.port });
+    } else if (result.status === "failed") {
+      // A failure handled downstream (failure/always edge, loop back-edge) cannot be retried or skipped.
+      const handled = !live.terminating && (this.hasFailureRoute(live.topo, node.id) || live.tracker.loopHandlesFailure(node.id));
+      const extra = { ...(handled ? { failureHandled: true } : {}), ...(loopExhausted ? { loopExhausted: true } : {}) };
+      const output = result.output || handled || loopExhausted ? { ...nr.output, ...result.output, ...extra } : undefined;
+      this.patchNodeRun(nr.id, { status: "failed", error: result.error, output, finishedAt });
+      if (live.terminating) return;
+      if (handled) {
+        await this.advance(live, node.id, { kind: "failure" });
+      } else {
+        // A failure loop edge at its limit with onExhausted "fail": the failure stands (onError applies).
+        const exhausted = live.tracker.exhaustedLoop(node.id, { kind: "failure" });
+        if (exhausted) {
+          live.tracker.markExhausted(exhausted.id);
+          this.deps.store.appendEvent(live.runId, nr.id, "loop.exhausted", { edgeId: exhausted.id, onExhausted: "fail" });
+        }
+        this.persistLoops(live);
+        if ((node.onError ?? "pause") === "fail-run") await this.terminate(live, "failed", `Node "${labelOf(node)}" failed: ${result.error}`);
+      }
+    } else {
+      this.patchNodeRun(nr.id, { status: "cancelled", finishedAt });
+    }
+    if (!live.terminating) this.persistLoops(live);
+  }
+
+  /** Error of a loop source whose loop back-edge reached its limit (§15.4), counted in loop-backs. */
+  private exhaustedMessage(live: LiveRun, edge: GraphEdge): string {
+    const target = live.nodes.get(edge.target);
+    const max = edge.loop!.maxIterations;
+    return `Loop back to "${target ? labelOf(target) : edge.target}" exhausted (looped back ${max} of ${max} time${max === 1 ? "" : "s"})`;
   }
 
   /**
@@ -717,8 +757,11 @@ export class Engine {
       const nr = current.get(id);
       if (nr && !isFinalNodeStatus(nr.status)) this.patchNodeRun(nr.id, { status: "skipped", finishedAt: this.now() });
     }
-    for (const it of delta.loops) this.startIteration(live, it);
+    const stopping = delta.loops.map((it) => this.startIteration(live, it));
     this.persistLoops(live);
+    // The new iteration runs in the same lane: let cancelled executions of the previous one stop first.
+    await Promise.all(stopping);
+    if (live.terminating || this.shuttingDown) return;
     for (const id of delta.ready) this.makeReady(live, id);
   }
 
@@ -726,13 +769,15 @@ export class Engine {
    * §15.4: a loop edge looped back. Every body node gets a new `pending` node run (iteration + 1, attempt
    * 0, same lane); earlier iterations stay as history. A body node still unfinished (only possible when
    * the user skipped the loop source early) is cancelled, or skipped if it never started. The target is
-   * made ready by the caller (delta.ready).
+   * made ready by the caller (delta.ready) once the returned promise resolves: the cancelled executions
+   * stopped (bounded by stopTimeoutMs).
    */
-  private startIteration(live: LiveRun, it: LoopIteration): void {
+  private startIteration(live: LiveRun, it: LoopIteration): Promise<void> {
     const { store, bus } = this.deps;
     const current = this.currentNodeRuns(live.runId);
     const edge = live.topo.loopEdges.find((e) => e.id === it.edgeId)!;
     const created: NodeRun[] = [];
+    const stopping: Array<Promise<void> | undefined> = [];
     store.transaction(() => {
       for (const nodeId of it.body) {
         const cur = current.get(nodeId);
@@ -743,7 +788,7 @@ export class Engine {
         } else if (!isFinalNodeStatus(cur.status)) {
           const exec = live.executions.get(cur.id);
           exec?.abort.abort();
-          void exec?.controls?.cancel();
+          stopping.push(exec?.controls?.cancel());
           this.patchNodeRun(cur.id, { status: "cancelled", finishedAt: this.now() });
         }
         created.push(
@@ -762,6 +807,9 @@ export class Engine {
       this.persistLoops(live);
     });
     for (const nr of created) bus.emit("node:update", { nodeRun: nr });
+    const cancels = stopping.filter((p) => p !== undefined);
+    if (cancels.length === 0) return Promise.resolve();
+    return withTimeout(Promise.allSettled(cancels), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
   }
 
   /** Writes the loop counters when they changed (RunSummary.loopCounters, RunDetail.loops). */
@@ -787,7 +835,8 @@ export class Engine {
       if (run.status === "running") {
         const first = blocking[0]!;
         const label = labelOf(live.nodes.get(first.nodeId)!);
-        this.setRunStatus(live.runId, "paused", { error: `Node "${label}" is ${first.status}${first.error ? `: ${first.error}` : ""}` });
+        const state = first.status === "failed" ? "failed" : `was ${first.status}`;
+        this.setRunStatus(live.runId, "paused", { error: `Node "${label}" ${state}${first.error ? `: ${first.error}` : ""}` });
       }
       return;
     }

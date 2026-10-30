@@ -78,7 +78,7 @@ function EditCanvas() {
   // Fitting an empty graph would jump the viewport when the first node is dropped, so the next drops
   // land on top of it: fit on mount only when there is something to fit.
   const fitOnMount = useRef((graph?.nodes.length ?? 0) > 0).current;
-  const { manual, onMoveStart } = useManualViewport();
+  const { manual, onMoveStart, onMoveEnd } = useManualViewport();
 
   const input = useMemo(
     () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured } : null),
@@ -161,6 +161,7 @@ function EditCanvas() {
         snapToGrid
         snapGrid={GRID}
         onMoveStart={onMoveStart}
+        onMoveEnd={onMoveEnd}
         minZoom={0.2}
         proOptions={{ hideAttribution: true }}
       >
@@ -186,7 +187,7 @@ function RunCanvas() {
   const detailError = useRunStore((s) => s.detailError);
   const phase = useEditorStore((s) => s.phase);
   const [measured, applyMeasured] = useMeasured();
-  const { manual, onMoveStart } = useManualViewport();
+  const { manual, onMoveStart, onMoveEnd } = useManualViewport();
   const graph: Graph | null = detail?.run.graphSnapshot ?? null;
 
   const input = useMemo(
@@ -233,6 +234,7 @@ function RunCanvas() {
       edgesFocusable={false}
       deleteKeyCode={null}
       onMoveStart={onMoveStart}
+      onMoveEnd={onMoveEnd}
       minZoom={0.2}
       proOptions={{ hideAttribution: true }}
     >
@@ -259,10 +261,17 @@ function RunCanvas() {
  */
 function useManualViewport() {
   const manual = useRef(false);
-  const onMoveStart = useCallback((event: MouseEvent | TouchEvent | null) => {
-    if (event) manual.current = true;
+  const start = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  // A click on a (non-draggable) node also starts a d3 "move": only a move that changed the viewport counts.
+  const onMoveStart = useCallback((event: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
+    start.current = event ? viewport : null;
   }, []);
-  return { manual, onMoveStart };
+  const onMoveEnd = useCallback((event: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
+    const from = start.current;
+    start.current = null;
+    if (event && from && (from.x !== viewport.x || from.y !== viewport.y || from.zoom !== viewport.zoom)) manual.current = true;
+  }, []);
+  return { manual, onMoveStart, onMoveEnd };
 }
 
 /** Fits the graph at a readable zoom (lib/viewport): never below FIT_MIN_ZOOM, start-aligned when too big. */

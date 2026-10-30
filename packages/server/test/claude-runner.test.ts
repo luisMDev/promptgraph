@@ -75,7 +75,7 @@ type Setup = Awaited<ReturnType<typeof setup>>;
 function start(
   s: Setup,
   config: Record<string, unknown>,
-  opts: { type?: "prompt" | "command"; settings?: GraphInput["settings"]; id?: string; predecessors?: TestContext["predecessors"]; previousAttempt?: NodeRun } = {},
+  opts: { type?: "prompt" | "command"; settings?: GraphInput["settings"]; id?: string; predecessors?: TestContext["predecessors"]; previousAttempt?: NodeRun; previousIteration?: NodeRun } = {},
 ) {
   const nodeId = opts.id ?? "n1";
   const run = makeRun({ settings: opts.settings, nodes: [{ id: nodeId, type: opts.type ?? "prompt", label: "Build", config } as never] });
@@ -86,6 +86,8 @@ function start(
     nodeRunId: `nr-${nodeId}`,
     predecessors: opts.predecessors,
     previousAttempt: opts.previousAttempt,
+    previousIteration: opts.previousIteration,
+    inLoopBody: opts.previousIteration !== undefined,
   });
   const exec = s.runner.start(ctx);
   let settled: RunnerResult | null = null;
@@ -268,6 +270,26 @@ describe("ClaudeRunner (fake claude)", () => {
     expect(retryResult.status).toBe("succeeded");
     expect(retryResult.status === "succeeded" && retryResult.output.usage?.outputTokens).toBe(firstUsage?.outputTokens);
     expect(s.invocations()[2]!.argv.slice(0, 3)).toEqual([INTERRUPTED_MESSAGE, "--resume", sid]);
+  });
+
+  it("context resume in a later loop iteration continues its own session with the new context block", async () => {
+    const s = await setup();
+    const first = start(s, { prompt: "fix it", completion: auto0 }, { id: "fix" });
+    await first.exec.result;
+    const sid = first.ctx.current.sessionId!;
+    const again = start(
+      s,
+      { prompt: "fix it", context: "resume", completion: auto0 },
+      {
+        id: "fix",
+        previousIteration: makeNodeRun("fix-0", "fix", { status: "succeeded", sessionId: sid }),
+        predecessors: [{ nodeId: "cond", label: "Green?", type: "condition", status: "succeeded", output: { port: "false", text: "2 tests fail" }, error: null, sessionId: null, transcriptPath: null, laneId: "main" }],
+      },
+    );
+    expect(await again.exec.result).toMatchObject({ status: "succeeded" });
+    const argv = s.invocations()[1]!.argv;
+    expect(argv.slice(1, 3)).toEqual(["--resume", sid]);
+    expect(argv[0]).toMatch(/^Context from previous steps:\n\n### Green\? \(condition, succeeded\)\nCondition result: false\n2 tests fail[\s\S]*fix it$/);
   });
 
   it("context resume without a predecessor session fails clearly", async () => {

@@ -66,9 +66,10 @@ Semantics fixed here (do not re-implement elsewhere):
   Phase 2 allows joins whose inputs are pairwise `edgesMutuallyExclusive` **and** granted the same lane
   (`edgeLane`), see engine-flow notes for the exclusivity proof and the loop rules.
 - **Warnings** (never block Run): `uncommitted_before_pr`, `uncommitted_before_merge` (§18 Q1 — the engine
-  checkpoints automatically), `empty_label`, `condition_input` (no input; or an exit-code condition fed by a
+  checkpoints automatically), `empty_label`, `condition_input` (an exit-code condition fed by a
   shell through a `success` edge — a failing shell never reaches it, use `always`), `unconditional_loop`,
-  `on_error_ignored`.
+  `on_error_ignored`. A condition with no forward input (loop edges do not count) is an **error**
+  `condition_input` (it would fail at runtime: nothing to evaluate).
 - **Cost**: `costFromUsage(model, rawUsage)` — cache writes without a 5m/1h split are priced as 1h (what
   Claude Code uses); verified exactly against a real envelope (`total_cost_usd` 0.1756). Unknown model → 0.
 
@@ -240,8 +241,12 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
 - Events written by the engine: `run.started`, `run.status`, `run.action`, `run.cleanup`, `run.cleanup_failed`,
   `lane.created`, `node.status`, `node.action`, `node.user_skip` (restore treats such skipped node runs as
   success; other `skipped` node runs are dead paths). Runner `ctx.event` types are free-form.
-- Retry is refused (`invalid_state`) for non-latest attempts, finished runs, and failures already routed by a
-  Phase-2 failure edge. Skip also accepts `ready` (queued) nodes. `setHold` works on any non-final node run.
+- Retry is refused (`invalid_state`) for non-latest attempts, finished runs, failures already routed downstream
+  (Phase-2 failure/always edge or loop edge: `output.failureHandled`) and loop-exhaustion failures
+  (`output.loopExhausted`: a retry would fail the same way; skip instead). Skip is refused for routed failures and
+  for `condition` nodes ("treat as success" has no port: retry the condition, or skip the branch to follow). Skip
+  also accepts `ready` (queued) nodes. `setHold` works on any non-final node run. The web hides Retry/Skip in
+  those cases.
 - Run end: unhandled `failed`/`interrupted`/`cancelled` current node runs with nothing in flight → `paused`;
   all `succeeded`/`skipped`/handled-`failed` → `succeeded`; anything else stuck → `failed` "No node can make progress".
 
@@ -264,7 +269,9 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
   `{kind:"failure"}`. Every outgoing forward edge delivers an activation (`edgeMatches`) or a skip; a node whose
   inputs are all resolved with ≥1 activation is ready (join "all"); only skips → `skipped` (dead path) and it
   propagates skips (§15.3). A failure is **handled** when a forward edge matches it (`when` failure/always, error
-  port) or a loop edge loops back on it; handled failures advance the flow and `onError` does not apply; others
+  port) or a loop edge matches it and loops back or is exhausted with `onExhausted:"continue"`
+  (`ActivationTracker.loopHandlesFailure`); handled failures get `output.failureHandled: true` (web: card "Failed —
+  handled", no Retry/Skip), advance the flow and `onError` does not apply; others
   follow `onError` (pause / fail-run). The failed node run keeps `error` + runner `output` (shell `exitCode`,
   `stdoutTail`), so `ctx.predecessors` of the failure branch carry it into the context block (§15.1).
 - **Context** (`ctx.predecessors`): direct predecessors whose edge delivered an activation (all of them when none
@@ -272,7 +279,9 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
   A loop target in a later iteration also gets, last, the loop-source run that looped back (from the
   `loop.iteration` event). `getApprovalInfo` still lists every direct predecessor.
 - **Run end**: `blockingNodeRuns` = current `interrupted`/`cancelled`, or `failed` that the tracker has not resolved
-  (unhandled). Nothing blocking and everything `succeeded`/`skipped`/handled-`failed` → `succeeded`.
+  (unhandled). Nothing blocking and everything `succeeded`/`skipped`/handled-`failed` → `succeeded`. The pause
+  message is `Node "<label>" failed: <error>` (`was interrupted` / `was cancelled`). `finishNode` always runs the
+  progress check, also for an execution settled earlier by cancel or a new loop iteration (it may settle last).
 - **Provably exclusive joins** (`edgesMutuallyExclusive`, validator): edges `a`, `b` are exclusive iff some node S
   and a key pair of S that never fire together — `true`/`false`, `out`(success)/`error`, `true`/`error`,
   `false`/`error` — has each edge *dominated* by one side: the edge is that side's edge of S, or its source can only
@@ -301,27 +310,36 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
   as: skipped → loops → ready (ready is filtered to nodes still released after resets).
 - **Engine on loop back** (`startIteration`, one transaction): every body node gets a new `pending` NodeRun with
   `iteration = previous + 1`, `attempt 0`, same lane (history kept); an unfinished body node run (only when the
-  user skipped the source early) is skipped (pending/ready) or cancelled (live); `runs.loops` (= `tracker.
+  user skipped the source early) is skipped (pending/ready) or cancelled (live; the loop target is made ready only
+  once those cancels finished, bounded by `stopTimeoutMs`, so two iterations never run in the lane at once);
+  `runs.loops` (= `tracker.
   loopStates()`) is persisted; event `loop.iteration {edgeId, iteration, sourceNodeRunId, targetIteration, body}`;
   `node:update` for the new node runs and `run:update`. Clients refetch `RunDetail.loops` (the web does on
   node/run updates).
 - **Exhaustion**: `onExhausted:"fail"` — before persisting the source's success, `exhaustedFailLoop` turns it into
-  `failed` "Loop back to "<target>" reached its limit of N iterations" (output kept, event `loop.exhausted`), routed
-  by the source's failure edges or else `onError`. Retry re-runs the source (same iteration, attempt+1); **skip**
-  (user-skip = success) continues past the loop (the edge is exhausted, so it delivers a skip like `continue`).
-  `"continue"` — the loop edge delivers a skip, the loop closes and the flow continues. A failure loop edge at its
-  limit does not handle the failure.
+  `failed` "Loop back to "<target>" exhausted (looped back N of N times)" (output kept + `loopExhausted: true`,
+  event `loop.exhausted`), routed by the source's failure edges or else `onError`. Retry is refused (it would fail
+  again); **skip** (user-skip = success) continues past the loop (the edge is exhausted, so it delivers a skip like
+  `continue`). `"continue"` — the loop edge delivers a skip, the loop closes and the flow continues. The same holds
+  for loop edges that match a **failure** (error port, `when` failure/always): at the limit, `continue` handles the
+  failure (advance with the failure → the loop closes, exhausted, held deliveries go out); `fail` leaves it to the
+  source's failure edges or `onError`, and the loop is still marked exhausted (`loop.exhausted` event).
+- Validation also rejects (`invalid_loop`) a loop edge whose target is an exit-code/regex condition: its forward
+  predecessor is outside the body, so every pass would re-check the same output (loop back to the evaluated step).
 - **Store**: migration #2 `runs.loops` (JSON `LoopState[]`, NULL without loop edges), `RunPatch.loops`,
   `Store.getLoopStates(runId)`. `RunDetail.loops` lists every loop edge (persisted state, else iteration 0).
 - **Crash recovery / restore**: `ActivationTracker.restore(graph, finished, loopStates)` replays the current node
   runs (latest iteration, latest attempt) in topological order with the persisted counters, so held deliveries
   and closed loops are recomputed. A source that finished right before a crash (its new iteration never
   persisted) loops back during the replay: `takeRestoredLoops()` → the engine creates that iteration
-  (`ensureLive`) and `resumeRun`/retry/skip continue. Failed current node runs count as handled when a forward
-  failure edge exists or a loop edge would loop back with the persisted counters.
-- **RunnerContext** (optional, additive): `previousIteration` (this node's latest run of the previous iteration)
-  and `inLoopBody`. ClaudeRunner, `context:"resume"`: `previousIteration.sessionId` → resume the node's own session
-  (prompt only, §15.4); else the predecessor rule; with no session to resume inside a loop body (first pass after
+  (`ensureLive`) and `resumeRun`/retry/skip continue. Nodes the replay resolved as dead paths whose skip was never
+  persisted (crash between a node's completion and its skips, e.g. during fork-lane creation) come from
+  `takeRestoredSkips()`; `ensureLive` marks their `pending` node runs `skipped`. Failed current node runs count as
+  handled when a forward failure edge exists or `loopHandlesFailure` with the persisted counters.
+- **RunnerContext** (optional, additive): `previousIteration` (this node's latest run of an earlier iteration that
+  ran — succeeded/failed or has a session; dead-path skips are passed over) and `inLoopBody`. ClaudeRunner,
+  `context:"resume"`: `previousIteration.sessionId` → resume the node's own session with the current iteration's
+  context block before the prompt (e.g. the new failing output, §15.4); else the predecessor rule; with no session to resume inside a loop body (first pass after
   a condition) → a new session with the fresh context block. The validator skips the resume predecessor rule for
   loop-body nodes. `fresh` gets the current iteration's predecessors (plus the loop source for the target).
 - Approval/PR dialog predecessors (`getApprovalInfo`) leave out skipped inputs when another input ran (dead
@@ -424,8 +442,11 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   - exitCode: `exitCode === equals`; predecessor without `exitCode` (not a shell) → failed "Exit-code condition:
     predecessor … has no exit code"; `null` (timeout/signal) → false. Validator: `invalid_config` "An exit-code
     condition needs a shell predecessor." (phase 2).
-  - regex: fresh `RegExp(pattern, flags)` on `output.text ?? output.stdoutTail ?? error ?? ""`; invalid → failed
-    (validator uses the same `regexError`).
+  - regex: fresh `RegExp(pattern, flags)` on `output.text ?? output.stdoutTail ?? error ?? ""` (last 100k chars),
+    run in a `node:vm` context with a 1 s timeout (`execRegex`; catastrophic backtracking → failed "Regex
+    evaluation timed out…" instead of blocking the server); invalid → failed (validator uses the same `regexError`).
+  - A predecessor skipped by the user (`output.skippedByUser`) is evaluated when none ran: exitCode/regex → `true`
+    ("treated as success"); judge evaluates it as usual.
   - judge: `runHeadless` with `JUDGE_JSON_SCHEMA`, model `evaluator.model ?? settings.defaults.model`, timeout
     `evaluator.timeoutSec ?? 120` s (both new optional fields of the judge evaluator), cwd = lane; prompt =
     instructions + question + `describePredecessor` (8k) + `laneDiffStat` (`git diff --stat --summary` of the
@@ -667,7 +688,11 @@ hold only state interfaces; builders add the zustand stores there.
   run mode: loop badge `↺ iteration/maxIterations`. Edge tooltips list errors and warnings. Condition cards have
   labelled `true`/`false` handles (taken one highlighted in run mode) and a card note `<port> — <reason>`;
   node cards show `iter N` (1-based) when `iteration > 0`. Skipped (dead) nodes: dashed + faded; edges that
-  delivered a skip (incl. an exhausted loop edge) greyed (`edgeRunState(edge, source, loop?)`).
+  delivered a skip (incl. an exhausted loop edge) greyed (`edgeRunState(edge, source, loop?)`), except a loop edge
+  that looped back in this run (`data.looped`: stays violet). Handled failures (`output.failureHandled`): muted red
+  card "Failed — handled" + note. Selected edges: stroke 3.5 + blue drop-shadow halo (inline strokes override React
+  Flow's selected colour). Condition port handles sit at fixed offsets (28/52 px) beside the header. The viewport
+  counts as manually moved only when a user move actually changed it (a node click no longer disables auto-refit).
 - Loop state (`lib/run-view.ts`): `loopViews(snapshot, nodeRuns, detail.loops)` → `RunStore.loops`
   (edgeId → `{iteration, maxIterations, exhausted}`). `RunDetail.loops` (server, see `shared/run.ts LoopState`)
   wins; edges it does not list fall back to the loop target's highest node-run iteration (capped, not exhausted).

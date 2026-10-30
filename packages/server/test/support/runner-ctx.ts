@@ -78,6 +78,8 @@ export function makeCtx(opts: {
   predecessors?: PredecessorOutput[];
   laneOutputs?: PredecessorOutput[];
   previousAttempt?: NodeRun | null;
+  previousIteration?: NodeRun | null;
+  inLoopBody?: boolean;
   mergeSources?: Lane[];
   forkPoints?: string[];
   baseBranch?: string;
@@ -91,6 +93,8 @@ export function makeCtx(opts: {
     predecessors: opts.predecessors ?? [],
     laneOutputs: opts.laneOutputs ?? opts.predecessors ?? [],
     previousAttempt: opts.previousAttempt ?? null,
+    previousIteration: opts.previousIteration ?? null,
+    inLoopBody: opts.inLoopBody ?? false,
     mergeSources: opts.mergeSources ?? [],
     forkPoints: opts.forkPoints ?? [],
     baseBranch: opts.baseBranch ?? opts.run.graphSnapshot.settings.baseBranch,

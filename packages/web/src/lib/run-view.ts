@@ -143,6 +143,7 @@ export type NoteTone = "amber" | "violet" | "green" | "red" | "blue" | "zinc";
 export function cardNote(node: Pick<GraphNode, "type">, nodeRun: NodeRun | null): { text: string; tone: NoteTone } | null {
   if (!nodeRun) return null;
   const o = nodeRun.output;
+  if (nodeRun.status === "failed" && o?.failureHandled) return { text: "Handled: its failure path ran instead", tone: "zinc" };
   const conflicts = o?.conflictedFiles?.length ?? 0;
   const files = (n: number) => `${n} conflicted file${n === 1 ? "" : "s"}`;
   if (node.type === "merge") {

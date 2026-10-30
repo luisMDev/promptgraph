@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { NodeRun } from "@promptgraph/shared";
 import { forkMergeGraph, laneOf, linearGraph, nodeRunOf, runDetailOf } from "../test-fixtures";
 import { cardNote, currentNodeRuns, edgeRunState, enteredMergeConflict, runInfoOf, upsertNodeRun } from "./run-view";
+import { nodeRunStyle } from "./status-style";
 
 describe("run-view", () => {
   it("picks the latest iteration, then attempt, per node", () => {
@@ -44,6 +45,13 @@ describe("run-view", () => {
       expect(cardNote(merge, nodeRunOf({ id: "m", nodeId: "m", status: "running", output: { conflictedFiles: ["a.ts"] } }))).toEqual({ text: "Resolving 1 conflicted file", tone: "blue" });
       expect(cardNote(merge, nodeRunOf({ id: "m", nodeId: "m", status: "succeeded", output: { conflictedFiles: ["a", "b"] } }))).toEqual({ text: "Resolved 2 conflicted files", tone: "green" });
       expect(cardNote(merge, nodeRunOf({ id: "m", nodeId: "m", status: "succeeded", output: { sha: "x" } }))).toBeNull();
+    });
+
+    it("marks failures that were handled downstream", () => {
+      const handled = nodeRunOf({ id: "b", nodeId: "b", status: "failed", output: { exitCode: 2, failureHandled: true } });
+      expect(cardNote({ type: "shell" }, handled)).toEqual({ text: "Handled: its failure path ran instead", tone: "zinc" });
+      expect(nodeRunStyle(handled).label).toBe("Failed — handled");
+      expect(cardNote({ type: "shell" }, nodeRunOf({ id: "b", nodeId: "b", status: "failed" }))).toBeNull();
     });
 
     it("describes approval gates", () => {

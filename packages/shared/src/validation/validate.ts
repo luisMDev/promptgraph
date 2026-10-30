@@ -244,7 +244,8 @@ function checkJoins(topo: Topology, plan: LanePlan | null, out: Collector, phase
       continue;
     }
     if (node.type === "condition" && inputs.length === 0) {
-      out.warn({ code: "condition_input", message: "A condition node evaluates its predecessor; connect one.", nodeId: node.id });
+      // Loop edges do not count: the condition needs a forward predecessor to evaluate on its first pass.
+      out.error({ code: "condition_input", message: "A condition node evaluates its predecessor; connect one.", nodeId: node.id });
     }
     if (phase === 2 && node.type === "condition" && node.config.evaluator.kind === "exitCode" && inputs.some((e) => topo.nodes.get(e.source)?.type !== "shell")) {
       out.error({ code: "invalid_config", message: "An exit-code condition needs a shell predecessor.", nodeId: node.id });
@@ -298,7 +299,8 @@ function allPairsExclusive(topo: Topology, inputs: readonly GraphEdge[], cache: 
  * §15.4 loops. Errors (`invalid_loop`): the edge must point back to an ancestor of its source (or to the
  * source itself: repeat one node); two loop bodies must be disjoint or one strictly inside the other
  * (they are repeated as a unit); a body runs in one lane, so it cannot contain merge nodes nor start
- * parallel branches (forks would have to be re-created on every iteration). Warning
+ * parallel branches (forks would have to be re-created on every iteration); an exit-code/regex condition
+ * cannot be the loop target (its predecessor is outside the body, so it re-checks the same output). Warning
  * `unconditional_loop`: an edge that loops back on every outcome with onExhausted "fail" always ends
  * in a failure.
  */
@@ -315,6 +317,15 @@ function checkLoops(topo: Topology, plan: LanePlan | null, out: Collector): void
       continue;
     }
     bodies.push({ edge: e, body });
+    const target = topo.nodes.get(e.target)!;
+    if (target.type === "condition" && target.config.evaluator.kind !== "judge") {
+      // Its forward predecessors are outside the body: every pass would re-check the same output.
+      out.error({
+        code: "invalid_loop",
+        message: "This loop re-runs the condition on the same output, so it can never change: loop back to the step the condition evaluates.",
+        edgeId: e.id,
+      });
+    }
     if (alwaysLoopsBack(topo, e, body) && e.loop!.onExhausted === "fail") {
       out.warn({
         code: "unconditional_loop",

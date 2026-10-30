@@ -519,6 +519,7 @@ Each edge gets `when: "success" | "failure" | "always"` (default `success`). In 
 
 - A failed node with at least one matching `failure` edge **does not** pause the run: the failure is "handled" and the engine follows those edges. `onError` only applies when no failure edge exists.
 - The failing node's output (error, exit code, stdout tail) flows into the next node's context block, so a "fix" node gets the failing test output automatically.
+- Editor default: connecting a `shell` node to an `exitCode` condition creates the edge with `when: "always"` (not `success`), because a failing shell (exit code ≠ 0) would otherwise never reach the condition that is meant to evaluate it. As a consequence, such a shell's failure counts as handled (the always edge fires) and its `onError` does not apply.
 
 ### 15.2 Condition node
 
@@ -564,6 +565,8 @@ Review loop
 Failure routing
   [shell: pnpm build] ──error──► [prompt: fix the build error] → [shell: pnpm build]
 ```
+
+In the test-fix loop the `shell → condition` edge is `always` (the editor's default for shell → exit-code condition, §15.1), and the loop edge targets the shell, not the condition: a loop back to an exit-code/regex condition would re-check the same output, so the validator rejects it.
 
 ### 15.6 UI additions
 

@@ -221,7 +221,8 @@ describe("validateGraph", () => {
         { id: "r", type: "condition", config: { evaluator: { kind: "regex", pattern: "(" } } },
       ]),
     );
-    const byNode = Object.fromEntries(r.errors.map((e) => [e.nodeId, e.code]));
+    // (The unconnected conditions also report condition_input.)
+    const byNode = Object.fromEntries(r.errors.filter((e) => e.code !== "condition_input").map((e) => [e.nodeId, e.code]));
     expect(byNode).toEqual({
       p: "missing_config",
       c: "invalid_config",

@@ -42,9 +42,18 @@ const USER_SKIPPED_STYLE: StatusStyle = {
   text: "text-zinc-300",
 };
 
-/** Style of a node run (status, or "skipped by you" for user skips). */
+/** A failure routed downstream (failure/always edge, loop back-edge, §15.1): the run went on, nothing to act on. */
+const HANDLED_FAILURE_STYLE: StatusStyle = {
+  label: "Failed — handled",
+  card: "border-status-failed/40 bg-zinc-900",
+  dot: "bg-status-failed",
+  text: "text-red-300/80",
+};
+
+/** Style of a node run (status, "skipped by you" for user skips, "failed — handled" for routed failures). */
 export function nodeRunStyle(nodeRun: Pick<NodeRun, "status" | "output"> | null): StatusStyle {
   if (nodeRun?.status === "skipped" && nodeRun.output?.skippedByUser) return USER_SKIPPED_STYLE;
+  if (nodeRun?.status === "failed" && nodeRun.output?.failureHandled) return HANDLED_FAILURE_STYLE;
   return NODE_STATUS_STYLE[nodeRun?.status ?? "pending"];
 }
 

@@ -76,6 +76,21 @@ describe("flow mapping (phase 2)", () => {
     expect(live.e3!.data?.runState).toBe("dead");
     expect(live.e3!.style?.opacity).toBe(0.5);
     expect(live.e4!.data?.runState).toBe("activated");
+
+    // The last pass skipped the loop source: the loop that did loop back keeps its violet look.
+    const passed = { ...run, currentByNode: { ...run.currentByNode, fix: nodeRunOf({ id: "f2", nodeId: "fix", iteration: 2, status: "skipped" }) } };
+    const after = toFlowEdges({ ...base, graph, validation: noIssues, run: passed }).find((e) => e.id === "loop")!;
+    expect(after.data).toMatchObject({ runState: "dead", looped: true });
+    expect(after.style).toMatchObject({ stroke: "#a78bfa", opacity: 0.7 });
+  });
+
+  it("highlights the selected edge (inline strokes override React Flow's selected colour)", () => {
+    const graph = linearGraph();
+    const [plain] = toFlowEdges({ ...base, graph, validation: { errors: [], warnings: [] } });
+    const [sel] = toFlowEdges({ ...base, selectedEdgeIds: ["e1"], graph, validation: { errors: [], warnings: [] } });
+    expect(plain!.style).toMatchObject({ strokeWidth: 2 });
+    expect(plain!.style?.filter).toBeUndefined();
+    expect(sel!.style).toMatchObject({ strokeWidth: 3.5, filter: expect.stringContaining("drop-shadow") });
   });
 
   it("labels non-default conditions and lists edge warnings in the tooltip", () => {

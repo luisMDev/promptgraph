@@ -72,6 +72,7 @@ export class ActivationTracker {
   /** Innermost (smallest body) first. */
   private readonly loops: LoopRuntime[];
   private restoredLoops: LoopIteration[] = [];
+  private restoredSkips: string[] = [];
 
   /** `loopStates`: persisted counters (crash recovery); absent edges start at iteration 0. */
   constructor(graph: Pick<Graph, "nodes" | "edges">, loopStates: readonly LoopState[] = []) {
@@ -126,12 +127,29 @@ export class ActivationTracker {
    * is exhausted. Pure; the engine converts the success into a failure and calls markExhausted.
    */
   exhaustedFailLoop(nodeId: string, outcome: NodeOutcome): GraphEdge | null {
+    const edge = this.exhaustedLoop(nodeId, outcome);
+    return edge?.loop!.onExhausted === "fail" ? edge : null;
+  }
+
+  /**
+   * The first loop edge of `nodeId` (innermost first) that matches `outcome` but has reached
+   * maxIterations, unless a matching inner loop repeats first. Null when none. Pure.
+   */
+  exhaustedLoop(nodeId: string, outcome: NodeOutcome): GraphEdge | null {
     for (const loop of this.loopsFrom(nodeId)) {
       if (!edgeMatches(loop.edge, outcome)) continue;
       if (loop.iteration < loop.max) return null;
-      if (loop.onExhausted === "fail") return loop.edge;
+      return loop.edge;
     }
     return null;
+  }
+
+  /**
+   * Whether a failure of `nodeId` is handled by its loop edges (§15.4): a matching loop edge loops back,
+   * or is exhausted with onExhausted "continue" (it then delivers a skip and the flow goes on).
+   */
+  loopHandlesFailure(nodeId: string): boolean {
+    return this.loopsBack(nodeId, { kind: "failure" }) || this.exhaustedLoop(nodeId, { kind: "failure" })?.loop!.onExhausted === "continue";
   }
 
   /** Whether a loop edge of `nodeId` would loop back for this outcome (a failure it handles is not fatal). */
@@ -183,6 +201,17 @@ export class ActivationTracker {
   }
 
   /**
+   * Nodes restore() resolved as dead paths (canvas order) whose skip may not have been persisted (a crash
+   * between a node's completion and its dead-path skips). The engine marks their pending runs skipped.
+   * Returned once.
+   */
+  takeRestoredSkips(): string[] {
+    const skips = this.restoredSkips;
+    this.restoredSkips = [];
+    return skips;
+  }
+
+  /**
    * Rebuilds state from the current node runs (crash recovery / retry after restart), replayed in
    * topological order with the persisted loop counters. Body nodes hold their latest iteration, so the
    * replay reproduces the current pass.
@@ -196,18 +225,19 @@ export class ActivationTracker {
     const byNode = new Map(finished.map((f) => [f.nodeId, f.outcome] as const));
     tracker.initialReady();
     const loops: LoopIteration[] = [];
+    const skipped = new Set<string>();
     for (const node of topologicalOrder(tracker.topo).order) {
       const outcome = byNode.get(node.id);
       if (outcome === undefined || tracker.resolved.has(node.id)) continue;
-      if (outcome === "skipped") {
-        const delta: ActivationDelta = { ready: [], skipped: [], loops: [] };
-        tracker.skipDeadPath(node.id, delta);
-        loops.push(...delta.loops);
-      } else {
-        loops.push(...tracker.complete(node.id, outcome).loops);
-      }
+      let delta: ActivationDelta = { ready: [], skipped: [], loops: [] };
+      if (outcome === "skipped") tracker.skipDeadPath(node.id, delta);
+      else delta = tracker.complete(node.id, outcome);
+      loops.push(...delta.loops);
+      for (const id of delta.skipped) if (byNode.get(id) === undefined) skipped.add(id);
     }
     tracker.restoredLoops = loops;
+    // A later loop-back may have reset a body node skipped earlier in the replay.
+    tracker.restoredSkips = tracker.sortIds([...skipped].filter((id) => tracker.resolved.has(id)));
     return tracker;
   }
 

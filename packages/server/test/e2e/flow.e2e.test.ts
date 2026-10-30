@@ -167,7 +167,7 @@ describe("e2e: control flow (fake claude)", () => {
     expect(runsOf(done, "test")).toEqual([[0, "failed"], [1, "failed"]]);
     expect(runsOf(done, "fix")).toEqual([[0, "succeeded"], [1, "failed"]]);
     const lastFix = done.nodeRuns.filter((n) => n.nodeId === "fix").at(-1)!;
-    expect(lastFix.error).toBe('Loop back to "test" reached its limit of 1 iteration');
+    expect(lastFix.error).toBe('Loop back to "test" exhausted (looped back 1 of 1 time)');
     expect(lastFix.output?.text).toMatch(/^Done: /); // the work is kept
     expect(done.loops).toEqual([{ edgeId: "loop", iteration: 1, maxIterations: 1, exhausted: true }]);
     expect(runsOf(done, "commit")).toEqual([[0, "pending"]]);
@@ -374,10 +374,11 @@ describe("e2e: control flow (fake claude)", () => {
     // First pass: a new session with the context block (the failing test via the condition).
     expect(invocations[0]).not.toContain("--resume");
     expect(invocations[0]!.join(" ")).toContain("FAIL: not fixed yet");
-    // Second pass: the same session, resumed, with the prompt only.
+    // Second pass: the same session, resumed, with this iteration's context block (the new failing output).
     expect(invocations[1]).toContain("--resume");
     expect(invocations[1]).toContain(fixes[0]!.sessionId);
-    expect(invocations[1]!.join(" ")).not.toContain("FAIL: not fixed yet");
+    expect(invocations[1]!.join(" ")).toContain("Context from previous steps");
+    expect(invocations[1]!.join(" ")).toContain("FAIL: not fixed yet");
   });
 
   it("crash recovery mid-loop: the interrupted iteration resumes and the loop finishes", { timeout: 90_000 }, async () => {

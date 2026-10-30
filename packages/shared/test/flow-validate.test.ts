@@ -227,6 +227,23 @@ describe("loops (§15.4)", () => {
     expect(validateGraph(cont).warnings).toEqual([]);
   });
 
+  it("rejects a loop back to an exit-code/regex condition (it would re-check the same output)", () => {
+    const toCond = g(TEST_FIX, [...testFixEdges().filter((e) => e.id !== "loop"), { id: "loop", source: "fix", target: "cond", loop: { maxIterations: 3 } }]);
+    const r = validateGraph(toCond);
+    expect(issues(r.errors)).toEqual(["invalid_loop:loop"]);
+    expect(r.errors[0]!.message).toContain("same output");
+    const self = g(
+      [{ id: "t", type: "shell" }, { id: "c", type: "condition" }, { id: "a" }],
+      [{ source: "t", target: "c", when: "always" }, { source: "c", sourcePort: "true", target: "a" }, { id: "l", source: "c", sourcePort: "false", target: "c", loop: { maxIterations: 2 } }],
+    );
+    expect(issues(validateGraph(self).errors)).toEqual(["invalid_loop:l"]);
+  });
+
+  it("a condition without a forward predecessor is an error (a loop edge into it does not count)", () => {
+    const alone = g([{ id: "c", type: "condition", config: { evaluator: { kind: "regex", pattern: "x" } } }, { id: "a" }], [{ source: "c", sourcePort: "true", target: "a" }]);
+    expect(issues(validateGraph(alone).errors)).toEqual(["condition_input:c"]);
+  });
+
   it('context "resume" inside a loop body does not need a Claude predecessor', () => {
     const nodes = TEST_FIX.map((n) => (n.id === "fix" ? { ...n, config: { prompt: "fix", context: "resume" } } : n));
     expect(validateGraph(g(nodes, testFixEdges())).errors).toEqual([]);

@@ -12,6 +12,8 @@ export interface PgEdgeData extends Record<string, unknown> {
   badge?: string;
   /** Run mode only. */
   runState?: EdgeRunState;
+  /** Run mode, loop edges: it looped back in this run (its badge stays violet even when the edge is dead now). */
+  looped?: boolean;
 }
 
 export type PgFlowEdge = Edge<PgEdgeData, "pg">;
@@ -33,7 +35,7 @@ export function PgEdge(props: EdgeProps<PgFlowEdge>) {
           <div
             className={`nodrag nopan pointer-events-none absolute rounded px-1.5 py-0.5 text-[10px] ring-1 ${
               data?.badge
-                ? `font-mono font-semibold ${data.runState === "dead" ? "bg-zinc-900 text-zinc-500 ring-zinc-700" : "bg-violet-950 text-violet-200 ring-violet-500/60"}`
+                ? `font-mono font-semibold ${data.runState === "dead" && !data.looped ? "bg-zinc-900 text-zinc-500 ring-zinc-700" : "bg-violet-950 text-violet-200 ring-violet-500/60"}`
                 : data?.loop
                   ? "bg-zinc-900 text-violet-300 ring-violet-500/40"
                   : "bg-zinc-900 text-zinc-300 ring-zinc-700"
