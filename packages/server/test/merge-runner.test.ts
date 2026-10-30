@@ -165,6 +165,26 @@ describe("MergeRunner", () => {
     expect(s.store.getLane("run1", "l2")!.status).toBe("active");
   });
 
+  it("onConflict claude: a resolver that aborts the merge fails the node and keeps the source unmerged", async () => {
+    const s = setup();
+    const { main, l2 } = await conflicting(s);
+    const claude = scriptedClaude((ctx) => git(ctx.lane.worktreePath, "merge", "--abort"), { status: "succeeded", output: {} });
+    const { exec } = startMerge(s, main, [l2], { onConflict: "claude" }, claude);
+    expect(await exec.result).toMatchObject({ status: "failed", error: expect.stringContaining("was abandoned") });
+    expectPreMergeState(main);
+    expect(s.store.getLane("run1", "l2")!.status).toBe("active");
+  });
+
+  it("onConflict claude: a resolver that commits the markers is reset to the pre-merge HEAD", async () => {
+    const s = setup();
+    const { main, l2 } = await conflicting(s);
+    const claude = scriptedClaude((ctx) => git(ctx.lane.worktreePath, "commit", "-q", "-am", "oops"), { status: "succeeded", output: {} });
+    const { exec } = startMerge(s, main, [l2], { onConflict: "claude" }, claude);
+    expect(await exec.result).toMatchObject({ status: "failed", error: "Unresolved merge conflicts remain in: README.md" });
+    expectPreMergeState(main);
+    expect(git(main.worktreePath, "status", "--porcelain")).toBe("");
+  });
+
   it("onConflict claude: a failed resolver fails the node", async () => {
     const s = setup();
     const { main, l2 } = await conflicting(s);
@@ -226,6 +246,20 @@ describe("MergeRunner", () => {
     expect((await exec.result).status).toBe("succeeded");
     expect(git(main.worktreePath, "log", "-1", "--format=%s")).toBe(`Merge branch '${l2.branch}' into ${main.branch}`);
     expect(git(main.worktreePath, "log", "-1", "--format=%P").split(" ")).toHaveLength(1);
+  });
+
+  it("onConflict pause: a merge abandoned in the shell fails the node instead of reporting it merged", async () => {
+    for (const [strategy, abandon] of [["merge", ["merge", "--abort"]], ["squash", ["reset", "-q", "--hard"]]] as const) {
+      const s = setup();
+      const { main, l2 } = await conflicting(s);
+      const { ctx, exec } = startMerge(s, main, [l2], { onConflict: "pause", strategy });
+      await waitFor(() => ctx.current.status === "waiting_input");
+      git(main.worktreePath, ...abandon);
+      exec.controls.done();
+      expect(await exec.result).toMatchObject({ status: "failed", error: expect.stringContaining("was abandoned") });
+      expectPreMergeState(main);
+      expect(s.store.getLane("run1", "l2")!.status).toBe("active");
+    }
   });
 
   it("onConflict pause: Fail aborts the merge (squash too) and cancel aborts it", async () => {

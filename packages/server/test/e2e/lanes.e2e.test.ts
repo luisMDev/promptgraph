@@ -183,6 +183,61 @@ describe("e2e: parallel lanes and ship-it nodes (M3+M4)", () => {
     expect(gitIn(w.repo, "rev-list", "--parents", "-1", main.branch).split(" ")).toHaveLength(3);
   });
 
+  it("a merge left mid-conflict by a stopped server is redone cleanly on Retry", { timeout: 90_000 }, async () => {
+    const { w, s } = await setup();
+    await s.saveGraph(conflictGraph("conflict-crash", "pause"));
+    const runId = (await s.startRun("conflict-crash")).run.id;
+    await s.waitForNode(runId, "m", ["waiting_input"], 30_000);
+    const [main, l2] = (await s.getRun(runId)).lanes;
+    await s.close();
+    // A crash (unlike this graceful stop) leaves the lane mid-merge, conflict markers and all.
+    expect(() => gitIn(main!.worktreePath, "merge", "--no-ff", "-m", "x", l2!.branch)).toThrow();
+    const before = gitIn(main!.worktreePath, "rev-parse", "HEAD");
+
+    const s2 = await E2eServer.start(w);
+    cleanups.push(() => s2.close());
+    const interrupted = await s2.nodeRun(runId, "m");
+    expect(interrupted.status).toBe("interrupted");
+    await s2.api("POST", `/api/node-runs/${interrupted.id}/retry`);
+    const retried = await s2.waitForNode(runId, "m", ["waiting_input", "failed", "succeeded"], 30_000);
+    expect(retried).toMatchObject({ status: "waiting_input", attempt: 1, waitingReason: { kind: "merge_conflict" } });
+    // The half-done merge was dropped, not checkpointed: HEAD is unchanged and the merge is fresh.
+    expect(gitIn(main!.worktreePath, "rev-parse", "HEAD")).toBe(before);
+    fs.writeFileSync(path.join(main!.worktreePath, "README.md"), "from both\n");
+    await s2.api("POST", `/api/node-runs/${retried.id}/done`);
+    const done = await s2.waitForRun(runId, ["succeeded", "failed", "paused"], 30_000);
+    expect(done.run.status).toBe("succeeded");
+    expect(gitIn(w.repo, "show", `${main!.branch}:README.md`)).toBe("from both");
+    expect(gitIn(w.repo, "log", "--format=%s", `main..${main!.branch}`)).not.toContain("checkpoint after m");
+    expect(gitIn(w.repo, "rev-list", "--parents", "-1", main!.branch).split(" ")).toHaveLength(3);
+  });
+
+  it("merge with strategy squash, then commit: one generated commit, no checkpoint noise", { timeout: 60_000 }, async () => {
+    const { w, s } = await setup();
+    await s.saveGraph(
+      graph(
+        "squash-commit",
+        [
+          { id: "root", type: "prompt", at: [0, 100], config: write("a.txt", "A") },
+          { id: "b", type: "prompt", at: [250, 0], config: write("b.txt", "B") },
+          { id: "c", type: "prompt", at: [250, 200], config: write("c.txt", "C") },
+          { id: "m", type: "merge", at: [500, 100], config: { strategy: "squash" } },
+          { id: "commit", type: "commit", at: [750, 100] },
+        ],
+        ["root>b", "root>c", "b>m", "c>m", "m>commit"],
+        { keepWorktrees: "always" },
+      ),
+    );
+    const runId = (await s.startRun("squash-commit")).run.id;
+    const done = await s.waitForRun(runId, ["succeeded", "failed", "paused"], 30_000);
+    expect(done.run.status).toBe("succeeded");
+    const commit = done.nodeRuns.find((n) => n.nodeId === "commit")!;
+    expect(commit.output?.noop).toBeUndefined();
+    const main = done.lanes.find((l) => l.id === "main")!;
+    expect(gitIn(w.repo, "log", "--format=%s", `main..${main.branch}`)).toBe((commit.output!.message as string).split("\n")[0]);
+    expect(gitIn(w.repo, "ls-tree", "--name-only", main.branch).split("\n").sort()).toEqual(["README.md", "a.txt", "b.txt", "c.txt"]);
+  });
+
   const slowRoots = (id: string, maxParallelClaude: number) =>
     graph(
       id,

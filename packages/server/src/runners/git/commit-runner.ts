@@ -13,7 +13,8 @@ export interface CommitRunnerDeps {
 
 /**
  * commit nodes (§6.1, §9.3) under the lane lock: squashCheckpoints → `git reset --soft` to the last
- * non-checkpoint commit (messages starting "pg: checkpoint"); `git add -A`; nothing staged → succeeded
+ * non-checkpoint commit (messages starting "pg: checkpoint", see squashTarget; never below the lane's
+ * fork points); `git add -A`; nothing staged → succeeded
  * {noop:true}; message = config.message or generateMessage("commit"); `git commit -F -`.
  * Output {sha, message, usage?}.
  */
@@ -64,7 +65,7 @@ export class CommitRunner implements Runner {
     };
 
     if (node.config.squashCheckpoints) {
-      const target = await squashTarget(cwd, ctx.lane.baseRef);
+      const target = await squashTarget(cwd, ctx.lane.baseRef, ctx.forkPoints);
       if (target) {
         await gitOk(cwd, ["reset", "-q", "--soft", target]);
         ctx.event("commit:squashed_checkpoints", { target });

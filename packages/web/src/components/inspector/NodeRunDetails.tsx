@@ -100,7 +100,8 @@ function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun
   const canSkip = !runFinal && (s === "failed" || s === "interrupted" || s === "pending" || s === "ready");
   const canDone = s === "idle" || s === "waiting_input" || (s === "running" && isClaudeNode(node));
   const canHold = isClaudeNode(node) && !runFinal && (active || s === "pending" || s === "ready");
-  const canReopen = isClaudeNode(node) && !!nodeRun.sessionId && !active;
+  // Any node with a Claude session: prompt/command nodes, and merges that resolved conflicts with Claude.
+  const canReopen = !!nodeRun.sessionId && !active;
   const canReview = s === "waiting_approval";
   const mergeShell = node.type === "merge" && nodeRun.waitingReason?.kind === "merge_conflict";
   if (!(canDone || active || canHold || canRetry || canSkip || canReview || nodeRun.ptyId || canReopen || nodeRun.laneSetup)) return null;

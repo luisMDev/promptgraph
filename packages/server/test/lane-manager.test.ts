@@ -67,8 +67,19 @@ describe("LaneManager", () => {
     expect(git(lane.worktreePath, "status", "--porcelain")).toBe("M README.md\n?? new.txt");
   });
 
+  it("createLane replaces a branch and worktree left by an attempt that was never persisted", async () => {
+    const { repo, lanes, run, git, store } = setup();
+    const first = await lanes.createLane(run, planned("main", 0), "main");
+    // Simulate a crash between `worktree add` and the insert: the store forgets the lane.
+    store.db.prepare("DELETE FROM lanes WHERE run_id = ? AND id = ?").run(run.id, first.id);
+    git(repo, "commit", "-q", "--allow-empty", "-m", "moved on");
+    const lane = await lanes.createLane(run, planned("main", 0), "main");
+    expect(lane.worktreePath).toBe(first.worktreePath);
+    expect(git(lane.worktreePath, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "main"));
+  });
+
   it("merges a lane and reports conflicts", async () => {
-    const { lanes, run } = setup();
+    const { lanes, run, git } = setup();
     const a = await lanes.createLane(run, planned("main", 0), "main");
     const b = await lanes.createLane(run, planned("l2", 1), "main");
     fs.writeFileSync(path.join(a.worktreePath, "a.txt"), "a");
@@ -79,8 +90,25 @@ describe("LaneManager", () => {
     const c = await lanes.createLane(run, planned("l3", 2), "main");
     fs.writeFileSync(path.join(a.worktreePath, "README.md"), "mine\n");
     fs.writeFileSync(path.join(c.worktreePath, "README.md"), "theirs\n");
-    expect(await lanes.merge(a, c, "merge", "merge l3")).toEqual({ status: "conflict", files: ["README.md"] });
-    await lanes.abortMerge(a);
+    const attempt = await lanes.merge(a, c, "merge", "merge l3");
+    const before = git(a.worktreePath, "rev-parse", "HEAD");
+    expect(attempt).toEqual({ status: "conflict", files: ["README.md"], head: before });
+    // Left mid-merge (e.g. a crash): checkpoints refuse to commit the markers; resetInterruptedMerge drops it.
+    await expect(lanes.checkpoint(a, "x")).rejects.toThrow(/middle of a merge/);
+    expect(await lanes.resetInterruptedMerge(a)).toBe(true);
+    expect(git(a.worktreePath, "status", "--porcelain")).toBe("");
+    expect(git(a.worktreePath, "rev-parse", "HEAD")).toBe(before);
+    expect(await lanes.resetInterruptedMerge(a)).toBe(false);
+  });
+
+  it("a squash merge with nothing new leaves no pending squash behind", async () => {
+    const { lanes, run } = setup();
+    const a = await lanes.createLane(run, planned("main", 0), "main");
+    const b = await lanes.createLane(run, planned("l2", 1), "main");
+    for (const lane of [a, b]) fs.writeFileSync(path.join(lane.worktreePath, "same.txt"), "same\n");
+    expect(await lanes.merge(a, b, "squash", "merge l2")).toMatchObject({ status: "merged" });
+    fs.writeFileSync(path.join(a.worktreePath, "next.txt"), "n");
+    expect(await lanes.checkpoint(a, "next")).toEqual(expect.any(String));
   });
 
   it("cleanup removes worktrees and keeps only branches with their own commits", async () => {

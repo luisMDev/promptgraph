@@ -100,6 +100,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `graphs/graph-store.ts` | `GraphStore {ensureDir, list, get, save, delete, watch}`, `hashContent`, `serializeGraph`, `GraphNotFoundError`, `GraphLoadError` | M1 |
 | `git/exec.ts` ✅ | `git`, `gitOk`, `GitError` | M1 |
 | `git/repo.ts` ✅ | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` | M1 |
+| `git/merge-state.ts` ✅ | `gitPath`, `hasMergeHead`, `hasPendingSquash`, `unmergedFiles`, `mergeInProgress` | M3 fixes |
 | `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) | M1 |
 | `pty/pty-manager.ts` | `PtyManager`, `PtyHandle`, `SpawnPtyOptions`, `PtyAttachResult`, `logSizePath` | M1 |
 | `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` | M1 |
@@ -293,7 +294,7 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   `lanes.withLaneLock`. `NotifierDeps` has test seams `detect?`/`send?`.
 - `runners/git/checkpoint.ts` (new): `CHECKPOINT_PREFIX`, `checkpointMessage`, `isCheckpointMessage`,
   `checkpointIfDirty(cwd, label)` (what `LaneManager.checkpoint` should call under its lane lock) and
-  `squashTarget(cwd, baseRef)`. `squashCheckpoints` soft-resets over trailing checkpoints but **never below
+  `squashTarget(cwd, baseRef, keep?)`. `squashCheckpoints` soft-resets over trailing checkpoints but **never below
   `lane.baseRef`** (history shared with a parent lane stays intact).
 - `CompletionController.onActivity()` (PreToolUse after idle/grace → running). Hold is remembered even when set
   before the controller exists and is seeded from `nodeRun.hold`.
@@ -308,12 +309,13 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   when killed by a signal. Reopen PTYs log to `ptyLogPath(paths, run.id, "reopen-<id>")` — the composition root's
   `resolveLogPath` must map those after a restart.
 - Commit messages are generated from `ctx.laneOutputs`: every ancestor back to (excluding) the previous
-  commit/merge node that ran in this iteration, canvas order (§6.1).
+  commit node that ran in this iteration, walking through merge nodes into all their inputs (merge nodes left
+  out), canvas order (§6.1).
 - Real-claude test: `PG_REAL_CLAUDE=1 pnpm vitest run packages/server/test/claude-runner.real.test.ts`.
 
 **Implementation notes (integration M1+M2):**
 - `git/exec.ts`, `git/repo.ts`, `workspace/lane-manager.ts` and `workspace/setup.ts` are implemented (incl. M3's
-  `merge`/`concludeMerge`/`abortMerge`). `git()` only opens stdin when `input` is given (no EPIPE on early exit).
+  `merge`; the unused `concludeMerge`/`abortMerge` were removed in the M3/M4 review fixes). `git()` only opens stdin when `input` is given (no EPIPE on early exit).
 - `LaneManager.diff` stages HEAD + all worktree changes into a throwaway index (`GIT_INDEX_FILE`) and diffs it
   against the merge-base, so untracked files show up without touching the lane's index.
 - `LaneManager.cleanup` (§9.6) removes worktrees and deletes unpushed branches **only when they carry no commits
@@ -339,7 +341,7 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   excluded; `GenerateMessageInput.commits`) and `laneOutputs` + succeeded direct predecessors; a fixed title or body
   overrides its generated part. Stored as `output {title, body, usage?}` before the gate (the approval dialog reads it).
   Gate unless `requireApproval === false && settings.allowPrWithoutApproval`. Approve → edited title (non-empty)/body
-  override; then `git push -u origin <branch>` from the lane worktree (lane lock; `LaneManager.markPushed`; a relative
+  override; then `git push origin <approved sha>:refs/heads/<branch>` (see review fixes below) from the lane worktree (lane lock; `LaneManager.markPushed`; a relative
   local origin URL such as `../origin.git` is passed as `-c remote.origin.pushurl=<absolute, resolved against the main
   checkout>` unless a pushurl is configured), then
   `<ghBin> pr create --base <base> --head <branch> --title <t> --body-file - [--draft]` (body on stdin,
@@ -353,8 +355,8 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   conflicted files with `<<<<<<<`/`>>>>>>>` lines are unresolved; others are staged (`git add -A -- files`); unmerged
   paths left are unresolved; then `git commit --no-edit` (MERGE_HEAD) or, for squash, a commit with the merge message
   (nothing if already committed). pause: unresolved → keeps waiting with a message naming the files; claude:
-  unresolved → failed. Failure/fail()/cancel abort the merge (`git merge --abort`, squash: `reset --hard HEAD` to the
-  pre-merge checkpoint). Resolved sources → `LaneManager.markMerged`. Output `{sha, conflictedFiles, usage?}`
+  unresolved → failed. Failure/fail()/cancel abort the merge (`reset --hard` to the pre-merge HEAD, see review
+  fixes). Resolved sources → `LaneManager.markMerged`. Output `{sha, conflictedFiles, usage?}`
   (usage = sum of the resolver sessions).
 - `LaneManager` adds `markMerged(lane)` and `markPushed(lane)` (persist + `lane:update`).
 - Approval/diff/pending routes, `getApprovalInfo`/`getDiff` and the `attention` → `Notifier` path for
@@ -378,6 +380,39 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   Done), `maxParallelClaude` 1 vs 3, approval reject in one lane, workspaceSetup failing only in a fork lane, pr reject.
   Opt-in `test/e2e/lanes.real.test.ts` (`PG_REAL_CLAUDE=1`, haiku): the same fan-out with real Claude, merge and a
   generated commit message.
+
+**Implementation notes (M3/M4 review fixes):**
+- Interrupted merges: `checkpointIfDirty` throws while the worktree is mid-merge (`mergeInProgress`: MERGE_HEAD,
+  SQUASH_MSG or unmerged paths), so conflict markers are never committed as a checkpoint (e.g. a pr after a skipped
+  merge fails instead). Before a merge node checkpoints its lane (`Engine.prepareMerge`), `LaneManager.
+  resetInterruptedMerge(lane)` hard-resets a lane left mid-merge (crash while resolving, failed abort) and the engine
+  logs `merge:reset_interrupted`; Retry then re-merges cleanly. `checkpointIfDirty` returns null when `add -A`
+  staged nothing (only a submodule dirty).
+- `MergeAttempt` conflict carries `head` (target HEAD before the merge, after its checkpoint). MergeRunner aborts with
+  `reset --hard <head>` (also drops a commit the resolver made with markers). Conclusion checks the merge really
+  happened: strategy merge → `merge-base --is-ancestor <source> HEAD`; squash → staged changes are committed, a
+  pending squash with nothing staged just drops SQUASH_MSG, otherwise HEAD must have moved. An abandoned merge
+  (`git merge --abort`/reset in the shell or by Claude) fails the node; the source stays unmerged.
+- Squash merges (LaneManager.merge and MergeRunner) carry the trailer `Pg-Squash-Of: <source tip>`
+  (`squashMergeMessage`, `SQUASH_TRAILER`); `squashTarget` treats them as noise when that side holds only
+  checkpoints/merges, so merge(squash) → commit ends in one commit like strategy merge.
+- `RunnerContext.forkPoints`: baseRefs of the lane's child lanes that are still `active` (not merged back);
+  `squashTarget(cwd, baseRef, keep)` never resets below them (shared history would be rewritten and merging the
+  child later would conflict).
+- `LaneManager.createLane` removes a branch/worktree left by an attempt that never got its lane row, and repo-level
+  git writes (worktree add/remove/prune, branch -D) are serialised by a repo lock.
+- `LaneManager.diff(lane, base, {committedOnly?, maxBytes?})`; `Engine.getDiff` for pr nodes diffs
+  `<pr base>`'s merge-base..HEAD, committed only (= what is pushed); pr base everywhere (`ctx.baseBranch`,
+  `getApprovalInfo`, `getDiff`) = non-empty trimmed `config.base`, else `settings.baseBranch`.
+- PR approval is bound to the reviewed commit: `ApprovalRequest.headSha` (the web sends `DiffResponse.head`) is
+  required to approve a pr gate and must equal the lane HEAD (else 409 invalid_state "The branch changed since you
+  loaded the diff…"). PrRunner pushes exactly that sha as `git push origin <sha>:refs/heads/<branch>` (no `-u`; a
+  fully qualified refspec, never the bare branch name); without a gate, the HEAD at push time. The validator
+  rejects a `settings.branchPrefix` that is not a plain ref name (`invalid_config`).
+- Web: the approval dialog derives "still waiting" from the live stores (selected run's node runs, else the pending
+  list), needs the loaded diff to approve a PR, and reloads the gate on a 409. Rejected gates show the rejection
+  once (card note, no error line). "Reopen session" is offered for any node run with a session (merges that used
+  Claude included). diff2html: line numbers anchor to `.d2h-file-wrapper`; code lines use content-box.
 
 ## 8. HTTP & WebSocket
 

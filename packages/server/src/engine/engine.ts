@@ -12,6 +12,7 @@ import {
   type DiffResponse,
   type Graph,
   type GraphNode,
+  type GraphNodeOf,
   type Lane,
   type LanePlan,
   type NodeOutcome,
@@ -344,11 +345,23 @@ export class Engine {
     return updated;
   }
 
+  /**
+   * Approving a pr gate requires `req.headSha` (the reviewed commit, DiffResponse.head) to still be the
+   * lane's HEAD: otherwise invalid_state, so the dialog reloads the diff (what you see is what gets pushed).
+   */
   async submitApproval(nodeRunId: string, req: ApprovalRequest): Promise<NodeRun> {
     const nr = this.requireNodeRun(nodeRunId);
     const controls = this.findExecution(nodeRunId)?.controls;
     if (nr.status !== "waiting_approval" || !controls?.approve) {
-      throw new EngineError("invalid_state", `Node run ${nodeRunId} is not waiting for approval`);
+      throw new EngineError("invalid_state", "This gate is no longer waiting for approval");
+    }
+    const node = this.requireRun(nr.runId).graphSnapshot.nodes.find((n) => n.id === nr.nodeId);
+    const lane = nr.laneId ? this.deps.store.getLane(nr.runId, nr.laneId) : undefined;
+    if (req.approved && node?.type === "pr" && lane) {
+      if (!req.headSha) throw new EngineError("invalid_state", "Approving a pull request requires the reviewed commit (headSha)");
+      if (req.headSha !== (await this.deps.lanes.headSha(lane))) {
+        throw new EngineError("invalid_state", "The branch changed since you loaded the diff: review the new diff before approving");
+      }
     }
     this.deps.store.appendEvent(nr.runId, nr.id, "node.action", { action: "approval", approved: req.approved, comment: req.comment ?? null });
     controls.approve(req);
@@ -373,7 +386,7 @@ export class Engine {
           ? {
               title: nr.output?.title ?? node.config.title ?? "",
               body: nr.output?.body ?? node.config.body ?? "",
-              base: node.config.base ?? graph.settings.baseBranch,
+              base: prBase(node, graph.settings.baseBranch),
               draft: node.config.draft,
             }
           : null,
@@ -385,12 +398,15 @@ export class Engine {
     };
   }
 
+  /** Lane diff; for pr nodes against the PR's base and committed changes only (what the push publishes). */
   async getDiff(nodeRunId: string): Promise<DiffResponse> {
     const nr = this.requireNodeRun(nodeRunId);
-    const run = this.requireRun(nr.runId);
+    const graph = this.requireRun(nr.runId).graphSnapshot;
     const lane = nr.laneId ? this.deps.store.getLane(nr.runId, nr.laneId) : undefined;
     if (!lane) throw new EngineError("invalid_state", "This node has no workspace yet");
-    return this.deps.lanes.diff(lane, run.graphSnapshot.settings.baseBranch);
+    const node = graph.nodes.find((n) => n.id === nr.nodeId);
+    if (node?.type === "pr") return this.deps.lanes.diff(lane, prBase(node, graph.settings.baseBranch), { committedOnly: true });
+    return this.deps.lanes.diff(lane, graph.settings.baseBranch);
   }
 
   async reopenSession(nodeRunId: string): Promise<ReopenResponse> {
@@ -560,7 +576,7 @@ export class Engine {
       await this.deps.lanes.checkpoint(lane, predecessors[0]?.label ?? labelOf(node));
       if (signal.aborted) return { status: "cancelled" };
     }
-    const mergeSources = node.type === "merge" ? await this.prepareMerge(live, node, lane) : [];
+    const mergeSources = node.type === "merge" ? await this.prepareMerge(live, node, nodeRun, lane) : [];
     if (signal.aborted) return { status: "cancelled" };
     const settings = live.graph.settings;
 
@@ -578,7 +594,8 @@ export class Engine {
       laneOutputs: this.laneOutputsOf(live, node.id),
       previousAttempt,
       mergeSources,
-      baseBranch: (node.type === "pr" && node.config.base?.trim()) || settings.baseBranch,
+      forkPoints: this.forkPointsOf(live, lane),
+      baseBranch: node.type === "pr" ? prBase(node, settings.baseBranch) : settings.baseBranch,
       claudeSlot: () => unlessAborted(live.scheduler.acquireClaudeSlot(nodeRun.id), signal),
       signal,
       update: (patch) => this.runnerUpdate(live, nodeRun.id, patch),
@@ -738,14 +755,18 @@ export class Engine {
   /**
    * §9.3/§9.5: checkpoints the merge's own lane and returns the other lanes it merges, in canvas order of
    * its inputs, each checkpointed (labelled after its input node). Lanes reached only through skipped
-   * edges (Phase 2 dead paths) are left out.
+   * edges (Phase 2 dead paths) are left out. A merge left half-done in the lane (crash while resolving
+   * conflicts, failed abort) is reset first, so its conflict markers are never checkpointed.
    */
-  private async prepareMerge(live: LiveRun, node: GraphNode, lane: Lane): Promise<Lane[]> {
+  private async prepareMerge(live: LiveRun, node: GraphNode, nodeRun: NodeRun, lane: Lane): Promise<Lane[]> {
     const inputs = live.topo.incoming.get(node.id) ?? [];
     const inputLabel = (laneId: string): string => {
       const edge = inputs.find((e) => live.plan.edgeLane.get(e.id) === laneId);
       return labelOf(live.nodes.get(edge?.source ?? node.id)!);
     };
+    if (await this.deps.lanes.resetInterruptedMerge(lane)) {
+      this.deps.store.appendEvent(live.runId, nodeRun.id, "merge:reset_interrupted", { laneId: lane.id });
+    }
     await this.deps.lanes.checkpoint(lane, inputLabel(lane.id));
     const sourceIds = (live.plan.mergeSources.get(node.id) ?? []).filter((id) =>
       inputs.some((e) => live.plan.edgeLane.get(e.id) === id && live.tracker.isActivated(e.id)),
@@ -860,21 +881,31 @@ export class Engine {
   }
 
   /**
-   * §6.1: ancestors back to (excluding) the previous commit/merge node, in canvas order, that ran in
-   * this iteration (succeeded or failed): the work a generated commit message describes.
+   * §6.1: ancestors back to (excluding) the previous commit node on each path, in canvas order, that ran
+   * in this iteration (succeeded or failed): the work a generated commit message describes. Merge nodes
+   * commit nothing of the lanes' work, so the walk goes through them into all their inputs (the merge
+   * nodes themselves have no text and are left out).
    */
   private laneOutputsOf(live: LiveRun, nodeId: string): PredecessorOutput[] {
     const seen = new Set<string>();
     const stack = (live.topo.incoming.get(nodeId) ?? []).map((e) => e.source);
     while (stack.length > 0) {
       const id = stack.pop()!;
-      const type = live.nodes.get(id)!.type;
-      if (seen.has(id) || type === "commit" || type === "merge") continue;
+      if (seen.has(id) || live.nodes.get(id)!.type === "commit") continue;
       seen.add(id);
       for (const e of live.topo.incoming.get(id) ?? []) stack.push(e.source);
     }
-    const ids = live.graph.nodes.map((n) => n.id).filter((id) => seen.has(id));
+    const ids = live.graph.nodes.filter((n) => seen.has(n.id) && n.type !== "merge").map((n) => n.id);
     return this.outputsOf(live.topo, live.runId, ids).filter((p) => p.status === "succeeded" || p.status === "failed");
+  }
+
+  /** Commits of `lane` that lanes of the run not merged back yet were forked from (their baseRef). */
+  private forkPointsOf(live: LiveRun, lane: Lane): string[] {
+    const children = new Set(live.plan.lanes.filter((l) => l.parentLaneId === lane.id).map((l) => l.id));
+    return this.deps.store
+      .listLanes(live.runId)
+      .filter((l) => children.has(l.id) && l.status === "active")
+      .map((l) => l.baseRef);
   }
 
   private outputsOf(topo: Topology, runId: string, nodeIds: readonly string[]): PredecessorOutput[] {
@@ -940,6 +971,11 @@ export class Engine {
     if (isFinalRunStatus(run.status)) throw new EngineError("invalid_state", `Run ${id} is already ${run.status}`);
     return run;
   }
+}
+
+/** Branch a pr node targets: non-empty `config.base`, else the graph's base branch. */
+function prBase(node: GraphNodeOf<"pr">, baseBranch: string): string {
+  return node.config.base?.trim() || baseBranch;
 }
 
 /** Approval-dialog text for commit/merge predecessors, which have no text output. */

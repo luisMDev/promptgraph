@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CommitRunner } from "../src/runners/git/commit-runner.js";
-import { checkpointIfDirty, checkpointMessage, squashTarget } from "../src/runners/git/checkpoint.js";
+import { checkpointIfDirty, checkpointMessage, squashMergeMessage, squashTarget } from "../src/runners/git/checkpoint.js";
 import type { PredecessorOutput } from "../src/runners/types.js";
 import { createTempRepo, fakeClaudeEnv, tempDir } from "./helpers.js";
 import { makeCtx, makeLane, makeRun } from "./support/runner-ctx.js";
@@ -80,6 +80,66 @@ describe("checkpoint helpers", () => {
     fs.writeFileSync(path.join(dir, "d"), "4");
     await checkpointIfDirty(dir, "D");
     expect(await squashTarget(dir, base)).toBe(g("rev-parse", "HEAD~1"));
+  });
+});
+
+describe("checkpoint helpers: edge cases", () => {
+  it("a dirty submodule alone checkpoints nothing", async () => {
+    const { dir, g } = repo();
+    const sub = createTempRepo();
+    cleanups.push(sub.cleanup);
+    g("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.repo, "sub");
+    g("commit", "-q", "-m", "add sub");
+    fs.writeFileSync(path.join(dir, "sub", "untracked.txt"), "x");
+    expect(g("status", "--porcelain")).toBe("M sub");
+    expect(await checkpointIfDirty(dir, "Build")).toBeNull();
+    expect(g("log", "-1", "--format=%s")).toBe("add sub");
+  });
+
+  it("refuses to checkpoint a worktree in the middle of a merge", async () => {
+    const { dir, g } = repo();
+    g("checkout", "-q", "-b", "side");
+    fs.writeFileSync(path.join(dir, "README.md"), "theirs\n");
+    g("commit", "-q", "-am", "side");
+    g("checkout", "-q", "main");
+    fs.writeFileSync(path.join(dir, "README.md"), "mine\n");
+    g("commit", "-q", "-am", "main");
+    expect(() => g("merge", "-q", "side")).toThrow();
+    await expect(checkpointIfDirty(dir, "X")).rejects.toThrow(/middle of a merge/);
+    expect(g("log", "-1", "--format=%s")).toBe("main");
+  });
+
+  it("squashTarget treats promptgraph squash merges of checkpoint-only lanes as noise", async () => {
+    const { dir, g, base } = repo();
+    const squashSide = async (file: string, real: boolean) => {
+      g("checkout", "-q", "-b", file, base);
+      fs.writeFileSync(path.join(dir, file), file);
+      if (real) {
+        g("add", "-A");
+        g("commit", "-q", "-m", `feat: ${file}`);
+      } else await checkpointIfDirty(dir, file);
+      const tip = g("rev-parse", "HEAD");
+      g("checkout", "-q", "main");
+      g("merge", "-q", "--squash", file);
+      g("commit", "-q", "-m", squashMergeMessage(`Merge branch '${file}' into main`, tip));
+    };
+    fs.writeFileSync(path.join(dir, "a"), "1");
+    await checkpointIfDirty(dir, "A");
+    await squashSide("b", false);
+    expect(await squashTarget(dir, base)).toBe(base);
+    await squashSide("c", true);
+    expect(await squashTarget(dir, base)).toBeNull();
+  });
+
+  it("squashTarget never goes below a fork point", async () => {
+    const { dir, g, base } = repo();
+    fs.writeFileSync(path.join(dir, "a"), "1");
+    const fork = (await checkpointIfDirty(dir, "A"))!;
+    fs.writeFileSync(path.join(dir, "b"), "2");
+    await checkpointIfDirty(dir, "B");
+    expect(await squashTarget(dir, base)).toBe(base);
+    expect(await squashTarget(dir, base, [fork])).toBe(fork);
+    expect(await squashTarget(dir, base, [g("rev-parse", "HEAD")])).toBeNull();
   });
 });
 

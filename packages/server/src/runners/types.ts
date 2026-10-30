@@ -34,8 +34,8 @@ export interface RunnerContext {
   /** Direct predecessors, in canvas order. */
   predecessors: PredecessorOutput[];
   /**
-   * §6.1: nodes since the last commit/merge on the path to this node (canvas order) that ran; the
-   * input of generated commit messages.
+   * §6.1: nodes since the last commit on the paths to this node, through merges (canvas order, merge
+   * nodes left out) that ran; the input of generated commit/PR messages.
    */
   laneOutputs: PredecessorOutput[];
   /** Latest earlier attempt of this node (retry); for Claude nodes interrupted → resume its session. */
@@ -45,6 +45,12 @@ export interface RunnerContext {
    * sequential pairwise). Already checkpointed by the engine, as is `lane`. Empty for other node types.
    */
   mergeSources: Lane[];
+  /**
+   * Commits of `lane` that other lanes of the run forked from and that are not merged yet (their
+   * baseRef): squashCheckpoints never rewrites history below them, or merging those lanes back later
+   * would duplicate it and conflict.
+   */
+  forkPoints: string[];
   /** Branch a pr targets (non-empty `config.base`, else `settings.baseBranch`); `settings.baseBranch` for other nodes. */
   baseBranch: string;
   /**

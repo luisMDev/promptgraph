@@ -119,6 +119,17 @@ body {
   z-index: 1;
 }
 
+/* diff2html positions line numbers absolutely: anchor them to their file so they scroll and clip with the code. */
+.pg-diff .d2h-file-wrapper {
+  position: relative;
+}
+
+/* diff2html sizes code lines as content-box (width + padding = 100%); Tailwind's border-box cut them short. */
+.pg-diff .d2h-code-line,
+.pg-diff .d2h-code-side-line {
+  box-sizing: content-box;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

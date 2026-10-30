@@ -1,6 +1,6 @@
 import type { ApprovalInfoResponse, DiffResponse } from "@promptgraph/shared";
-import { useEffect, useState } from "react";
-import { api, errorMessage } from "../../api/rest";
+import { useCallback, useEffect, useState } from "react";
+import { api, ApiRequestError, errorMessage } from "../../api/rest";
 import { useAppStore } from "../../store/app-store";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
@@ -11,7 +11,9 @@ import { DiffView } from "./DiffView";
 /**
  * Approval gate (§10) for approval and pr nodes: message, predecessor outputs, lane diff vs base, editable
  * PR title/body, Approve / Reject with an optional comment. Opened from a violet node or the header's
- * pending list (any run of the repo). Loaded lazily (with diff2html) by App.
+ * pending list (any run of the repo). Whether the gate still waits follows the live stores; approving a PR
+ * sends the reviewed commit (diff.head), and a refused decision (409) reloads the gate. Loaded lazily
+ * (with diff2html) by App.
  */
 export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
   const close = () => useUiStore.getState().openApproval(null);
@@ -24,27 +26,39 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const context = useGateContext(info);
+  const waiting = useStillWaiting(info);
+
+  /** Loads the gate; `keepEdits` (a reload after a refused decision) keeps the edited title/body. */
+  const load = useCallback(
+    (isCancelled: () => boolean, keepEdits: boolean) =>
+      api
+        .approvalInfo(nodeRunId)
+        .then((res) => {
+          if (isCancelled()) return;
+          setInfo(res);
+          if (!keepEdits) {
+            setTitle(res.pr?.title ?? "");
+            setBody(res.pr?.body ?? "");
+          }
+          if (!res.showDiff) return;
+          setDiff(null);
+          setDiffError(null);
+          api.diff(nodeRunId).then(
+            (d) => !isCancelled() && setDiff(d),
+            (err: unknown) => !isCancelled() && setDiffError(errorMessage(err)),
+          );
+        })
+        .catch((err: unknown) => !isCancelled() && setError(errorMessage(err))),
+    [nodeRunId],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .approvalInfo(nodeRunId)
-      .then((res) => {
-        if (cancelled) return;
-        setInfo(res);
-        setTitle(res.pr?.title ?? "");
-        setBody(res.pr?.body ?? "");
-        if (!res.showDiff) return;
-        api.diff(nodeRunId).then(
-          (d) => !cancelled && setDiff(d),
-          (err: unknown) => !cancelled && setDiffError(errorMessage(err)),
-        );
-      })
-      .catch((err: unknown) => !cancelled && setError(errorMessage(err)));
+    void load(() => cancelled, false);
     return () => {
       cancelled = true;
     };
-  }, [nodeRunId]);
+  }, [load]);
 
   const submit = async (approved: boolean) => {
     setBusy(true);
@@ -53,19 +67,23 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
       const { nodeRun } = await api.submitApproval(nodeRunId, {
         approved,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
-        ...(info?.pr ? { title, body } : {}),
+        ...(info?.pr ? { title, body, ...(diff ? { headSha: diff.head } : {}) } : {}),
       });
       useRunStore.getState().applyNodeUpdate(nodeRun);
       void useAppStore.getState().refreshPending();
       close();
     } catch (err) {
       setError(errorMessage(err));
+      // The gate moved on, or the PR branch changed: show its current state.
+      if (err instanceof ApiRequestError && err.status === 409) void load(() => false, true);
     } finally {
       setBusy(false);
     }
   };
 
-  const pending = info?.nodeRun.status === "waiting_approval";
+  const pending = info?.nodeRun.status === "waiting_approval" && waiting;
+  // Approving a PR pushes exactly the reviewed commit, so it needs the loaded diff.
+  const canApprove = pending && (!info?.pr || !!diff);
   const isPr = !!info?.pr;
   const outputs = info?.predecessorOutputs.filter((p) => p.text.trim()) ?? [];
 
@@ -87,7 +105,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
           <Button variant="danger" disabled={!pending || busy} onClick={() => void submit(false)}>
             Reject
           </Button>
-          <Button variant="primary" disabled={!pending || busy} onClick={() => void submit(true)}>
+          <Button variant="primary" disabled={!canApprove || busy} onClick={() => void submit(true)}>
             {isPr ? "Approve & push" : "Approve"}
           </Button>
         </>
@@ -136,6 +154,19 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
       )}
     </Modal>
   );
+}
+
+/**
+ * Whether the gate still waits for approval, live: the shown run's node runs when it belongs to that run,
+ * else the repo's pending list (both follow WS updates). True until `info` is loaded.
+ */
+function useStillWaiting(info: ApprovalInfoResponse | null): boolean {
+  const id = info?.nodeRun.id;
+  const runId = info?.nodeRun.runId;
+  const fromDetail = useRunStore((s) => (s.detail && s.detail.run.id === runId ? s.detail.nodeRuns.find((n) => n.id === id)?.status : undefined));
+  const inPending = useAppStore((s) => s.pending.some((n) => n.id === id));
+  if (!info) return true;
+  return fromDetail ? fromDetail === "waiting_approval" : inPending;
 }
 
 /** "Node label · graph · run #id" from the shown run or the pending list's run info. */

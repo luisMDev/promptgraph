@@ -51,7 +51,12 @@ describe("e2e: approval, pr and merge nodes", () => {
     const pr = await s.waitForNode(runId, "pr", ["waiting_approval"]);
     const prInfo = await s.api<ApprovalInfoResponse>("GET", `/api/node-runs/${pr.id}/approval`);
     expect(prInfo.pr).toEqual({ title: "fake title", body: "fake body", base: "main", draft: true });
-    await s.api("POST", `/api/node-runs/${pr.id}/approval`, { approved: true, title: "Ship notes", body: "Adds notes." });
+    // The pr diff is what gets pushed: the checkpointed commit.
+    const prDiff = await s.api<DiffResponse>("GET", `/api/node-runs/${pr.id}/diff`);
+    expect(prDiff.files.map((f) => f.path)).toEqual(["notes.txt"]);
+    const stale = await s.request("POST", `/api/node-runs/${pr.id}/approval`, { approved: true, headSha: prDiff.base });
+    expect(stale.status).toBe(409);
+    await s.api("POST", `/api/node-runs/${pr.id}/approval`, { approved: true, title: "Ship notes", body: "Adds notes.", headSha: prDiff.head });
 
     const done = await s.waitForRun(runId, ["succeeded", "failed", "paused"], 30_000);
     expect(done.run.status).toBe("succeeded");
@@ -62,6 +67,7 @@ describe("e2e: approval, pr and merge nodes", () => {
     const lane = done.lanes[0]!;
     expect(lane.pushed).toBe(true);
     expect(gitIn(origin, "show", `${lane.branch}:notes.txt`)).toBe("shipped");
+    expect(gitIn(origin, "rev-parse", lane.branch)).toBe(prDiff.head);
     const call = JSON.parse(fs.readFileSync(ghLog, "utf8").trim()) as { argv: string[]; stdin: string };
     expect(call.argv).toEqual(["pr", "create", "--base", "main", "--head", lane.branch, "--title", "Ship notes", "--body-file", "-", "--draft"]);
     expect(call.stdin).toBe("Adds notes.");

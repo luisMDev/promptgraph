@@ -117,11 +117,19 @@ class FakeLanes {
     this.calls.push(`checkpoint:${lane.id}:${afterLabel}`);
     return null;
   }
-  async headSha(lane: Lane): Promise<string> {
-    return `head-${lane.id}-${++this.heads}`;
+  /** resetInterruptedMerge reports these lanes as left mid-merge (once). */
+  readonly midMerge = new Set<string>();
+  /** headSha of these lanes (instead of a new sha per call). */
+  readonly heads_ = new Map<string, string>();
+  async resetInterruptedMerge(lane: Lane): Promise<boolean> {
+    this.calls.push(`reset-merge:${lane.id}`);
+    return this.midMerge.delete(lane.id);
   }
-  async diff(lane: Lane, base: string) {
-    this.calls.push(`diff:${lane.id}:${base}`);
+  async headSha(lane: Lane): Promise<string> {
+    return this.heads_.get(lane.id) ?? `head-${lane.id}-${++this.heads}`;
+  }
+  async diff(lane: Lane, base: string, opts: { committedOnly?: boolean } = {}) {
+    this.calls.push(`diff:${lane.id}:${base}${opts.committedOnly ? ":committed" : ""}`);
     return { base, head: "h", files: [], patch: "", truncated: false };
   }
   async cleanup(runId: string, opts: { keep: string; failed: boolean; force?: boolean }): Promise<void> {
@@ -317,6 +325,26 @@ describe("Engine.startRun", () => {
     await waitRun(s, run.id, "succeeded");
     expect(runner.last("c2")!.ctx.laneOutputs.map((p) => p.nodeId)).toEqual(["b"]);
   });
+
+  it("collects commit-message context through merges into every merged lane (§6.1)", async () => {
+    const runner = new FakeRunner();
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a", x: 0 },
+          { id: "b", x: 200, y: 0 },
+          { id: "c", x: 200, y: 100 },
+          { id: "m", type: "merge", x: 400 },
+          { id: "commit", type: "commit", x: 600 },
+        ],
+        [["a", "b"], ["a", "c"], ["b", "m"], ["c", "m"], ["m", "commit"]],
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "succeeded");
+    expect(runner.last("commit")!.ctx.laneOutputs.map((p) => p.nodeId)).toEqual(["a", "b", "c"]);
+  });
 });
 
 describe("Engine DAG scheduling", () => {
@@ -464,6 +492,43 @@ describe("Engine lanes (§9)", () => {
     expect(runner.last("m")!.ctx.mergeSources.map((l) => l.id)).toEqual(["l2"]);
   });
 
+  it("resets a lane left mid-merge before a merge node checkpoints it", async () => {
+    const runner = new FakeRunner();
+    const s = setup(allTypes(runner));
+    s.graphs.save(makeGraph([{ id: "a", x: 0, y: 0 }, { id: "b", x: 0, y: 100 }, { id: "m", type: "merge", x: 200 }], [["a", "m"], ["b", "m"]]));
+    s.lanes.midMerge.add("main");
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "succeeded");
+    const calls = s.lanes.calls.filter((c) => /^(reset-merge|checkpoint):main/.test(c));
+    expect(calls).toEqual(["reset-merge:main", "checkpoint:main:A"]);
+    const m = s.store.listNodeRuns(run.id).find((n) => n.nodeId === "m")!;
+    expect(s.store.listEvents(run.id).filter((e) => e.nodeRunId === m.id).map((e) => e.type)).toContain("merge:reset_interrupted");
+  });
+
+  it("passes the fork points of lanes not merged yet to the runners", async () => {
+    const runner = new FakeRunner((e) => {
+      if (e.ctx.node.id !== "c") queueMicrotask(() => e.succeed());
+    });
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a", x: 0 },
+          { id: "b", type: "commit", x: 200, y: 0 },
+          { id: "c", x: 200, y: 100 },
+        ],
+        [["a", "b"], ["a", "c"]],
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => runner.last("b") && runner.last("c"));
+    const l2 = s.store.getLane(run.id, "l2")!;
+    expect(runner.last("b")!.ctx.forkPoints).toEqual([l2.baseRef]);
+    expect(runner.last("c")!.ctx.forkPoints).toEqual([]);
+    runner.last("c")!.succeed();
+    await waitRun(s, run.id, "succeeded");
+  });
+
   it("gives pr runners their base branch", async () => {
     const runner = new FakeRunner();
     const s = setup(allTypes(runner));
@@ -472,7 +537,7 @@ describe("Engine lanes (§9)", () => {
         [
           { id: "a" },
           { id: "p", type: "pr", config: { base: "release" } },
-          { id: "q", type: "pr", x: 400, y: 100 },
+          { id: "q", type: "pr", x: 400, y: 100, config: { base: "  " } },
         ],
         [["a", "p"], ["a", "q"]],
         { baseBranch: "develop" },
@@ -483,6 +548,13 @@ describe("Engine lanes (§9)", () => {
     expect(runner.last("a")!.ctx.baseBranch).toBe("develop");
     expect(runner.last("p")!.ctx.baseBranch).toBe("release");
     expect(runner.last("q")!.ctx).toMatchObject({ baseBranch: "develop", lane: { id: "l2" } });
+    // The approval dialog shows the same base, and the diff of what the push publishes against it.
+    const [p, q] = [runner.last("p")!.ctx.nodeRun.id, runner.last("q")!.ctx.nodeRun.id];
+    expect((await s.engine.getApprovalInfo(p)).pr?.base).toBe("release");
+    expect((await s.engine.getApprovalInfo(q)).pr?.base).toBe("develop");
+    await s.engine.getDiff(p);
+    await s.engine.getDiff(q);
+    expect(s.lanes.calls.filter((c) => c.startsWith("diff:"))).toEqual(["diff:main:release:committed", "diff:l2:develop:committed"]);
   });
 
   it("merge nodes take a Claude slot under maxParallelClaude before resolving with Claude", async () => {
@@ -715,14 +787,25 @@ describe("Engine failure handling and manual controls", () => {
 
     const info = await s.engine.getApprovalInfo(p.id);
     expect(info.pr).toEqual({ title: "Gen title", body: "Gen body", base: "main", draft: true });
+    // Approving a pr binds it to the reviewed commit.
+    s.lanes.heads_.set("main", "sha-reviewed");
+    await expect(s.engine.submitApproval(p.id, { approved: true })).rejects.toMatchObject({ code: "invalid_state", message: expect.stringContaining("headSha") });
+    await expect(s.engine.submitApproval(p.id, { approved: true, headSha: "sha-old" })).rejects.toMatchObject({
+      code: "invalid_state",
+      message: expect.stringContaining("changed since"),
+    });
     expect(info.predecessorOutputs).toEqual([{ nodeId: "a", label: "A", text: "implemented" }]);
     await expect(s.engine.getApprovalInfo(runner.last("a")!.ctx.nodeRun.id)).rejects.toMatchObject({ code: "invalid_state" });
 
     await expect(s.engine.getDiff(p.id)).resolves.toMatchObject({ base: "main" });
+    expect(s.lanes.calls).toContain("diff:main:main:committed");
+    await s.engine.getDiff(runner.last("a")!.ctx.nodeRun.id);
     expect(s.lanes.calls).toContain("diff:main:main");
 
     const a = runner.last("a")!.ctx.nodeRun;
     await expect(s.engine.reopenSession(a.id)).rejects.toMatchObject({ code: "invalid_state" });
+    await s.engine.submitApproval(p.id, { approved: true, headSha: "sha-reviewed" });
+    expect(runner.last("p")!.calls).toEqual(["approve:true"]);
     s.store.updateNodeRun(a.id, { sessionId: "sess-1" });
     await expect(s.engine.reopenSession(a.id)).resolves.toEqual({ ptyId: "reopen-x" });
     expect(s.claude.reopen).toHaveBeenCalledWith(expect.objectContaining({ id: run.id }), expect.objectContaining({ id: a.id }), expect.objectContaining({ id: "main" }), s.graphs.repoPath);

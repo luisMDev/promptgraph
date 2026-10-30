@@ -142,6 +142,11 @@ export const ApprovalRequestSchema = z.object({
   /** pr nodes: edited title/body to use. */
   title: z.string().optional(),
   body: z.string().optional(),
+  /**
+   * pr nodes: the reviewed commit (`DiffResponse.head`), required to approve. The server refuses the
+   * approval when the lane moved since, and pushes exactly this commit.
+   */
+  headSha: z.string().optional(),
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
@@ -167,7 +172,10 @@ export const DiffFileSchema = z.object({
 });
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 
-/** GET /api/node-runs/:id/diff — lane diff vs base branch (merge-base), including uncommitted changes. */
+/**
+ * GET /api/node-runs/:id/diff — lane diff vs base branch (merge-base), including uncommitted changes;
+ * pr nodes: vs the PR's base, committed changes only (what gets pushed: `head`).
+ */
 export const DiffResponseSchema = z.object({
   base: z.string(),
   head: z.string(),

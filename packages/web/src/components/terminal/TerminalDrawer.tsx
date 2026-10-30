@@ -1,4 +1,3 @@
-import { isClaudeNode } from "@promptgraph/shared";
 import { Suspense, lazy, useCallback, useRef, useState, type PointerEvent } from "react";
 import { closeTerminalTab, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
@@ -104,8 +103,8 @@ export function TerminalDrawer() {
 
 function TabStatus({ state, nodeRunId, title }: { state: PtyState | undefined; nodeRunId: string | null; title: string }) {
   const nodeRun = useRunStore((s) => (nodeRunId ? s.detail?.nodeRuns.find((n) => n.id === nodeRunId) : undefined));
-  const node = useRunStore((s) => (nodeRun ? s.detail?.run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId) : undefined));
-  const canReopen = state?.phase !== "live" && !!nodeRun?.sessionId && !!node && isClaudeNode(node);
+  // Any node with a Claude session, merges that resolved conflicts with Claude included.
+  const canReopen = state?.phase !== "live" && !!nodeRun?.sessionId;
   return (
     <div className="flex shrink-0 items-center gap-2 pl-2 text-[11px]">
       {state?.phase === "live" && <span className="text-green-400">Live — you can type</span>}

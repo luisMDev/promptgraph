@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { GraphNodeOf, NodeRunOutput } from "@promptgraph/shared";
 import { childEnv, ghBin } from "../../config/child-env.js";
-import { git } from "../../git/exec.js";
+import { git, gitOk } from "../../git/exec.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
 import { ApprovalGate, approvalOutput, Interruption, rejectionError } from "../approval-runner.js";
 import type { NodeExecution, PredecessorOutput, Runner, RunnerContext, RunnerResult } from "../types.js";
@@ -30,8 +30,10 @@ interface Proposal {
  * generateMessage("pr") from `git diff --stat <base>...HEAD`, the lane's commit subjects and the lane
  * outputs + direct predecessors; stored in output {title, body} (the approval dialog reads them).
  * requireApproval (forced unless settings.allowPrWithoutApproval) → waiting_approval until approve()
- * (edited title/body override; reject → failed). Then `git push -u origin <branch>` (lane marked pushed)
- * and `<PG_GH_BIN|gh> pr create --base <base> --head <branch> --title <t> --body-file - [--draft]`.
+ * (edited title/body override; reject → failed). Then `git push origin <sha>:refs/heads/<branch>` of
+ * exactly the approved commit (approve().headSha, checked against the lane HEAD by the engine; without
+ * approval the HEAD at push time), the lane marked pushed, and
+ * `<PG_GH_BIN|gh> pr create --base <base> --head <branch> --title <t> --body-file - [--draft]`.
  * Output {prUrl, title, body, approved?, comment?, usage?}. Push/gh errors → failed with stderr.
  */
 export class PrRunner implements Runner {
@@ -81,20 +83,28 @@ export class PrRunner implements Runner {
       ctx.update({ output: record({ title, body, ...(proposal.usage ? { usage: proposal.usage } : {}) }) });
       checkStop();
 
+      let approvedSha: string | null = null;
       if (node.config.requireApproval || !settings.allowPrWithoutApproval) {
         ctx.update({ status: "waiting_approval" });
         const req = await gate.decision;
         checkStop();
         if (!req) return { status: "cancelled" };
         if (!req.approved) return { status: "failed", error: rejectionError("Pull request", req), output: record(approvalOutput(req)) };
+        if (!req.headSha) throw new Error("The approval does not name the reviewed commit");
+        approvedSha = req.headSha;
         title = req.title?.trim() || title;
         body = req.body ?? body;
         ctx.update({ status: "running", output: record({ ...approvalOutput(req), title, body }) });
       }
 
+      const cwd = ctx.lane.worktreePath;
       const branch = ctx.lane.branch;
-      const pushArgs = [...(await relativeOriginOverride(ctx.lane.worktreePath, ctx.run.repoPath)), "push", "-u", "origin", branch];
-      const push = await this.deps.lanes.withLaneLock(ctx.lane, () => git(ctx.lane.worktreePath, pushArgs));
+      const override = await relativeOriginOverride(cwd, ctx.run.repoPath);
+      // A fully qualified refspec: the branch name is never parsed as a refspec ("+x" would force-push).
+      const push = await this.deps.lanes.withLaneLock(ctx.lane, async () => {
+        const sha = approvedSha ?? (await gitOk(cwd, ["rev-parse", "HEAD"]));
+        return git(cwd, [...override, "push", "origin", `${sha}:refs/heads/${branch}`]);
+      });
       if (push.code !== 0) throw new Error(`git push failed: ${(push.stderr || push.stdout).trim()}`);
       this.deps.lanes.markPushed(ctx.lane);
       ctx.event("pr:pushed", { branch });

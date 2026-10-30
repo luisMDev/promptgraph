@@ -4,10 +4,13 @@ import { PromptNodeSchema, sumUsage, type GraphNodeOf, type Lane, type NodeRunOu
 import { childEnv } from "../../config/child-env.js";
 import { ptyLogPath, type PgPaths } from "../../config/paths.js";
 import { git, gitOk } from "../../git/exec.js";
+import { gitPath, hasMergeHead, hasPendingSquash, unmergedFiles } from "../../git/merge-state.js";
+import { revParse } from "../../git/repo.js";
 import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
 import { Interruption } from "../approval-runner.js";
 import type { NodeControls, NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
+import { squashMergeMessage } from "./checkpoint.js";
 
 /** Prompt given to Claude on conflict (§9.5). */
 export function conflictPrompt(files: string[]): string {
@@ -24,7 +27,7 @@ const CONFLICT_MARKER = /^(<{7}|>{7})( |$)/m;
 const SHELL_KILL_WAIT_MS = 2000;
 
 export interface MergeRunnerDeps {
-  lanes: Pick<LaneManager, "merge" | "abortMerge" | "markMerged" | "withLaneLock">;
+  lanes: Pick<LaneManager, "merge" | "markMerged" | "withLaneLock">;
   ptys: PtyManager;
   /** Resolves conflicts with onConflict "claude" (the ClaudeRunner). */
   claude: Runner;
@@ -43,9 +46,12 @@ export interface MergeRunnerDeps {
  * - onConflict "pause": waiting_input {kind:"merge_conflict"} with an interactive shell (`shell-<nodeRunId>`)
  *   in the worktree until done(); a Done with conflicts left keeps waiting (message names the files).
  * Resolution is verified (no conflict markers in the conflicted files; they are staged; no unmerged paths
- * remain) and committed (`git commit --no-edit`, squash: the merge message), and the source lane is
- * marked merged. Claude failing / unresolved conflicts / fail() / cancel abort the merge (the lane is
- * left as before it, ready for a retry). Output {sha, conflictedFiles, usage?}.
+ * remain) and committed (`git commit --no-edit`, squash: the merge message + SQUASH_TRAILER); a merge that
+ * was abandoned meanwhile (`git merge --abort`/`reset` in the shell or by Claude: the source is not an
+ * ancestor of HEAD, or the squash is gone without a commit) fails the node. Then the source lane is
+ * marked merged. Claude failing / unresolved conflicts / abandoned merge / fail() / cancel abort the merge
+ * (hard reset to the pre-merge HEAD, so the lane is as before it, ready for a retry).
+ * Output {sha, conflictedFiles, usage?}.
  */
 export class MergeRunner implements Runner {
   constructor(private readonly deps: MergeRunnerDeps) {}
@@ -104,7 +110,7 @@ class MergeExecution {
       this.ctx.event("merge:attempt", { source: source.id, branch: source.branch, ...attempt });
       if (attempt.status === "conflict") {
         attempt.files.forEach((f) => this.conflicted.add(f));
-        await this.resolveConflict(source, attempt.files);
+        await this.resolveConflict(source, attempt.files, attempt.head);
       }
     }
     const sha = await gitOk(target.worktreePath, ["rev-parse", "HEAD"]);
@@ -115,19 +121,20 @@ class MergeExecution {
     return (this.ctx.node as GraphNodeOf<"merge">).config;
   }
 
-  private async resolveConflict(source: Lane, files: string[]): Promise<void> {
+  /** `head`: the target's HEAD before the merge, restored when the merge is aborted. */
+  private async resolveConflict(source: Lane, files: string[], head: string): Promise<void> {
     try {
       if (this.config().onConflict === "claude") {
         await this.resolveWithClaude(files);
-        const unresolved = await this.deps.lanes.withLaneLock(this.ctx.lane, () => this.conclude(files, mergeMessage(source, this.ctx.lane)));
+        const unresolved = await this.deps.lanes.withLaneLock(this.ctx.lane, () => this.conclude(source, files, head));
         if (unresolved.length > 0) throw new Error(`Unresolved merge conflicts remain in: ${unresolved.join(", ")}`);
       } else {
-        await this.resolveManually(source, files);
+        await this.resolveManually(source, files, head);
       }
       this.deps.lanes.markMerged(source);
       this.ctx.event("merge:resolved", { source: source.id, files });
     } catch (err) {
-      await this.abortMerge();
+      await this.abortMerge(head);
       throw err;
     }
   }
@@ -165,14 +172,14 @@ class MergeExecution {
   }
 
   /** Shell in the worktree; each Done verifies and commits, or keeps waiting with the files left. */
-  private async resolveManually(source: Lane, files: string[]): Promise<void> {
+  private async resolveManually(source: Lane, files: string[], head: string): Promise<void> {
     const shell = this.openShell();
     try {
       let message = `Resolve the merge conflicts in: ${files.join(", ")}. Stage the files, then click Done.`;
       for (;;) {
         this.ctx.update({ status: "waiting_input", ptyId: shell.id, waitingReason: { kind: "merge_conflict", message } });
         await this.waitForDone();
-        const unresolved = await this.deps.lanes.withLaneLock(this.ctx.lane, () => this.conclude(files, mergeMessage(source, this.ctx.lane)));
+        const unresolved = await this.deps.lanes.withLaneLock(this.ctx.lane, () => this.conclude(source, files, head));
         if (unresolved.length === 0) break;
         message = `Unresolved merge conflicts remain in: ${unresolved.join(", ")}. Resolve and stage them, then click Done.`;
         this.ctx.event("merge:unresolved", { files: unresolved });
@@ -215,30 +222,39 @@ class MergeExecution {
   /**
    * Under the lane lock: conflicted files still holding markers are unresolved; the others are staged
    * (`git add -A -- <files>`, deletions included). Then commits the merge — `--no-edit` while MERGE_HEAD
-   * exists, the merge message for a squash with staged changes, nothing when it was already committed.
-   * Returns the unresolved files (nothing is committed then).
+   * exists; squash: the merge message when changes are staged — and checks it really happened.
+   * Returns the unresolved files (nothing is committed then). @throws when the merge was abandoned.
    */
-  private async conclude(files: string[], squashMessage: string): Promise<string[]> {
+  private async conclude(source: Lane, files: string[], head: string): Promise<string[]> {
     const cwd = this.ctx.lane.worktreePath;
     const withMarkers = files.filter((f) => hasConflictMarkers(path.join(cwd, f)));
     if (withMarkers.length > 0) return withMarkers;
     await gitOk(cwd, ["add", "-A", "--", ...files]);
     const unmerged = await unmergedFiles(cwd);
     if (unmerged.length > 0) return unmerged;
-    if ((await git(cwd, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).code === 0) {
-      await gitOk(cwd, ["commit", "-q", "--no-edit", "--no-verify"]);
-    } else if ((await git(cwd, ["diff", "--cached", "--quiet"])).code !== 0) {
-      await gitOk(cwd, ["commit", "-q", "--no-verify", "-F", "-"], { input: `${squashMessage}\n` });
+    const abandoned = new Error(`The merge of ${source.branch} was abandoned before it was committed (git merge --abort or reset?)`);
+    if (this.config().strategy === "squash") {
+      if ((await git(cwd, ["diff", "--cached", "--quiet"])).code !== 0) {
+        const message = squashMergeMessage(mergeMessage(source, this.ctx.lane), await revParse(cwd, source.branch));
+        await gitOk(cwd, ["commit", "-q", "--no-verify", "-m", message]);
+      } else if (await hasPendingSquash(cwd)) {
+        // Resolved to no change at all: nothing to commit, but the squash must not stay pending.
+        fs.rmSync(await gitPath(cwd, "SQUASH_MSG"), { force: true });
+      } else if ((await revParse(cwd, "HEAD")) === head) {
+        throw abandoned;
+      }
+      return [];
     }
+    if (await hasMergeHead(cwd)) await gitOk(cwd, ["commit", "-q", "--no-edit", "--no-verify"]);
+    if ((await git(cwd, ["merge-base", "--is-ancestor", source.branch, "HEAD"])).code !== 0) throw abandoned;
     return [];
   }
 
-  /** `git merge --abort`, or (squash: no MERGE_HEAD) a hard reset to the pre-merge HEAD. */
-  private async abortMerge(): Promise<void> {
+  /** Hard reset to the pre-merge HEAD: drops MERGE_HEAD/SQUASH_MSG and anything committed since. */
+  private async abortMerge(head: string): Promise<void> {
     const cwd = this.ctx.lane.worktreePath;
     try {
-      if ((await git(cwd, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).code === 0) await this.deps.lanes.abortMerge(this.ctx.lane);
-      else await this.deps.lanes.withLaneLock(this.ctx.lane, () => gitOk(cwd, ["reset", "-q", "--hard", "HEAD"]));
+      await this.deps.lanes.withLaneLock(this.ctx.lane, () => gitOk(cwd, ["reset", "-q", "--hard", head]));
     } catch (err) {
       this.ctx.event("merge:abort_failed", { error: err instanceof Error ? err.message : String(err) });
     }
@@ -262,11 +278,6 @@ function hasConflictMarkers(file: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function unmergedFiles(cwd: string): Promise<string[]> {
-  const out = await gitOk(cwd, ["diff", "--name-only", "--diff-filter=U"]);
-  return out.split("\n").filter(Boolean);
 }
 
 /** Interactive shells ignore SIGTERM: SIGHUP (terminal closed), then SIGKILL. */

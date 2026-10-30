@@ -14,8 +14,9 @@ import {
 import type { EventBus } from "../events/bus.js";
 import { worktreePath, type PgPaths } from "../config/paths.js";
 import { git, gitOk } from "../git/exec.js";
+import { gitPath, mergeInProgress, unmergedFiles } from "../git/merge-state.js";
 import { revParse } from "../git/repo.js";
-import { checkpointIfDirty } from "../runners/git/checkpoint.js";
+import { checkpointIfDirty, squashMergeMessage } from "../runners/git/checkpoint.js";
 import type { Store } from "../store/store.js";
 
 export interface RepoRef {
@@ -34,14 +35,22 @@ export interface LaneManagerDeps {
 
 export type MergeAttempt =
   | { status: "merged"; sha: string }
-  /** Merge stopped with conflicts; the lane worktree is mid-merge (MERGE_HEAD present). */
-  | { status: "conflict"; files: string[] };
+  /**
+   * Merge stopped with conflicts; the lane worktree is mid-merge (MERGE_HEAD, or SQUASH_MSG for a squash).
+   * `head`: the target's HEAD before the merge (after its checkpoint), to reset to on abort.
+   */
+  | { status: "conflict"; files: string[]; head: string };
 
 const DEFAULT_DIFF_MAX_BYTES = 1024 * 1024;
 
+/** Lock key of repo-level git writes (worktree add/remove/prune, branch -D). */
+const REPO_LOCK = { runId: "", id: "repo" };
+
 /**
  * Git worktree lanes (§9). Every git write on a lane goes through `withLaneLock` so there is at most
- * one git write per lane at a time (§8.4). Persists lanes in the store and emits `lane:update`.
+ * one git write per lane at a time (§8.4); repo-level writes (worktrees, branch deletion) are serialised
+ * too, since concurrent `git worktree add` in one repo can fail. Persists lanes in the store and emits
+ * `lane:update`.
  */
 export class LaneManager {
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -56,7 +65,8 @@ export class LaneManager {
   /**
    * `git worktree add -b <branch> <path> <fromRef>`; persists the lane (status active) with
    * baseRef = resolved sha of fromRef. fromRef: baseBranch for roots, parent lane head (after
-   * checkpoint) for forks.
+   * checkpoint) for forks. Idempotent: a branch/worktree left by an earlier attempt that never got its
+   * lane row (failed `worktree add`, crash before the insert) is removed first.
    */
   async createLane(run: Run, planned: PlannedLane, fromRef: string): Promise<Lane> {
     const { repo, paths, store } = this.deps;
@@ -64,7 +74,10 @@ export class LaneManager {
     const branch = this.branchName(run, planned.id);
     const dir = worktreePath(paths, repo.name, run.id, planned.id);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    await gitOk(repo.path, ["worktree", "add", "-q", "-b", branch, dir, baseRef]);
+    await this.withLaneLock(REPO_LOCK, async () => {
+      await removeLeftovers(repo.path, branch, dir);
+      await gitOk(repo.path, ["worktree", "add", "-q", "-b", branch, dir, baseRef]);
+    });
     const lane = store.insertLane({ id: planned.id, runId: run.id, index: planned.index, branch, worktreePath: dir, baseRef });
     this.deps.bus.emit("lane:update", { lane });
     return lane;
@@ -75,16 +88,41 @@ export class LaneManager {
     return this.withLaneLock(lane, () => checkpointIfDirty(lane.worktreePath, afterLabel));
   }
 
+  /**
+   * A lane left mid-merge (crash or failed abort while a merge node resolved conflicts) is reset to its
+   * HEAD, which drops the half-done merge. Returns whether it was. Run before a merge node (re)starts.
+   */
+  resetInterruptedMerge(lane: Lane): Promise<boolean> {
+    return this.withLaneLock(lane, async () => {
+      if (!(await mergeInProgress(lane.worktreePath))) return false;
+      await gitOk(lane.worktreePath, ["reset", "-q", "--hard", "HEAD"]);
+      return true;
+    });
+  }
+
   headSha(lane: Lane): Promise<string> {
     return revParse(lane.worktreePath, "HEAD");
   }
 
-  /** Lane diff vs merge-base with `baseBranch`, including uncommitted and untracked changes. */
-  async diff(lane: Lane, baseBranch: string, maxBytes = DEFAULT_DIFF_MAX_BYTES): Promise<DiffResponse> {
+  /**
+   * Lane diff vs merge-base with `baseBranch`, including uncommitted and untracked changes; with
+   * `committedOnly`, only up to `head` (what a push of `head` publishes).
+   */
+  async diff(lane: Lane, baseBranch: string, opts: { committedOnly?: boolean; maxBytes?: number } = {}): Promise<DiffResponse> {
     const cwd = lane.worktreePath;
+    const maxBytes = opts.maxBytes ?? DEFAULT_DIFF_MAX_BYTES;
     const head = await revParse(cwd, "HEAD");
     const mergeBase = await git(cwd, ["merge-base", baseBranch, "HEAD"]);
     const base = mergeBase.code === 0 ? mergeBase.stdout.trim() : lane.baseRef;
+    if (opts.committedOnly) {
+      const common = ["diff", "-M", "--no-color", "--no-ext-diff", base, head];
+      const [patch, numstat, nameStatus] = await Promise.all([
+        gitOk(cwd, common),
+        gitOk(cwd, [...common, "--numstat", "-z"]),
+        gitOk(cwd, [...common, "--name-status", "-z"]),
+      ]);
+      return diffResponse(base, head, numstat, nameStatus, patch, maxBytes);
+    }
     // A throwaway index (HEAD + every worktree change) lets `diff --cached` show untracked files
     // without touching the lane's real index.
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pg-diff-"));
@@ -98,14 +136,7 @@ export class LaneManager {
         gitOk(cwd, [...common, "--numstat", "-z"], { env }),
         gitOk(cwd, [...common, "--name-status", "-z"], { env }),
       ]);
-      const truncated = Buffer.byteLength(patch) > maxBytes;
-      return {
-        base,
-        head,
-        files: parseDiffFiles(numstat, nameStatus),
-        patch: truncated ? Buffer.from(patch).subarray(0, maxBytes).toString("utf8") : patch,
-        truncated,
-      };
+      return diffResponse(base, head, numstat, nameStatus, patch, maxBytes);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -114,41 +145,35 @@ export class LaneManager {
   /**
    * Merges `source` into `target` (§9.5, sequential pairwise, §18 Q4): checkpoints both first,
    * then `git merge --no-ff` (strategy "merge") or `git merge --squash` + commit (strategy "squash").
-   * Marks `source` merged on success.
+   * Squash commits carry SQUASH_TRAILER (squashCheckpoints treats them like merges). Marks `source`
+   * merged on success.
    */
   async merge(target: Lane, source: Lane, strategy: MergeConfig["strategy"], message: string): Promise<MergeAttempt> {
     await this.checkpoint(source, "merge");
     const attempt = await this.withLaneLock(target, async (): Promise<MergeAttempt> => {
       const cwd = target.worktreePath;
       await checkpointIfDirty(cwd, "merge");
+      const head = await revParse(cwd, "HEAD");
       const args =
         strategy === "squash" ? ["merge", "--squash", source.branch] : ["merge", "--no-ff", "--no-verify", "-m", message, source.branch];
       const res = await git(cwd, args);
       if (res.code !== 0) {
-        const files = await conflictedFiles(cwd);
-        if (files.length > 0) return { status: "conflict", files };
+        const files = await unmergedFiles(cwd);
+        if (files.length > 0) return { status: "conflict", files, head };
         throw new Error(`git merge failed: ${(res.stderr || res.stdout).trim()}`);
       }
-      if (strategy === "squash" && (await git(cwd, ["diff", "--cached", "--quiet"])).code !== 0) {
-        await gitOk(cwd, ["commit", "-q", "--no-verify", "-m", message]);
+      if (strategy === "squash") {
+        if ((await git(cwd, ["diff", "--cached", "--quiet"])).code !== 0) {
+          await gitOk(cwd, ["commit", "-q", "--no-verify", "-m", squashMergeMessage(message, await revParse(cwd, source.branch))]);
+        } else {
+          // Nothing to squash (the changes are already here): no pending squash may stay behind.
+          fs.rmSync(await gitPath(cwd, "SQUASH_MSG"), { force: true });
+        }
       }
       return { status: "merged", sha: await revParse(cwd, "HEAD") };
     });
     if (attempt.status === "merged") this.setStatus(source, "merged");
     return attempt;
-  }
-
-  /** After conflicts were resolved and staged: `git commit --no-edit`. Returns the merge sha. */
-  concludeMerge(target: Lane): Promise<string> {
-    return this.withLaneLock(target, async () => {
-      await gitOk(target.worktreePath, ["commit", "-q", "--no-edit", "--no-verify"]);
-      return revParse(target.worktreePath, "HEAD");
-    });
-  }
-
-  /** `git merge --abort`. */
-  async abortMerge(target: Lane): Promise<void> {
-    await this.withLaneLock(target, () => gitOk(target.worktreePath, ["merge", "--abort"]));
   }
 
   /**
@@ -163,17 +188,19 @@ export class LaneManager {
     const { repo, store, paths } = this.deps;
     for (const lane of store.listLanes(runId)) {
       if (lane.status === "removed") continue;
-      await this.withLaneLock(lane, async () => {
-        if (fs.existsSync(lane.worktreePath)) {
-          await gitOk(repo.path, ["worktree", "remove", "--force", lane.worktreePath]);
-        }
-        if (!lane.pushed && (lane.status === "merged" || !(await hasOwnCommits(repo.path, lane)))) {
-          await git(repo.path, ["branch", "-D", lane.branch]);
-        }
-      });
+      await this.withLaneLock(lane, () =>
+        this.withLaneLock(REPO_LOCK, async () => {
+          if (fs.existsSync(lane.worktreePath)) {
+            await gitOk(repo.path, ["worktree", "remove", "--force", lane.worktreePath]);
+          }
+          if (!lane.pushed && (lane.status === "merged" || !(await hasOwnCommits(repo.path, lane)))) {
+            await git(repo.path, ["branch", "-D", lane.branch]);
+          }
+        }),
+      );
       this.setStatus(lane, "removed");
     }
-    await git(repo.path, ["worktree", "prune"]);
+    await this.withLaneLock(REPO_LOCK, () => git(repo.path, ["worktree", "prune"]));
     fs.rmSync(path.join(paths.worktreesDir, repo.name, runId), { recursive: true, force: true });
     store.updateRun(runId, { cleanedUp: true });
   }
@@ -191,7 +218,7 @@ export class LaneManager {
 
   /** `git worktree prune` (server start). */
   async prune(): Promise<void> {
-    await gitOk(this.deps.repo.path, ["worktree", "prune"]);
+    await this.withLaneLock(REPO_LOCK, () => gitOk(this.deps.repo.path, ["worktree", "prune"]));
   }
 
   /** Serialises git writes per lane. */
@@ -213,9 +240,16 @@ export class LaneManager {
   }
 }
 
-async function conflictedFiles(cwd: string): Promise<string[]> {
-  const res = await git(cwd, ["diff", "--name-only", "--diff-filter=U"]);
-  return res.stdout.split("\n").filter(Boolean);
+/** Removes the worktree `dir` and `branch` of a lane that was never persisted (see createLane). */
+async function removeLeftovers(repoPath: string, branch: string, dir: string): Promise<void> {
+  if (fs.existsSync(dir)) {
+    await git(repoPath, ["worktree", "remove", "--force", dir]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  await gitOk(repoPath, ["worktree", "prune"]);
+  if ((await git(repoPath, ["rev-parse", "-q", "--verify", `refs/heads/${branch}`])).code === 0) {
+    await gitOk(repoPath, ["branch", "-D", branch]);
+  }
 }
 
 async function hasOwnCommits(repoPath: string, lane: Lane): Promise<boolean> {
@@ -230,6 +264,17 @@ const STATUS_BY_LETTER: Record<string, DiffFile["status"]> = {
   R: "renamed",
   C: "copied",
 };
+
+function diffResponse(base: string, head: string, numstat: string, nameStatus: string, patch: string, maxBytes: number): DiffResponse {
+  const truncated = Buffer.byteLength(patch) > maxBytes;
+  return {
+    base,
+    head,
+    files: parseDiffFiles(numstat, nameStatus),
+    patch: truncated ? Buffer.from(patch).subarray(0, maxBytes).toString("utf8") : patch,
+    truncated,
+  };
+}
 
 /** Joins `--numstat -z` and `--name-status -z` output (same file order). */
 function parseDiffFiles(numstat: string, nameStatus: string): DiffFile[] {

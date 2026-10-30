@@ -147,7 +147,8 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
           {prLabel(prUrl)}
         </a>
       )}
-      {nodeRun?.error && status === "failed" && <div className="line-clamp-2 text-[11px] text-red-300" title={nodeRun.error}>{nodeRun.error}</div>}
+      {/* A rejection's comment is already in the card note. */}
+      {nodeRun?.error && status === "failed" && nodeRun.output?.approved !== false && <div className="line-clamp-2 text-[11px] text-red-300" title={nodeRun.error}>{nodeRun.error}</div>}
       <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
         {lane && <LaneBadge id={lane.id} index={lane.index} title={`Lane ${lane.id}`} />}
         {nodeRun && nodeRun.attempt > 0 && <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">try {nodeRun.attempt + 1}</span>}

@@ -75,6 +75,8 @@ function start(s: Setup, config: Record<string, unknown> = {}, settings: Record<
   return { ctx, exec };
 }
 
+const head = (s: Setup) => s.g(s.dir, "rev-parse", "HEAD");
+
 const commitPred: PredecessorOutput = {
   nodeId: "c",
   label: "Commit",
@@ -98,7 +100,7 @@ describe("PrRunner", () => {
     expect(s.claudeCalls()[0]!.argv).toEqual(expect.arrayContaining(["-p", "--output-format", "json", "--json-schema"]));
     expect(s.ghCalls()).toEqual([]);
 
-    exec.controls.approve!({ approved: true, title: "Edited title", body: "Edited body", comment: "ok" });
+    exec.controls.approve!({ approved: true, title: "Edited title", body: "Edited body", comment: "ok", headSha: head(s) });
     const result = await exec.result;
     expect(result).toMatchObject({
       status: "succeeded",
@@ -106,7 +108,6 @@ describe("PrRunner", () => {
     });
     expect(ctx.current.status).toBe("running");
     expect(s.g(s.origin, "rev-parse", BRANCH)).toBe(s.g(s.dir, "rev-parse", "HEAD"));
-    expect(s.g(s.dir, "rev-parse", "--abbrev-ref", `${BRANCH}@{upstream}`)).toBe(`origin/${BRANCH}`);
     expect(s.pushed).toEqual(["main"]);
     const [call] = s.ghCalls();
     expect(call!.argv).toEqual(["pr", "create", "--base", "main", "--head", BRANCH, "--title", "Edited title", "--body-file", "-", "--draft"]);
@@ -147,7 +148,7 @@ describe("PrRunner", () => {
   it("gh failure fails with its stderr after the push (branch kept as pushed)", async () => {
     const s = setup({ env: { FAKE_GH_FAIL: "GraphQL: Resource not accessible" } });
     const { exec } = start(s, { title: "T", body: "B" });
-    exec.controls.approve!({ approved: true });
+    exec.controls.approve!({ approved: true, headSha: head(s) });
     const result = await exec.result;
     expect(result.status).toBe("failed");
     if (result.status !== "failed") return;
@@ -159,14 +160,14 @@ describe("PrRunner", () => {
   it("an existing PR for the branch counts as created", async () => {
     const s = setup({ env: { FAKE_GH_EXISTS: "1", FAKE_GH_URL: "https://github.com/fake/repo/pull/7" } });
     const { exec } = start(s, { title: "T", body: "B" });
-    exec.controls.approve!({ approved: true });
+    exec.controls.approve!({ approved: true, headSha: head(s) });
     expect(await exec.result).toMatchObject({ status: "succeeded", output: { prUrl: "https://github.com/fake/repo/pull/7" } });
   });
 
   it("push failure fails with git's stderr and never calls gh", async () => {
     const s = setup({ origin: false });
     const { exec } = start(s, { title: "T", body: "B" });
-    exec.controls.approve!({ approved: true });
+    exec.controls.approve!({ approved: true, headSha: head(s) });
     const result = await exec.result;
     expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("git push failed") });
     expect(s.ghCalls()).toEqual([]);
@@ -181,10 +182,29 @@ describe("PrRunner", () => {
     const run = makeRun({ nodes: [{ id: "pr", type: "pr", label: "Open PR", config: { title: "T", body: "B" } } as never] }, s.dir);
     const ctx = makeCtx({ run, node: run.graphSnapshot.nodes[0]!, lane: { ...makeLane(wt, s.base), branch: "lane-branch" } });
     const exec = new PrRunner({ lanes: s.lanes, env: s.env }).start(ctx);
-    exec.controls.approve!({ approved: true });
+    exec.controls.approve!({ approved: true, headSha: s.g(wt, "rev-parse", "HEAD") });
     expect(await exec.result).toMatchObject({ status: "succeeded" });
     expect(s.g(s.origin, "rev-parse", "lane-branch")).toBe(s.g(wt, "rev-parse", "HEAD"));
     expect(s.g(s.dir, "config", "--get", "remote.origin.url")).toMatch(/^\.\.\//);
+  });
+
+  it("pushes exactly the approved commit, not what the lane holds by then", async () => {
+    const s = setup();
+    const { ctx, exec } = start(s, { title: "T", body: "B" });
+    await waitFor(() => ctx.current.status === "waiting_approval");
+    const reviewed = head(s);
+    s.g(s.dir, "commit", "-q", "--allow-empty", "-m", "unreviewed");
+    exec.controls.approve!({ approved: true, headSha: reviewed });
+    expect(await exec.result).toMatchObject({ status: "succeeded" });
+    expect(s.g(s.origin, "rev-parse", BRANCH)).toBe(reviewed);
+  });
+
+  it("an approval that does not name the reviewed commit fails without pushing", async () => {
+    const s = setup();
+    const { exec } = start(s, { title: "T", body: "B" });
+    exec.controls.approve!({ approved: true });
+    expect(await exec.result).toMatchObject({ status: "failed", error: expect.stringContaining("reviewed commit") });
+    expect(s.g(s.origin, "branch", "--list")).toBe("");
   });
 
   it("fail() while waiting fails with the reason", async () => {

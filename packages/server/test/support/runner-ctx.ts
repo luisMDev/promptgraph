@@ -79,6 +79,7 @@ export function makeCtx(opts: {
   laneOutputs?: PredecessorOutput[];
   previousAttempt?: NodeRun | null;
   mergeSources?: Lane[];
+  forkPoints?: string[];
   baseBranch?: string;
 }): TestContext {
   const abort = new AbortController();
@@ -91,6 +92,7 @@ export function makeCtx(opts: {
     laneOutputs: opts.laneOutputs ?? opts.predecessors ?? [],
     previousAttempt: opts.previousAttempt ?? null,
     mergeSources: opts.mergeSources ?? [],
+    forkPoints: opts.forkPoints ?? [],
     baseBranch: opts.baseBranch ?? opts.run.graphSnapshot.settings.baseBranch,
     claudeSlot: async () => {},
     signal: abort.signal,

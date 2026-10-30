@@ -238,6 +238,14 @@ describe("validateGraph", () => {
     expect(validateGraph(g(nodes, [], { allowPrWithoutApproval: true })).errors).toEqual([]);
   });
 
+  it("rejects branch prefixes that are not plain ref names", () => {
+    const nodes: N[] = [{ id: "a", type: "shell", config: { run: "true" } }];
+    for (const ok of ["", "pg/x", "feature/my_team-1.2", " pg "]) expect(validateGraph(g(nodes, [], { branchPrefix: ok })).errors).toEqual([]);
+    for (const bad of ["+pg", "-pg", ":pg", "pg/../x", "a b", "pg/", "/pg", "pg.lock", "pg/.x", "x."]) {
+      expect(codes(validateGraph(g(nodes, [], { branchPrefix: bad })).errors), bad).toEqual(["invalid_config"]);
+    }
+  });
+
   describe("resume context", () => {
     const resume = { prompt: "continue", context: "resume" };
     it("is valid after a single Claude predecessor in the same lane", () => {

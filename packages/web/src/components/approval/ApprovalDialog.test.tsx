@@ -20,13 +20,14 @@ const diff: DiffResponse = {
   truncated: false,
 };
 const submitApproval = vi.fn(async (_id: string, _req: ApprovalRequest) => ({ nodeRun: { ...gate, status: "running" as const } }));
+const approvalInfo = vi.fn(async () => info);
 
 vi.mock("../../api/rest", async (orig) => {
   const actual = await orig<typeof import("../../api/rest")>();
   return {
     ...actual,
     api: {
-      approvalInfo: async () => info,
+      approvalInfo: () => approvalInfo(),
       diff: async () => diff,
       submitApproval: (id: string, req: ApprovalRequest) => submitApproval(id, req),
       pending: async () => ({ nodeRuns: [] }),
@@ -34,14 +35,26 @@ vi.mock("../../api/rest", async (orig) => {
   };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  submitApproval.mockClear();
+  approvalInfo.mockClear();
+});
+
+/** Opens the dialog for the gate, listed as pending like the header's pending list does. */
+async function openGate() {
+  const { ApprovalDialog } = await import("./ApprovalDialog");
+  const { useUiStore } = await import("../../store/ui-store");
+  const { useAppStore } = await import("../../store/app-store");
+  useAppStore.setState({ pending: [gate] });
+  useUiStore.getState().openApproval("np");
+  render(<ApprovalDialog nodeRunId="np" />);
+  return { useUiStore, useAppStore };
+}
 
 describe("ApprovalDialog", () => {
   it("shows the gate, renders the diff in both layouts and approves with the edited PR title", async () => {
-    const { ApprovalDialog } = await import("./ApprovalDialog");
-    const { useUiStore } = await import("../../store/ui-store");
-    useUiStore.getState().openApproval("np");
-    render(<ApprovalDialog nodeRunId="np" />);
+    const { useUiStore } = await openGate();
 
     expect(await screen.findByText("Check the API change")).toBeTruthy();
     expect(screen.getByText("Implement")).toBeTruthy();
@@ -54,7 +67,28 @@ describe("ApprovalDialog", () => {
 
     fireEvent.change(screen.getByDisplayValue("Add API"), { target: { value: "Add users API" } });
     fireEvent.click(screen.getByRole("button", { name: "Approve & push" }));
-    await waitFor(() => expect(submitApproval).toHaveBeenCalledWith("np", { approved: true, title: "Add users API", body: "Generated body" }));
+    await waitFor(() => expect(submitApproval).toHaveBeenCalledWith("np", { approved: true, title: "Add users API", body: "Generated body", headSha: "abc" }));
     await waitFor(() => expect(useUiStore.getState().approvalNodeRunId).toBeNull());
+  });
+
+  it("disables the decision once the gate is decided elsewhere", async () => {
+    const { useAppStore } = await openGate();
+    const approve = await screen.findByRole("button", { name: "Approve & push" });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    useAppStore.setState({ pending: [] });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(true));
+    expect((screen.getByRole("button", { name: "Reject" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("This gate is no longer waiting for approval.")).toBeTruthy();
+  });
+
+  it("reloads the gate when the decision is refused (409)", async () => {
+    const { ApiRequestError } = await import("../../api/rest");
+    submitApproval.mockRejectedValueOnce(new ApiRequestError(409, { error: "The branch changed since you loaded the diff", code: "invalid_state" }));
+    await openGate();
+    const approve = await screen.findByRole("button", { name: "Approve & push" });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(approve);
+    expect(await screen.findByText("The branch changed since you loaded the diff")).toBeTruthy();
+    await waitFor(() => expect(approvalInfo).toHaveBeenCalledTimes(2));
   });
 });

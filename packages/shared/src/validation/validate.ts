@@ -63,6 +63,7 @@ export function validateGraph(graph: Graph, options: ValidateOptions = {}): Vali
   }
 
   checkCompletion(graph.settings.defaults.completion, out, null);
+  checkBranchPrefix(graph.settings.branchPrefix, out);
   for (const node of graph.nodes) {
     if (options.supportedNodeTypes && !options.supportedNodeTypes.includes(node.type) && !(phase === 1 && node.type === "condition")) {
       out.error({
@@ -141,6 +142,19 @@ function checkCompletion(policy: CompletionPolicy, out: Collector, nodeId: strin
     code: "invalid_config",
     message: nodeId ? "Marker token is empty." : "The default completion marker token is empty (graph settings).",
     ...(nodeId ? { nodeId } : {}),
+  });
+}
+
+/** Slash-separated segments of letters, digits, "_", "." and "-"; no segment starts with "." or "-" (§9.1). */
+const BRANCH_PREFIX_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/;
+
+/** A lane branch `<prefix>/<run>/<lane>` must be a plain git ref name (no "+x" refspecs, "-x" options, ".."). */
+function checkBranchPrefix(prefix: string, out: Collector): void {
+  const p = prefix.trim();
+  if (!p || (BRANCH_PREFIX_PATTERN.test(p) && !/\.\.|\.lock(\/|$)|\.(\/|$)/.test(p))) return;
+  out.error({
+    code: "invalid_config",
+    message: `Branch prefix "${p}" is not a valid branch name: use letters, digits, "_", "." and "-" separated by "/".`,
   });
 }
 
