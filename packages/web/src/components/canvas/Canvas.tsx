@@ -2,25 +2,30 @@ import { NODE_TYPES, type Graph, type NodeType, type Position, type SourcePort }
 import {
   Background,
   BackgroundVariant,
+  ControlButton,
   Controls,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useNodesInitialized,
   useReactFlow,
   useStore,
+  useStoreApi,
   type Connection,
   type EdgeChange,
   type IsValidConnection,
   type NodeChange,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
 import { toFlowEdges, toFlowNodes } from "../../lib/flow-mapping";
 import { connectionError } from "../../lib/graph-ops";
 import { NODE_STATUS_COLOR_HEX } from "../../lib/status-hex";
+import { readableViewport } from "../../lib/viewport";
 import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { openNodeTerminal } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
+import { Icons } from "../common/icons";
 import { nodeTypes } from "../nodes/NodeCard";
 import type { PgFlowNode } from "../nodes/types";
 import { edgeTypes, type PgFlowEdge } from "./PgEdge";
@@ -28,11 +33,11 @@ import { edgeTypes, type PgFlowEdge } from "./PgEdge";
 export const PALETTE_MIME = "application/x-promptgraph-node";
 const GRID: [number, number] = [16, 16];
 const SOURCE_PORTS: readonly string[] = ["out", "true", "false", "error"];
-const FIT_VIEW_OPTIONS = { maxZoom: 1, padding: 0.3 };
 const MINIMAP_STYLE = { width: 160, height: 100 };
 /** Below this canvas width the minimap would cover most of the graph. */
 const MINIMAP_MIN_CANVAS_WIDTH = 600;
 const REFIT_DEBOUNCE_MS = 150;
+const FIT_ANIMATION_MS = 200;
 
 type Measured = Record<string, { width: number; height: number }>;
 
@@ -73,6 +78,7 @@ function EditCanvas() {
   // Fitting an empty graph would jump the viewport when the first node is dropped, so the next drops
   // land on top of it: fit on mount only when there is something to fit.
   const fitOnMount = useRef((graph?.nodes.length ?? 0) > 0).current;
+  const { manual, onMoveStart } = useManualViewport();
 
   const input = useMemo(
     () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured } : null),
@@ -154,14 +160,13 @@ function EditCanvas() {
         selectionKeyCode="Shift"
         snapToGrid
         snapGrid={GRID}
-        fitView={fitOnMount}
-        fitViewOptions={FIT_VIEW_OPTIONS}
+        onMoveStart={onMoveStart}
         minZoom={0.2}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#27272a" />
-        <Controls showInteractive={false} />
-        <RefitOnResize />
+        <CanvasControls manual={manual} />
+        <AutoFit manual={manual} fitOnInit={fitOnMount} />
         <RevealRequestedNode measured={measured} />
         <WideEnoughForMinimap>
           <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => (n.data.issues.errors.length ? "#ef4444" : "#52525b")} nodeStrokeWidth={0} maskColor="rgb(9 9 11 / 0.7)" />
@@ -180,6 +185,7 @@ function RunCanvas() {
   const detailError = useRunStore((s) => s.detailError);
   const phase = useEditorStore((s) => s.phase);
   const [measured, applyMeasured] = useMeasured();
+  const { manual, onMoveStart } = useManualViewport();
   const graph: Graph | null = detail?.run.graphSnapshot ?? null;
 
   const input = useMemo(
@@ -225,14 +231,13 @@ function RunCanvas() {
       nodesConnectable={false}
       edgesFocusable={false}
       deleteKeyCode={null}
-      fitView
-      fitViewOptions={FIT_VIEW_OPTIONS}
+      onMoveStart={onMoveStart}
       minZoom={0.2}
       proOptions={{ hideAttribution: true }}
     >
       <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#27272a" />
-      <Controls showInteractive={false} />
-      <RefitOnResize />
+      <CanvasControls manual={manual} />
+      <AutoFit manual={manual} fitOnInit />
       <WideEnoughForMinimap>
         <MiniMap<PgFlowNode>
           style={MINIMAP_STYLE}
@@ -248,23 +253,80 @@ function RunCanvas() {
 }
 
 /**
- * The canvas changes size with the window, the terminal drawer and the side panels; re-fit (debounced)
- * so nodes are not left hidden outside the smaller canvas. The initial size is handled by fitView.
+ * Set once the user pans or zooms (a move with a DOM event, or the zoom buttons): from then on the
+ * canvas keeps their viewport on resize instead of re-fitting. The fit button resets it.
  */
-function RefitOnResize() {
+function useManualViewport() {
+  const manual = useRef(false);
+  const onMoveStart = useCallback((event: MouseEvent | TouchEvent | null) => {
+    if (event) manual.current = true;
+  }, []);
+  return { manual, onMoveStart };
+}
+
+/** Fits the graph at a readable zoom (lib/viewport): never below FIT_MIN_ZOOM, start-aligned when too big. */
+function useReadableFit() {
+  const { getNodes, getNodesBounds, setViewport } = useReactFlow();
+  const store = useStoreApi();
+  return useCallback(
+    (duration?: number) => {
+      const nodes = getNodes();
+      const { width, height } = store.getState();
+      if (nodes.length === 0 || !width || !height) return;
+      void setViewport(readableViewport(getNodesBounds(nodes), { width, height }), duration ? { duration } : undefined);
+    },
+    [getNodes, getNodesBounds, setViewport, store],
+  );
+}
+
+/**
+ * Fits once the nodes are measured (when `fitOnInit`), and again (debounced) whenever the canvas changes
+ * size with the window, the terminal drawer or the side panels — unless the user moved the viewport.
+ */
+function AutoFit({ manual, fitOnInit }: { manual: RefObject<boolean>; fitOnInit: boolean }) {
   const width = useStore((s) => s.width);
   const height = useStore((s) => s.height);
-  const hasNodes = useStore((s) => s.nodeLookup.size > 0);
-  const { fitView } = useReactFlow();
+  const initialized = useNodesInitialized();
+  const fit = useReadableFit();
+  const fitted = useRef(false);
   const last = useRef<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    if (!fitOnInit || fitted.current || !initialized || !width || !height) return;
+    fitted.current = true;
+    fit();
+  }, [fitOnInit, initialized, width, height, fit]);
+
   useEffect(() => {
     const prev = last.current;
     last.current = { width, height };
-    if (!prev || prev.width === 0 || (prev.width === width && prev.height === height) || !hasNodes) return;
-    const timer = setTimeout(() => void fitView({ ...FIT_VIEW_OPTIONS, duration: 200 }), REFIT_DEBOUNCE_MS);
+    if (!prev || prev.width === 0 || (prev.width === width && prev.height === height) || manual.current) return;
+    const timer = setTimeout(() => fit(FIT_ANIMATION_MS), REFIT_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [width, height, hasNodes, fitView]);
+  }, [width, height, manual, fit]);
   return null;
+}
+
+/** Zoom buttons count as a manual viewport; our fit button replaces React Flow's (which ignores the minimum zoom). */
+function CanvasControls({ manual }: { manual: RefObject<boolean> }) {
+  const fit = useReadableFit();
+  const markManual = useCallback(() => {
+    manual.current = true;
+  }, [manual]);
+  return (
+    <Controls showInteractive={false} showFitView={false} onZoomIn={markManual} onZoomOut={markManual}>
+      <ControlButton
+        title="Fit view"
+        aria-label="Fit view"
+        onClick={() => {
+          manual.current = false;
+          fit(FIT_ANIMATION_MS);
+        }}
+      >
+        <Icons.fit />
+      </ControlButton>
+    </Controls>
+  );
 }
 
 function WideEnoughForMinimap({ children }: { children: ReactNode }) {

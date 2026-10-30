@@ -46,7 +46,7 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 | `headless.ts` | `HeadlessResultSchema` (real `claude -p --output-format json` envelope), `GENERATED_MESSAGE_JSON_SCHEMA`, `JUDGE_JSON_SCHEMA` |
 | `api.ts` | REST request/response schemas (§7 below), `AppSettingsSchema`, `API` path builders, `TOKEN_COOKIE` |
 | `ws.ts` | `ServerMessageSchema`, `ClientMessageSchema` (discriminated unions), `encodeBase64`/`decodeBase64` |
-| `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources}` |
+| `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
 Semantics fixed here (do not re-implement elsewhere):
@@ -56,7 +56,8 @@ Semantics fixed here (do not re-implement elsewhere):
 - **Lane plan** `computeLanePlan` (§9.2): root lanes are created first in canvas order (`main`, `l2`, `l3`…),
   forks get the next ids in topological order. Branch-key groups (`out`/`true`/`false`/`error`) are mutually
   exclusive and never fork. `mergeSources.get(mergeNodeId)` = lanes to merge, in canvas order of the inputs
-  (§18 Q4: sequential pairwise, no octopus).
+  (§18 Q4: sequential pairwise, no octopus). `edgeLane.get(edgeId)` = lane an edge grants its target; a
+  fan-out edge straight into a merge grants a fork lane whose `firstNodeId` is the merge itself.
 - **Validation phase**: the server passes `SUPPORTED_PHASE` (`config/version.ts`, 1 until M5). Phase 1 rejects
   condition nodes, non-success edges and loops (`phase2_unsupported`) and every non-merge join (`invalid_join`).
   Phase 2 allows joins whose inputs are pairwise `edgesMutuallyExclusive`.
@@ -75,7 +76,7 @@ Semantics fixed here (do not re-implement elsewhere):
   Logs: `~/.promptgraph/runs/<runId>/<ptyId>.log` (`ptyLogPath`).
 - Paths (`config/paths.ts`): `PG_HOME` overrides `~/.promptgraph`; `state.db`, `settings.json`, `runs/`,
   `worktrees/<repo-name>/<run-id>/<lane-id>/`, `bin/pg-hook`. Graph files: `<repo>/.promptgraph/graphs/<id>.json`.
-- Env (`config/child-env.ts`): `claudeBin()` = `PG_CLAUDE_BIN` or `claude`. **Every** child process gets
+- Env (`config/child-env.ts`): `claudeBin()` = `PG_CLAUDE_BIN` or `claude`; `ghBin()` = `PG_GH_BIN` or `gh`. **Every** child process gets
   `childEnv(extra)`: strips `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
   `CLAUDE_CODE_REMOTE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_TEE_SDK_STDOUT`,
   `CLAUDE_CODE_SYNC_SESSION_REFS`, `*HERMETIC*`; sets `TERM=xterm-256color`.
@@ -100,7 +101,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `git/exec.ts` ✅ | `git`, `gitOk`, `GitError` | M1 |
 | `git/repo.ts` ✅ | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` | M1 |
 | `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) | M1 |
-| `pty/pty-manager.ts` | `PtyManager`, `PtyHandle`, `SpawnPtyOptions`, `PtyAttachResult` | M1 |
+| `pty/pty-manager.ts` | `PtyManager`, `PtyHandle`, `SpawnPtyOptions`, `PtyAttachResult`, `logSizePath` | M1 |
 | `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` | M1 |
 | `runners/types.ts` ✅ | `Runner`, `RunnerContext`, `RunnerResult`, `NodeControls`, `NodeExecution`, `PredecessorOutput`, `RunnerRegistry` | done |
 | `runners/claude/args.ts` | `buildClaudeArgs`, `toCliPermissionMode`, `ClaudeLaunchSpec` | M1 |
@@ -115,9 +116,9 @@ Semantics fixed here (do not re-implement elsewhere):
 | `runners/shell-runner.ts` | `ShellRunner`, `SHELL_TAIL_LINES` | M1 |
 | `runners/git/messages.ts` | `generateMessage` | M1 (commit), M4 (pr) |
 | `runners/git/commit-runner.ts` | `CommitRunner` | M1 |
-| `runners/git/merge-runner.ts` | `MergeRunner`, `conflictPrompt` | M3 |
-| `runners/git/pr-runner.ts` | `PrRunner` | M4 |
-| `runners/approval-runner.ts` | `ApprovalRunner` | M4 |
+| `runners/git/merge-runner.ts` | `MergeRunner`, `MergeRunnerDeps`, `conflictPrompt`, `mergeMessage` | M3 (done) |
+| `runners/git/pr-runner.ts` | `PrRunner`, `PrRunnerDeps` | M4 (done) |
+| `runners/approval-runner.ts` | `ApprovalRunner`, `ApprovalGate`, `Interruption`, `approvalOutput`, `rejectionError` | M4 (done) |
 | `runners/condition-runner.ts` | `ConditionRunner` | M5 |
 | `runners/registry.ts` | `createRunnerRegistry` | M1 (+ each milestone adds its runner) |
 | `workspace/lane-manager.ts` | `LaneManager`, `RepoRef`, `MergeAttempt` | M1 (single lane) / M3 (forks, merge, cleanup) |
@@ -136,7 +137,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `http/static.ts` | `registerStatic` | M1 |
 | `ws/hub.ts` | `WsHub {attach, close}` | M1 |
 | `cli/args.ts` | `parseCliArgs`, `CliOptions`, `USAGE` | M1 |
-| `cli/prereqs.ts` | `checkPrereqs` | M1 |
+| `cli/prereqs.ts` | `checkPrereqs` (git, `claudeBin`, `ghBin` `--version`) | M1 |
 | `cli/server.ts` | `startServer` → `RunningServer {ctx, url, port, token, close}` | M1 |
 | `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it) | M1 |
 
@@ -237,6 +238,20 @@ uncapped otherwise; per-lane git serialisation is `LaneManager.withLaneLock`), `
 - Run end: unhandled `failed`/`interrupted`/`cancelled` current node runs with nothing in flight → `paused`;
   all `succeeded`/`skipped`/handled-`failed` → `succeeded`; anything else stuck → `failed` "No node can make progress".
 
+**Implementation notes (engine-lanes, M3):**
+- Fork lanes are created when their fork-after node resolves, for every lane granted (`LanePlan.edgeLane`) by an
+  outgoing edge that delivered an activation (`ActivationTracker.isActivated(edgeId)`) — also when the target is a
+  merge that is not ready yet, so the fork captures the parent at that point. Dead (skipped) branches get no lane.
+- Before a `merge` runner starts, the engine checkpoints the merge's own lane and each source lane (labelled after
+  the input node in that lane) and passes the sources as `ctx.mergeSources` (Lane objects, canvas order of the
+  inputs, only lanes reached through activated edges; a source lane missing after a restart is created then).
+  `LaneManager.merge` still checkpoints both sides (no-op by then).
+- `RunnerContext` adds `mergeSources: Lane[]`, `baseBranch` (pr: non-empty `config.base`, else
+  `settings.baseBranch`; others: `settings.baseBranch`) and `claudeSlot()`: waits for a slot under
+  `maxParallelClaude` (`Scheduler.acquireClaudeSlot(nodeRunId)`; held until the node is released; waiters go
+  before queued Claude items) and rejects with "Cancelled" when the node's signal aborts. MergeRunner must await it
+  before spawning a Claude conflict resolver.
+
 ## 7. Runners (`runners/`)
 
 Contract in `runners/types.ts`. A runner never writes final statuses; it returns a `RunnerResult`. While
@@ -313,6 +328,56 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   for the user-input signal, and releases the ring buffer once a PTY has exited (attach reads the log).
 - `Engine.shutdown` also waits (bounded by `stopTimeoutMs`) for in-flight node chains (finish → advance →
   finalize/cleanup) so nothing writes to the store after the DB is closed.
+
+**Implementation notes (git-runners, M3/M4):**
+- `ApprovalRunner` (`runners/approval-runner.ts`) also exports the gate helpers `ApprovalGate` (first `approve()` wins,
+  null on abort), `Interruption` (fail reason + abort → failed/cancelled result), `approvalOutput`, `rejectionError`.
+  approval: `waiting_approval` → approve → `{approved, comment?}`; reject → failed "Approval rejected[: comment]";
+  `done()` approves without a comment.
+- `PrRunner` (`{lanes: withLaneLock+markPushed, env?}`): proposal = fixed `config.title` + `config.body` (both set), else
+  `generateMessage("pr")` from `git diff --stat --summary <ctx.baseBranch>...HEAD`, the lane's commit subjects (checkpoints
+  excluded; `GenerateMessageInput.commits`) and `laneOutputs` + succeeded direct predecessors; a fixed title or body
+  overrides its generated part. Stored as `output {title, body, usage?}` before the gate (the approval dialog reads it).
+  Gate unless `requireApproval === false && settings.allowPrWithoutApproval`. Approve → edited title (non-empty)/body
+  override; then `git push -u origin <branch>` from the lane worktree (lane lock; `LaneManager.markPushed`; a relative
+  local origin URL such as `../origin.git` is passed as `-c remote.origin.pushurl=<absolute, resolved against the main
+  checkout>` unless a pushurl is configured), then
+  `<ghBin> pr create --base <base> --head <branch> --title <t> --body-file - [--draft]` (body on stdin,
+  `GH_PROMPT_DISABLED=1`); output `{prUrl, title, body, approved, comment?}`. A gh "already exists" error with a URL
+  counts as created (retry). Push/gh errors → failed with stderr, keeping the proposal in the output.
+- `MergeRunner` (`{lanes, ptys, claude: Runner, paths, env?}`) merges `ctx.mergeSources` in order via `LaneManager.merge`
+  (message `Merge branch '<source>' into <target>`). Conflict → claude: `ctx.claudeSlot()`, then `claude.start` with a
+  synthetic `prompt` node (merge node id/label, `conflictPrompt(files)`, context "clean", graph defaults) on the same
+  ctx/lane (PTY id = nodeRun.id); Done/Fail/Hold/typing are forwarded. pause: `waiting_input {kind:"merge_conflict"}`
+  + `$SHELL` PTY `shell-<nodeRunId>` (set as `ptyId`) until `done()`; closed with SIGHUP. Conclusion (lane lock):
+  conflicted files with `<<<<<<<`/`>>>>>>>` lines are unresolved; others are staged (`git add -A -- files`); unmerged
+  paths left are unresolved; then `git commit --no-edit` (MERGE_HEAD) or, for squash, a commit with the merge message
+  (nothing if already committed). pause: unresolved → keeps waiting with a message naming the files; claude:
+  unresolved → failed. Failure/fail()/cancel abort the merge (`git merge --abort`, squash: `reset --hard HEAD` to the
+  pre-merge checkpoint). Resolved sources → `LaneManager.markMerged`. Output `{sha, conflictedFiles, usage?}`
+  (usage = sum of the resolver sessions).
+- `LaneManager` adds `markMerged(lane)` and `markPushed(lane)` (persist + `lane:update`).
+- Approval/diff/pending routes, `getApprovalInfo`/`getDiff` and the `attention` → `Notifier` path for
+  `waiting_approval` were already in place; covered by `test/e2e/ship.e2e.test.ts`.
+- Opt-in real test: `PG_REAL_CLAUDE=1 pnpm vitest run packages/server/test/pr-message.real.test.ts` (haiku).
+
+**Implementation notes (integration M3+M4):**
+- `squashTarget` treats as noise both checkpoints and merge commits whose merged-in side (`first..other` parent)
+  holds only checkpoints and merges, so root → fan-out → merge → commit ends in **one** commit on the lane (the
+  lane merges of checkpoint-only lanes are squashed too). A merged side with a real commit (e.g. a commit node in a
+  fork lane) stops the squash there. Still never below `lane.baseRef`.
+- Commit messages are generated from `git diff --cached --stat --summary` (the summary's create/delete lines tell the
+  model which files are new).
+- `Engine.finishNode` stamps `finishedAt` before `scheduler.release`, so a node started by the freed slot never has a
+  `startedAt` earlier than the previous node's `finishedAt`.
+- `ApprovalInfoResponse.predecessorOutputs[].text` falls back, for commit/merge predecessors, to
+  `Commit <sha8>: <message>`, `Nothing to commit.` or `Merged at <sha8>[, resolved conflicts in <files>]`.
+- `test/e2e/lanes.e2e.test.ts`: fan-out → merge → commit → approval → pr (worktrees/branches, checkpoints squashed,
+  push to a bare origin, fake-gh argv, cleanup keeps the pushed branch and deletes the merged fork), merge conflicts
+  (claude via `FAKE_CLAUDE_MODE=[[bash:…]]` that acts only while MERGE_HEAD exists; pause via the `shell-<id>` PTY +
+  Done), `maxParallelClaude` 1 vs 3, approval reject in one lane, workspaceSetup failing only in a fork lane, pr reject.
+  Opt-in `test/e2e/lanes.real.test.ts` (`PG_REAL_CLAUDE=1`, haiku): the same fan-out with real Claude, merge and a
+  generated commit message.
 
 ## 8. HTTP & WebSocket
 
@@ -424,6 +489,31 @@ hold only state interfaces; builders add the zustand stores there.
   Code session replays its last screen instead of the empty main screen. The canvas re-fits when the drawer
   opens/closes.
 
+**Implementation notes (web-m3m4):**
+- Lanes (`lib/lanes.ts`): colour = `laneSwatch(index)` (8-colour palette, badge classes + hex). Node cards, the run
+  panel legend (`LaneLegend`: branch / not created yet, state, pushed, workspace setup) and history use the
+  snapshot's `computeLanePlan`, so a node shows its lane colour before the engine created the lane; created lanes
+  and `nodeRun.laneId` win. `PgNodeData.lane` is `{id, index}`; `PgNodeData.mergeInputs` = merge input labels in
+  merge order (`mergeInputLabels`, canvas order of the sources).
+- `lib/run-view.ts`: `cardNote` (merge conflict / approval states on cards), `enteredMergeConflict` (a `node:update`
+  of the shown run entering `waiting_input {kind:"merge_conflict"}` opens its `shell-<id>` PTY in the drawer),
+  `runInfoOf` (history details: lanes + PR links). `RunStore.runInfo` / `loadRunInfo(runId)` load details on
+  expand and refetch only when a run's status or `cleanedUp` changes. `applyNodeUpdate` drops node runs older
+  (`updatedAt`) than the known one (REST responses racing WS updates).
+- `AppState.pendingRuns` (runId → graph name, short id, node labels; fetched once per pending run) labels the
+  header's global pending list and the approval dialog.
+- Lazy chunks: `ApprovalDialog` (+ `DiffView`, diff2html) and `TerminalView` (xterm); vite `manualChunks` puts
+  react/@xyflow/zustand in `vendor`. No chunk exceeds the default 500 kB warning.
+- Canvas viewport (`lib/viewport.ts` `readableViewport`): fit never zooms below `FIT_MIN_ZOOM` (0.6) nor above 1;
+  a graph that does not fit is aligned to its left/top. It fits once on mount (run mode; edit mode only when the
+  graph has nodes) and on canvas resize **unless the user panned/zoomed** (`onMoveStart` with an event, zoom
+  buttons); the custom fit button resets that.
+- Replayed (not live) terminals render at `pty:attached {cols, rows}` and scroll instead of fitting; live ones fit
+  and drive the PTY size. Server side, `PtyManager` writes `<log>.size.json` (`logSizePath`) with the final size
+  on exit, so replays after a restart keep it (previously 120×40).
+- `DiffView` heads the diff with "Changes since base <sha8>" (full merge-base sha in the tooltip); the inspector lists
+  the merge order one source per line. Screenshots: `docs/screenshots/m4-*.png`.
+
 ## 10. fake-claude (`packages/server/test/fixtures/fake-claude`)
 
 Executable Node script; use with `PG_CLAUDE_BIN=<path>` (see `test/helpers.ts: FAKE_CLAUDE, fakeClaudeEnv`).
@@ -461,6 +551,14 @@ Real envelope (Claude Code 2.1.314) for reference: `structured_output` holds the
 same JSON as a string, `stop_reason`, `total_cost_usd`, `usage` (+ `cache_creation.ephemeral_1h_input_tokens`),
 `modelUsage[model].costUSD`, `is_error`, `subtype:"success"`.
 
+## 10b. fake-gh (`packages/server/test/fixtures/fake-gh`)
+
+Use with `PG_GH_BIN=<path>` (`FAKE_GH` in `test/helpers.ts`). Only `gh --version` and `gh pr create` are emulated
+(anything else exits 1). `FAKE_GH_LOG=<file>` appends
+`{argv, cwd, stdin, env: GH_*/PG_*}` per call (stdin read when `--body-file -`); `FAKE_GH_FAIL=<msg>` → msg on stderr,
+exit 1; `FAKE_GH_EXISTS=1` → gh's "already exists" error with the URL; `FAKE_GH_URL` (default
+`https://github.com/fake/repo/pull/1`) printed on success. Push tests use a local bare repo as `origin`.
+
 ## 11. Testing
 
 - `pnpm test` runs everything with vitest (forks pool, 20 s timeout). Put server tests in `packages/server/test/`.
@@ -469,7 +567,7 @@ same JSON as a string, `stop_reason`, `total_cost_usd`, `usage` (+ `cache_creati
   `startServer`, REST + WS client). The crash-recovery case runs the CLI in a child process (`tsx
   --conditions=source`) and SIGKILLs it.
 - `test/helpers.ts`: `tempDir`, `createTempRepo` (branch `main`, one commit), `fakeClaudeEnv(root)` (`PG_HOME`,
-  `CLAUDE_CONFIG_DIR`, `PG_CLAUDE_BIN`), `realClaudeEnv(root)`, `waitFor`.
+  `CLAUDE_CONFIG_DIR`, `PG_CLAUDE_BIN`), `realClaudeEnv(root)`, `waitFor`, `FAKE_CLAUDE`/`FAKE_GH` fixture paths.
 - Pass env explicitly (`createAppContext({env})`, `childEnv(extra, base)`) instead of mutating `process.env`.
 - Real claude tests are opt-in (`PG_REAL_CLAUDE=1`), use `realClaudeEnv` (a **copy** of `~/.claude.json` with
   `hasCompletedOnboarding: true`, `theme: "dark"`), strip env via `childEnv`, and keep prompts tiny

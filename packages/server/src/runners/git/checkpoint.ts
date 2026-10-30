@@ -25,19 +25,43 @@ export async function checkpointIfDirty(cwd: string, afterLabel: string): Promis
 
 /**
  * Commit to soft-reset to before committing (squashCheckpoints): the newest first-parent commit after
- * `baseRef` that is not a checkpoint, or `baseRef` itself when every newer commit is a checkpoint.
- * Never goes below `baseRef`, so history shared with a parent lane is kept. Null when HEAD is not a checkpoint.
+ * `baseRef` that is not noise, or `baseRef` itself when every newer commit is noise. Noise = checkpoints and
+ * merge commits whose merged-in side holds only checkpoints and merges (a merge node joining lanes that never
+ * committed). Never goes below `baseRef`, so history shared with a parent lane is kept. Null when HEAD is not noise.
  */
 export async function squashTarget(cwd: string, baseRef: string): Promise<string | null> {
-  const res = await git(cwd, ["log", "--first-parent", "--format=%H%x00%s", `${baseRef}..HEAD`]);
+  const res = await git(cwd, ["log", "--first-parent", "--format=%H%x00%P%x00%s", `${baseRef}..HEAD`]);
   if (res.code !== 0) return null;
-  const commits = res.stdout
+  const commits = parseLog(res.stdout);
+  for (const [i, commit] of commits.entries()) {
+    if (await isNoise(cwd, commit)) continue;
+    return i === 0 ? null : commit.sha;
+  }
+  return commits.length === 0 ? null : baseRef;
+}
+
+interface LogEntry {
+  sha: string;
+  parents: string[];
+  subject: string;
+}
+
+function parseLog(stdout: string): LogEntry[] {
+  return stdout
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [sha = "", subject = ""] = line.split("\0");
-      return { sha, subject };
+      const [sha = "", parents = "", subject = ""] = line.split("\0");
+      return { sha, parents: parents.split(" ").filter(Boolean), subject };
     });
-  if (commits.length === 0 || !isCheckpointMessage(commits[0]!.subject)) return null;
-  return commits.find((c) => !isCheckpointMessage(c.subject))?.sha ?? baseRef;
+}
+
+async function isNoise(cwd: string, commit: LogEntry): Promise<boolean> {
+  if (commit.parents.length < 2) return isCheckpointMessage(commit.subject);
+  const [first, ...others] = commit.parents;
+  for (const other of others) {
+    const side = await gitOk(cwd, ["log", "--format=%H%x00%P%x00%s", `${first}..${other}`]);
+    if (!parseLog(side).every((c) => c.parents.length > 1 || isCheckpointMessage(c.subject))) return false;
+  }
+  return true;
 }

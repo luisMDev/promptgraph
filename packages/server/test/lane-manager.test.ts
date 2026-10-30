@@ -99,4 +99,23 @@ describe("LaneManager", () => {
     expect(store.listLanes(run.id).map((l: Lane) => l.status)).toEqual(["removed", "removed"]);
     expect((store.getRun(run.id) as Run).cleanedUp).toBe(true);
   });
+
+  it("cleanup keeps pushed branches, deletes merged ones and honours keep: always unless forced", async () => {
+    const { repo, store, lanes, run, git } = setup();
+    const pushed = await lanes.createLane(run, planned("main", 0), "main");
+    const merged = await lanes.createLane(run, planned("l2", 1), "main");
+    fs.writeFileSync(path.join(merged.worktreePath, "m.txt"), "m");
+    expect(await lanes.merge(pushed, merged, "merge", "merge l2")).toMatchObject({ status: "merged" });
+    // Pretend main was pushed without commits of its own (pushed branches always survive cleanup).
+    await lanes.withLaneLock(pushed, async () => git(pushed.worktreePath, "reset", "-q", "--hard", pushed.baseRef));
+    store.updateLane(run.id, pushed.id, { pushed: true });
+
+    await lanes.cleanup(run.id, { keep: "always", failed: false });
+    expect(store.listLanes(run.id).map((l: Lane) => l.status)).toEqual(["active", "merged"]);
+
+    await lanes.cleanup(run.id, { keep: "always", failed: false, force: true });
+    expect(store.listLanes(run.id).map((l: Lane) => l.status)).toEqual(["removed", "removed"]);
+    expect(git(repo, "branch", "--list", "pg/*")).toBe("pg/demo/ab12/main");
+    expect(git(repo, "worktree", "list").split("\n")).toHaveLength(1);
+  });
 });

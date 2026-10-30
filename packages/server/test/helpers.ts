@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 /** Absolute path of the fake claude CLI (set PG_CLAUDE_BIN to it). */
 export const FAKE_CLAUDE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-claude");
 
+/** Absolute path of the fake gh CLI (set PG_GH_BIN to it). */
+export const FAKE_GH = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-gh");
+
 /** Fresh temp dir; removed by the returned cleanup. */
 export function tempDir(prefix = "pg-test-"): { dir: string; cleanup: () => void } {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));

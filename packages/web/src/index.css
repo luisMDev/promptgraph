@@ -103,6 +103,11 @@ body {
   padding: 6px 8px;
 }
 
+/* Replays keep the PTY's cols/rows: the xterm sizes to its content and the tab scrolls. */
+.pg-terminal-fixed .xterm {
+  height: auto;
+}
+
 /* diff2html in the dark approval dialog. */
 .pg-diff .d2h-wrapper {
   font-size: 12px;

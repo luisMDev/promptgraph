@@ -9,13 +9,17 @@ export interface SchedulerItem {
 const isCapped = (t: NodeType) => (CLAUDE_NODE_TYPES as readonly NodeType[]).includes(t);
 
 /**
- * FIFO by readiness (§8.4). Claude-type items (prompt/command, and merge while resolving with Claude is
- * accounted by the runner) are capped at maxParallelClaude across the run; shell/git items are not capped.
- * `onStart` is invoked synchronously for every item that may start now.
+ * FIFO by readiness (§8.4). Claude-type items (prompt/command) are capped at maxParallelClaude across the
+ * run; shell/git items are not capped. A running uncapped item that needs a Claude session (merge
+ * resolving conflicts) takes a slot with `acquireClaudeSlot`. `onStart` is invoked synchronously for
+ * every item that may start now.
  */
 export class Scheduler {
   private readonly queue: SchedulerItem[] = [];
   private readonly running = new Map<string, SchedulerItem>();
+  /** Running uncapped items holding a Claude slot. */
+  private readonly promoted = new Set<string>();
+  private readonly slotWaiters: Array<{ nodeRunId: string; grant: () => void }> = [];
   private pumping = false;
   private pumpAgain = false;
 
@@ -30,8 +34,24 @@ export class Scheduler {
     this.pump();
   }
 
+  /**
+   * Resolves once the running item `nodeRunId` holds a Claude slot (immediately for Claude items); the
+   * slot is held until release(). Waiting items are served before queued Claude items.
+   */
+  acquireClaudeSlot(nodeRunId: string): Promise<void> {
+    const item = this.running.get(nodeRunId);
+    if (!item || isCapped(item.nodeType) || this.promoted.has(nodeRunId)) return Promise.resolve();
+    return new Promise((grant) => {
+      this.slotWaiters.push({ nodeRunId, grant });
+      this.pump();
+    });
+  }
+
   /** Item finished (any final status) → frees its slot and starts queued items. */
   release(nodeRunId: string): void {
+    this.promoted.delete(nodeRunId);
+    const waiting = this.slotWaiters.findIndex((w) => w.nodeRunId === nodeRunId);
+    if (waiting >= 0) this.slotWaiters.splice(waiting, 1);
     if (this.running.delete(nodeRunId)) this.pump();
   }
 
@@ -64,7 +84,13 @@ export class Scheduler {
     try {
       do {
         this.pumpAgain = false;
-        let claudeRunning = [...this.running.values()].filter((r) => isCapped(r.nodeType)).length;
+        let claudeRunning = [...this.running.values()].filter((r) => isCapped(r.nodeType) || this.promoted.has(r.nodeRunId)).length;
+        while (this.slotWaiters.length > 0 && claudeRunning < this.maxParallelClaude) {
+          const waiter = this.slotWaiters.shift()!;
+          this.promoted.add(waiter.nodeRunId);
+          claudeRunning++;
+          waiter.grant();
+        }
         for (let i = 0; i < this.queue.length; ) {
           const item = this.queue[i]!;
           if (isCapped(item.nodeType) && claudeRunning >= this.maxParallelClaude) {

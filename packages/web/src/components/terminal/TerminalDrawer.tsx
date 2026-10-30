@@ -1,11 +1,14 @@
 import { isClaudeNode } from "@promptgraph/shared";
-import { useCallback, useRef, useState, type PointerEvent } from "react";
+import { Suspense, lazy, useCallback, useRef, useState, type PointerEvent } from "react";
 import { closeTerminalTab, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
 import { clampDrawerHeight, useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
-import { TerminalView, type PtyState } from "./TerminalView";
+import type { PtyState } from "./TerminalView";
+
+/** Lazy: xterm.js is only needed once a terminal is opened. */
+const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
 
 /** Bottom drawer: resizable, one tab per open terminal; all terminals stay mounted to keep their state. */
 export function TerminalDrawer() {
@@ -89,7 +92,9 @@ export function TerminalDrawer() {
       <div className={`relative min-h-0 flex-1 ${open ? "" : "hidden"}`}>
         {tabs.map((ptyId) => (
           <div key={ptyId} className={ptyId === active ? "absolute inset-0" : "hidden"}>
-            <TerminalView ptyId={ptyId} visible={open && ptyId === active} onState={(s) => setState(ptyId, s)} />
+            <Suspense fallback={<p className="p-3 text-xs text-zinc-500">Loading terminal…</p>}>
+              <TerminalView ptyId={ptyId} visible={open && ptyId === active} onState={(s) => setState(ptyId, s)} />
+            </Suspense>
           </div>
         ))}
       </div>

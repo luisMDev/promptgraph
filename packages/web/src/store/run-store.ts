@@ -2,7 +2,7 @@ import type { Lane, NodeRun, RunDetail, RunSummary } from "@promptgraph/shared";
 import { create } from "zustand";
 import { api, errorMessage } from "../api/rest";
 import { wsClient } from "../api/ws";
-import { currentNodeRuns, upsertNodeRun } from "../lib/run-view";
+import { currentNodeRuns, runInfoOf, upsertNodeRun, type RunInfo } from "../lib/run-view";
 
 /** Runs: history list (from REST + run:update), the selected run's detail (node:update/lane:update merged in). */
 export interface RunState {
@@ -21,6 +21,8 @@ export interface RunStore extends RunState {
   detailError: string | null;
   /** Node inspected on the run canvas (snapshot node id). */
   selectedNodeId: string | null;
+  /** Lanes and PRs of runs expanded in the history (loaded on demand, refreshed on status/cleanup changes). */
+  runInfo: Record<string, RunInfo>;
 
   loadRuns(graphId: string): Promise<void>;
   clearRuns(): void;
@@ -31,6 +33,8 @@ export interface RunStore extends RunState {
   showRun(detail: RunDetail): void;
   /** Re-fetches the selected run (e.g. after a WS reconnect, when updates may have been missed). */
   reloadSelected(): Promise<void>;
+  /** (Re)loads the history details of a run. */
+  loadRunInfo(runId: string): Promise<void>;
   applyRunUpdate(run: RunSummary): void;
   applyNodeUpdate(nodeRun: NodeRun): void;
   applyLaneUpdate(lane: Lane): void;
@@ -78,15 +82,26 @@ export const useRunStore = create<RunStore>()((set, get) => ({
   graphId: null,
   detailError: null,
   selectedNodeId: null,
+  runInfo: {},
 
   async loadRuns(graphId) {
+    if (get().graphId !== graphId) set({ runInfo: {} });
     set({ graphId, runs: get().graphId === graphId ? get().runs : [] });
     const { runs } = await api.listRuns(graphId, 100);
     if (get().graphId === graphId) set({ runs });
   },
 
   clearRuns() {
-    set({ graphId: null, runs: [] });
+    set({ graphId: null, runs: [], runInfo: {} });
+  },
+
+  async loadRunInfo(runId) {
+    try {
+      const info = runInfoOf(await deps.fetchRun(runId));
+      set({ runInfo: { ...get().runInfo, [runId]: info } });
+    } catch {
+      // Best effort: the row keeps what it showed (or nothing).
+    }
   },
 
   selectNode(nodeId) {
@@ -135,7 +150,10 @@ export const useRunStore = create<RunStore>()((set, get) => ({
 
   applyRunUpdate(run) {
     const s = get();
+    const prev = s.runs.find((r) => r.id === run.id);
     if (run.graphId === s.graphId) set({ runs: upsertRun(s.runs, run) });
+    // Lanes change state on run end and cleanup; usage-only updates are frequent and do not need a fetch.
+    if (s.runInfo[run.id] && (prev?.status !== run.status || prev.cleanedUp !== run.cleanedUp)) void get().loadRunInfo(run.id);
     if (run.id !== s.selectedRunId) return;
     if (!s.detail) buffer.push({ kind: "run", run });
     else set({ detail: { ...s.detail, run: { ...s.detail.run, ...run } } });
@@ -148,6 +166,9 @@ export const useRunStore = create<RunStore>()((set, get) => ({
       buffer.push({ kind: "node", nodeRun });
       return;
     }
+    // A REST response (e.g. after Approve) can arrive after the WS updates that followed it: keep the newer.
+    const known = s.detail.nodeRuns.find((n) => n.id === nodeRun.id);
+    if (known && known.updatedAt > nodeRun.updatedAt) return;
     const nodeRuns = upsertNodeRun(s.detail.nodeRuns, nodeRun);
     set({ detail: { ...s.detail, nodeRuns }, currentByNode: currentNodeRuns(nodeRuns) });
   },

@@ -2,6 +2,7 @@ import type { Graph, GraphEdge, Lane, NodeRun, ValidationResult } from "@promptg
 import { MarkerType } from "@xyflow/react";
 import type { PgFlowEdge } from "../components/canvas/PgEdge";
 import type { NodeIssues, PgFlowNode } from "../components/nodes/types";
+import { mergeInputLabels, nodeLanes } from "./lanes";
 import { edgeRunState, type EdgeRunState } from "./run-view";
 
 /** Maps the domain graph (+ validation or run state) to React Flow nodes and edges. Pure. */
@@ -34,9 +35,9 @@ const NO_ISSUES: NodeIssues = { errors: [], warnings: [] };
 export function toFlowNodes(input: FlowInput): PgFlowNode[] {
   const issues = input.run ? new Map<string, NodeIssues>() : issuesByNode(input.validation);
   const selected = new Set(input.selectedNodeIds);
+  const lanes = input.run ? nodeLanes(input.graph, input.run.lanes, input.run.currentByNode) : null;
   return input.graph.nodes.map((node) => {
     const nodeRun = input.run?.currentByNode[node.id] ?? null;
-    const laneId = nodeRun?.laneId;
     const m = input.measured[node.id];
     return {
       id: node.id,
@@ -47,7 +48,8 @@ export function toFlowNodes(input: FlowInput): PgFlowNode[] {
       data: {
         node,
         nodeRun,
-        lane: (laneId && input.run?.lanes[laneId]) || null,
+        lane: lanes?.get(node.id) ?? null,
+        mergeInputs: node.type === "merge" ? mergeInputLabels(input.graph, node.id) : [],
         runMode: !!input.run,
         issues: issues.get(node.id) ?? NO_ISSUES,
         phase: input.phase,

@@ -1,6 +1,6 @@
 import type { RunDetail } from "@promptgraph/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { linearGraph, nodeRunOf, runDetailOf } from "../test-fixtures";
+import { laneOf, linearGraph, nodeRunOf, runDetailOf } from "../test-fixtures";
 import { setRunStoreDeps, useRunStore } from "./run-store";
 
 describe("run store", () => {
@@ -42,6 +42,15 @@ describe("run store", () => {
     expect(useRunStore.getState().detail!.nodeRuns).toHaveLength(2);
   });
 
+  it("keeps the newer node run when a stale REST response arrives after WS updates", () => {
+    useRunStore.getState().showRun(runDetailOf(linearGraph(), [nodeRunOf({ id: "na", nodeId: "a", status: "waiting_approval", updatedAt: 10 })]));
+    useRunStore.getState().applyNodeUpdate(nodeRunOf({ id: "na", nodeId: "a", status: "succeeded", updatedAt: 30 }));
+    useRunStore.getState().applyNodeUpdate(nodeRunOf({ id: "na", nodeId: "a", status: "running", updatedAt: 20 }));
+    expect(useRunStore.getState().currentByNode.a!.status).toBe("succeeded");
+    useRunStore.getState().applyNodeUpdate(nodeRunOf({ id: "na", nodeId: "a", status: "succeeded", activity: "x", updatedAt: 30 }));
+    expect(useRunStore.getState().currentByNode.a!.activity).toBe("x");
+  });
+
   it("ignores updates for other runs and merges run summaries", () => {
     const graph = linearGraph();
     const detail = runDetailOf(graph, []);
@@ -70,5 +79,33 @@ describe("run store", () => {
     await useRunStore.getState().selectRun(null);
     expect(unsubscribe).toHaveBeenCalledWith("r1");
     expect(useRunStore.getState()).toMatchObject({ selectedRunId: null, detail: null });
+  });
+
+  it("loads history details on demand and refreshes them only when status or cleanup changes", async () => {
+    const graph = linearGraph();
+    const detail = runDetailOf(graph, [nodeRunOf({ id: "na", nodeId: "a", status: "succeeded" })]);
+    detail.lanes = [laneOf({ id: "main", index: 0 })];
+    const fetchRun = vi.fn(async () => detail);
+    setRunStoreDeps({ subscribe, unsubscribe, fetchRun });
+    const { graphSnapshot: _g, ...summary } = detail.run;
+    useRunStore.getState().applyRunUpdate(summary);
+
+    await useRunStore.getState().loadRunInfo("r1");
+    expect(useRunStore.getState().runInfo.r1!.lanes.map((l) => l.branch)).toEqual(["pg/g1/ab12/main"]);
+    expect(fetchRun).toHaveBeenCalledTimes(1);
+
+    useRunStore.getState().applyRunUpdate({ ...summary, usage: { ...summary.usage, outputTokens: 99 } });
+    expect(fetchRun).toHaveBeenCalledTimes(1);
+
+    detail.lanes = [laneOf({ id: "main", index: 0, status: "removed" })];
+    useRunStore.getState().applyRunUpdate({ ...summary, status: "succeeded", cleanedUp: true });
+    expect(fetchRun).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(useRunStore.getState().runInfo.r1!.lanes[0]!.status).toBe("removed"));
+  });
+
+  it("forgets history details when switching graphs", async () => {
+    useRunStore.setState({ runInfo: { r1: { lanes: [], prs: [] } } });
+    await useRunStore.getState().loadRuns("g2").catch(() => undefined);
+    expect(useRunStore.getState().runInfo).toEqual({});
   });
 });

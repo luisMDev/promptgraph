@@ -58,6 +58,29 @@ describe("checkpoint helpers", () => {
     await checkpointIfDirty(dir, "C");
     expect(await squashTarget(dir, base)).toBe(real);
   });
+
+  it("squashTarget squashes lane merges that bring in only checkpoints, but not merged real commits", async () => {
+    const { dir, g, base } = repo();
+    const mergeSide = async (file: string, real: boolean) => {
+      g("checkout", "-q", "-b", file, base);
+      fs.writeFileSync(path.join(dir, file), file);
+      if (real) {
+        g("add", "-A");
+        g("commit", "-q", "-m", `feat: ${file}`);
+      } else await checkpointIfDirty(dir, file);
+      g("checkout", "-q", "main");
+      g("merge", "-q", "--no-ff", "-m", `Merge branch '${file}' into main`, file);
+    };
+    fs.writeFileSync(path.join(dir, "a"), "1");
+    await checkpointIfDirty(dir, "A");
+    await mergeSide("b", false);
+    expect(await squashTarget(dir, base)).toBe(base);
+    await mergeSide("c", true);
+    expect(await squashTarget(dir, base)).toBeNull();
+    fs.writeFileSync(path.join(dir, "d"), "4");
+    await checkpointIfDirty(dir, "D");
+    expect(await squashTarget(dir, base)).toBe(g("rev-parse", "HEAD~1"));
+  });
 });
 
 describe("CommitRunner", () => {

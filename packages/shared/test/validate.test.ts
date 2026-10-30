@@ -289,6 +289,26 @@ describe("validateGraph", () => {
       );
       expect(r.warnings).toEqual([]);
     });
+    it("does not warn for a merge whose input lanes all end with a commit", () => {
+      const r = validateGraph(
+        g(
+          [
+            { id: "a", type: "prompt", y: 0 },
+            { id: "ca", type: "commit", y: 0, x: 100 },
+            { id: "b", type: "shell", y: 100 },
+            { id: "cb", type: "commit", y: 100, x: 100 },
+            { id: "m", type: "merge", x: 300 },
+          ],
+          [
+            { source: "a", target: "ca" },
+            { source: "ca", target: "m" },
+            { source: "b", target: "cb" },
+            { source: "cb", target: "m" },
+          ],
+        ),
+      );
+      expect(r).toEqual({ errors: [], warnings: [] });
+    });
     it("warns for merge when an input lane has uncommitted work", () => {
       const r = validateGraph(
         g(
@@ -335,6 +355,45 @@ describe("computeLanePlan", () => {
     expect(plan.mergeSources.get("m")).toEqual(["l3", "l4"]);
     expect(plan.lanes.find((l) => l.id === "l3")).toMatchObject({ parentLaneId: "main", forkAfterNodeId: "a", firstNodeId: "c" });
     expect(plan.lanes.find((l) => l.id === "l2")).toMatchObject({ parentLaneId: null, firstNodeId: "r2" });
+  });
+
+  it("continues a merge in the lane of its first input by canvas position", () => {
+    const nodes = (bY: number): N[] => [
+      { id: "a", type: "prompt", x: 0, y: 0 },
+      { id: "b", type: "prompt", x: 0, y: bY },
+      { id: "m", type: "merge", x: 200 },
+    ];
+    const edges = [
+      { source: "a", target: "m" },
+      { source: "b", target: "m" },
+    ];
+    const below = computeLanePlan(g(nodes(100), edges));
+    expect(Object.fromEntries(below.laneOf)).toEqual({ a: "main", b: "l2", m: "main" });
+    expect(below.mergeSources.get("m")).toEqual(["l2"]);
+    // Moving b above a makes b the first root and the merge's first input.
+    const above = computeLanePlan(g(nodes(-100), edges));
+    expect(Object.fromEntries(above.laneOf)).toEqual({ b: "main", a: "l2", m: "main" });
+    expect(above.mergeSources.get("m")).toEqual(["l2"]);
+  });
+
+  it("records the lane each edge grants, including fork lanes that start at a merge", () => {
+    const graph = g(
+      [
+        { id: "a", type: "prompt", x: 0 },
+        { id: "b", type: "prompt", x: -100, y: 100 },
+        { id: "m", type: "merge", x: 200 },
+      ],
+      [
+        { id: "ab", source: "a", target: "b" },
+        { id: "am", source: "a", target: "m" },
+        { id: "bm", source: "b", target: "m" },
+      ],
+    );
+    const plan = computeLanePlan(graph);
+    expect(Object.fromEntries(plan.edgeLane)).toEqual({ ab: "main", am: "l2", bm: "main" });
+    expect(plan.lanes.find((l) => l.id === "l2")).toMatchObject({ parentLaneId: "main", forkAfterNodeId: "a", firstNodeId: "m" });
+    expect(plan.laneOf.get("m")).toBe("main");
+    expect(plan.mergeSources.get("m")).toEqual(["l2"]);
   });
 
   it("keeps condition branches in the same lane", () => {

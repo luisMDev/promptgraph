@@ -34,5 +34,15 @@ export default defineConfig({
       "/ws": { ...asServer, target: target.replace("http", "ws"), ws: true },
     },
   },
-  build: { outDir: "dist", emptyOutDir: true, sourcemap: true, chunkSizeWarningLimit: 1600 },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        // Long-lived vendor code in its own chunk; xterm and diff2html are split off by the lazy imports.
+        manualChunks: (id) => (/node_modules\/(\.pnpm\/)?(react|react-dom|scheduler|@xyflow|d3-[a-z]+|zustand)[@/]/.test(id) ? "vendor" : undefined),
+      },
+    },
+  },
 });

@@ -190,6 +190,11 @@ export interface LanePlan {
   laneOf: Map<string, string>;
   /** For merge nodes: lanes merged into the merge's own lane, in canvas order of the inputs. */
   mergeSources: Map<string, string[]>;
+  /**
+   * Lane granted by each forward edge to its target. A fan-out edge straight into a merge grants a fork
+   * lane that the merge reads (or continues in) without any node running in it first.
+   */
+  edgeLane: Map<string, string>;
 }
 
 /**
@@ -207,8 +212,7 @@ export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan
   const lanes: PlannedLane[] = [];
   const laneOf = new Map<string, string>();
   const mergeSources = new Map<string, string[]>();
-  /** Lane granted to a target by a specific edge. */
-  const laneByEdge = new Map<string, string>();
+  const edgeLane = new Map<string, string>();
 
   const newLane = (firstNodeId: string, parentLaneId: string | null, forkAfterNodeId: string | null): string => {
     const id = lanes.length === 0 ? "main" : `l${lanes.length + 1}`;
@@ -225,7 +229,7 @@ export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan
     if (inputs.length === 0) {
       lane = rootLane.get(node.id)!;
     } else {
-      const inputLanes = inputs.map((e) => laneByEdge.get(e.id)!);
+      const inputLanes = inputs.map((e) => edgeLane.get(e.id)!);
       lane = inputLanes[0]!;
       if (node.type === "merge") {
         mergeSources.set(
@@ -248,9 +252,9 @@ export function computeLanePlan(graph: Pick<Graph, "nodes" | "edges">): LanePlan
         const existing = seenTargets.get(e.target);
         const granted = existing ?? (i === 0 ? lane : newLane(e.target, lane, node.id));
         seenTargets.set(e.target, granted);
-        laneByEdge.set(e.id, granted);
+        edgeLane.set(e.id, granted);
       });
     }
   }
-  return { lanes, laneOf, mergeSources };
+  return { lanes, laneOf, mergeSources, edgeLane };
 }

@@ -1,6 +1,7 @@
 import { createEmptyGraph, isFinalRunStatus, slugifyGraphId, type NodeRun, type ServerMessage } from "@promptgraph/shared";
 import { ApiRequestError, api, errorMessage } from "../api/rest";
 import { wsClient } from "../api/ws";
+import { enteredMergeConflict } from "../lib/run-view";
 import { useAppStore } from "./app-store";
 import { useEditorStore } from "./editor-store";
 import { useRunStore } from "./run-store";
@@ -147,6 +148,11 @@ export function openNodeTerminal(nodeRun: NodeRun, label: string): void {
   useUiStore.getState().openTerminal(nodeRun.ptyId, { title: label, nodeRunId: nodeRun.id });
 }
 
+/** Workspace setup PTY of a lane's first node run (CONTRACTS § PTY ids). */
+export function openSetupTerminal(nodeRun: NodeRun, label: string): void {
+  useUiStore.getState().openTerminal(`setup-${nodeRun.id}`, { title: `${label} (setup)`, nodeRunId: null });
+}
+
 export async function reopenSession(nodeRunId: string, label: string): Promise<void> {
   try {
     const { ptyId } = await api.reopen(nodeRunId);
@@ -184,6 +190,13 @@ export async function nodeControl(nodeRunId: string, control: NodeControl): Prom
   }
 }
 
+/** A merge paused on conflicts: open its shell in the drawer so the user can resolve them (§9.5). */
+function openMergeShell(nodeRun: NodeRun): void {
+  const node = useRunStore.getState().detail?.run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId);
+  if (!nodeRun.ptyId) return;
+  useUiStore.getState().openTerminal(nodeRun.ptyId, { title: `${node?.label || "Merge"} (merge shell)`, nodeRunId: nodeRun.id });
+}
+
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 function refreshPendingSoon(): void {
   if (pendingTimer) return;
@@ -215,9 +228,13 @@ export function handleServerMessage(msg: ServerMessage): void {
       refreshPendingSoon();
       return;
     }
-    case "node:update":
-      useRunStore.getState().applyNodeUpdate(msg.nodeRun);
+    case "node:update": {
+      const runs = useRunStore.getState();
+      const prev = runs.detail?.nodeRuns.find((n) => n.id === msg.nodeRun.id);
+      runs.applyNodeUpdate(msg.nodeRun);
+      if (msg.nodeRun.runId === runs.selectedRunId && enteredMergeConflict(prev, msg.nodeRun)) openMergeShell(msg.nodeRun);
       return;
+    }
     case "lane:update":
       useRunStore.getState().applyLaneUpdate(msg.lane);
       return;

@@ -1,18 +1,21 @@
-import { formatCostUsd, isActiveNodeStatus, type NodeRun } from "@promptgraph/shared";
+import { formatCostUsd, isActiveNodeStatus, type GraphNode, type NodeRun } from "@promptgraph/shared";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
-import { elapsed, formatTokens } from "../../lib/format";
+import { elapsed, formatTokens, prLabel } from "../../lib/format";
 import { NODE_TYPE_META, configPreview } from "../../lib/node-meta";
-import { laneColor, nodeRunStyle } from "../../lib/status-style";
+import { laneSwatch, type NodeLane } from "../../lib/lanes";
+import { cardNote, type NoteTone } from "../../lib/run-view";
+import { nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { Icons, NodeTypeIcon } from "../common/icons";
+import { LaneBadge } from "../common/LaneBadge";
 import type { PgFlowNode } from "./types";
 
 const handleBase = "!size-2.5 !border-2 !border-zinc-950";
 
 /** Canvas card for every node type: label, type icon, config preview; in run mode status, timing, activity, lane, usage. */
 export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgFlowNode>) {
-  const { node, nodeRun, lane, runMode, issues, phase } = data;
+  const { node, nodeRun, lane, runMode, issues, phase, mergeInputs } = data;
   const meta = NODE_TYPE_META[node.type];
   const style = runMode ? nodeRunStyle(nodeRun) : null;
   const hasErrors = !runMode && issues.errors.length > 0;
@@ -33,6 +36,7 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
       title={tooltip}
       className={`relative w-60 rounded-lg border-2 text-left shadow-lg shadow-black/30 transition-colors ${border} ${selected ? "outline-2 outline-offset-2 outline-blue-400" : ""}`}
     >
+      {lane && <span className="absolute top-2 bottom-2 -left-0.5 w-1 rounded-full" style={{ background: laneSwatch(lane.index).hex }} />}
       <Handle type="target" position={Position.Left} id="in" className={`${handleBase} !bg-zinc-400`} isConnectable={!runMode} />
 
       <div className="flex items-center gap-2 px-3 pt-2.5">
@@ -50,7 +54,9 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
 
       <div className={`truncate px-3 pt-1.5 pb-2.5 text-xs text-zinc-400 ${mono ? "font-mono" : ""}`}>{configPreview(node)}</div>
 
-      {runMode && <RunFooter nodeRun={nodeRun} laneLabel={lane?.id ?? nodeRun?.laneId ?? null} laneIndex={lane?.index ?? 0} />}
+      {mergeInputs.length > 1 && <MergeOrder inputs={mergeInputs} />}
+
+      {runMode && <RunFooter node={node} nodeRun={nodeRun} lane={lane} />}
 
       {node.type === "condition" ? (
         <>
@@ -85,7 +91,30 @@ function PortHandle({ id, top, color, label, runMode }: { id: string; top: strin
   );
 }
 
-function RunFooter({ nodeRun, laneLabel, laneIndex }: { nodeRun: NodeRun | null; laneLabel: string | null; laneIndex: number }) {
+/** Merge order (§18 Q4): the first input keeps its lane, the others are merged into it one at a time. */
+function MergeOrder({ inputs }: { inputs: string[] }) {
+  return (
+    <ol className="space-y-0.5 px-3 pb-2.5 text-[11px] text-zinc-400" title="Merge order: the first input keeps its lane, the others are merged into it one at a time">
+      {inputs.map((label, i) => (
+        <li key={i} className="flex items-center gap-1.5">
+          <span className="w-3 text-right font-mono text-zinc-500">{i + 1}</span>
+          <span className="truncate">{label}</span>
+          {i === 0 && <span className="ml-auto text-[10px] text-zinc-500">base lane</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+const NOTE_TONE: Record<NoteTone, string> = {
+  amber: "bg-amber-500/15 text-amber-200",
+  violet: "bg-violet-500/20 text-violet-200",
+  green: "bg-green-500/10 text-green-300",
+  red: "bg-red-500/15 text-red-200",
+  blue: "bg-blue-500/15 text-blue-200",
+};
+
+function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun | null; lane: NodeLane | null }) {
   const status = nodeRun?.status ?? "pending";
   const style = nodeRunStyle(nodeRun);
   const live = isActiveNodeStatus(status);
@@ -94,6 +123,8 @@ function RunFooter({ nodeRun, laneLabel, laneIndex }: { nodeRun: NodeRun | null;
   const usage = nodeRun?.output?.usage;
   const tokens = usage ? usage.inputTokens + usage.outputTokens + usage.cacheCreationTokens + usage.cacheReadTokens : 0;
   const activity = nodeRun?.status === "waiting_input" ? (nodeRun.waitingReason?.message ?? "Needs input") : nodeRun?.activity;
+  const note = cardNote(node, nodeRun);
+  const prUrl = nodeRun?.output?.prUrl;
 
   return (
     <div className="space-y-1.5 border-t border-white/5 px-3 py-2">
@@ -102,17 +133,33 @@ function RunFooter({ nodeRun, laneLabel, laneIndex }: { nodeRun: NodeRun | null;
         <span className={`font-medium ${style.text}`}>{style.label}</span>
         {time && <span className="ml-auto font-mono text-zinc-400 tabular-nums">{time}</span>}
       </div>
-      {activity && live && <div className="truncate font-mono text-[11px] text-zinc-400" title={activity}>{activity}</div>}
+      {note && <div className={`rounded px-1.5 py-1 text-[11px] leading-snug ${NOTE_TONE[note.tone]}`}>{note.text}</div>}
+      {!note && activity && live && <div className="truncate font-mono text-[11px] text-zinc-400" title={activity}>{activity}</div>}
+      {prUrl && (
+        <a
+          href={prUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="nodrag nopan block truncate text-[11px] text-blue-400 hover:underline"
+          title={prUrl}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {prLabel(prUrl)}
+        </a>
+      )}
       {nodeRun?.error && status === "failed" && <div className="line-clamp-2 text-[11px] text-red-300" title={nodeRun.error}>{nodeRun.error}</div>}
       <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-        {laneLabel && <span className={`rounded px-1.5 py-0.5 font-mono ring-1 ${laneColor(laneIndex)}`}>{laneLabel}</span>}
+        {lane && <LaneBadge id={lane.id} index={lane.index} title={`Lane ${lane.id}`} />}
         {nodeRun && nodeRun.attempt > 0 && <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">try {nodeRun.attempt + 1}</span>}
         {nodeRun?.hold && <span className="rounded bg-sky-900/60 px-1.5 py-0.5 text-sky-200">hold</span>}
-        {nodeRun?.laneSetup && (
-          <span
-            className={`rounded px-1.5 py-0.5 ${nodeRun.laneSetup === "failed" ? "bg-red-900/60 text-red-200" : nodeRun.laneSetup === "running" ? "bg-blue-900/60 text-blue-200" : "bg-zinc-800 text-zinc-300"}`}
-          >
-            setup {nodeRun.laneSetup}
+        {nodeRun?.laneSetup === "running" && (
+          <span className="animate-pulse rounded bg-blue-900/60 px-1.5 py-0.5 text-blue-200" title="Workspace setup is running in the new worktree">
+            setting up…
+          </span>
+        )}
+        {nodeRun?.laneSetup === "failed" && (
+          <span className="rounded bg-red-900/60 px-1.5 py-0.5 text-red-200" title="Workspace setup failed; see its log in the inspector">
+            setup failed
           </span>
         )}
         {usage && tokens > 0 && (

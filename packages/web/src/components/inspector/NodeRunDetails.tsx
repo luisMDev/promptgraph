@@ -1,12 +1,14 @@
 import { formatCostUsd, isActiveNodeStatus, isClaudeNode, isFinalRunStatus, type GraphNode, type Lane, type NodeRun, type RunStatus } from "@promptgraph/shared";
 import { elapsed, formatTime, formatTokens } from "../../lib/format";
+import { mergeInputLabels } from "../../lib/lanes";
 import { NODE_TYPE_META } from "../../lib/node-meta";
-import { laneColor, nodeRunStyle } from "../../lib/status-style";
+import { nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
-import { nodeControl, openNodeTerminal, reopenSession } from "../../store/app-actions";
+import { nodeControl, openNodeTerminal, openSetupTerminal, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
 import { Icons, NodeTypeIcon } from "../common/icons";
+import { LaneBadge } from "../common/LaneBadge";
 import { Button, DetailRow, Section, StatusDot } from "../common/ui";
 
 /** Run-mode inspector for one node: status, session, branch, timings, output, usage, manual controls. */
@@ -28,7 +30,7 @@ export function NodeRunDetails({ node, nodeRun, lane, runStatus }: { node: Graph
         <p className="px-4 py-4 text-sm text-zinc-500">This node has not been scheduled yet.</p>
       ) : (
         <>
-          <StatusSection nodeRun={nodeRun} lane={lane} attempts={attempts} />
+          <StatusSection node={node} nodeRun={nodeRun} lane={lane} attempts={attempts} />
           <Controls node={node} nodeRun={nodeRun} label={label} runFinal={isFinalRunStatus(runStatus)} />
           <OutputSection nodeRun={nodeRun} />
           {nodeRun.output?.usage && <UsageSection usage={nodeRun.output.usage} />}
@@ -38,8 +40,11 @@ export function NodeRunDetails({ node, nodeRun, lane, runStatus }: { node: Graph
   );
 }
 
-function StatusSection({ nodeRun, lane, attempts }: { nodeRun: NodeRun; lane: Lane | null; attempts: number }) {
+function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nodeRun: NodeRun; lane: Lane | null; attempts: number }) {
   const style = nodeRunStyle(nodeRun);
+  const mergeShell = node.type === "merge" && nodeRun.waitingReason?.kind === "merge_conflict";
+  const snapshot = useRunStore((s) => s.detail?.run.graphSnapshot);
+  const mergeOrder = node.type === "merge" && snapshot ? mergeInputLabels(snapshot, node.id) : [];
   const now = useNow(isActiveNodeStatus(nodeRun.status));
   return (
     <Section title="Status">
@@ -53,8 +58,8 @@ function StatusSection({ nodeRun, lane, attempts }: { nodeRun: NodeRun; lane: La
       <div className="space-y-1.5">
         {lane ? (
           <DetailRow label="Lane">
-            <span className={`mr-1.5 rounded px-1.5 py-0.5 font-mono text-[10px] ring-1 ${laneColor(lane.index)}`}>{lane.id}</span>
-            <span className="font-mono">{lane.branch}</span>
+            <LaneBadge id={lane.id} index={lane.index} /> <span className="font-mono">{lane.branch}</span>
+            {lane.pushed && <span className="ml-1.5 text-[10px] text-indigo-300">pushed</span>}
           </DetailRow>
         ) : (
           nodeRun.laneId && <DetailRow label="Lane">{nodeRun.laneId}</DetailRow>
@@ -70,7 +75,19 @@ function StatusSection({ nodeRun, lane, attempts }: { nodeRun: NodeRun; lane: La
         {nodeRun.startedAt && <DetailRow label="Duration">{elapsed(nodeRun.startedAt, nodeRun.finishedAt, now)}</DetailRow>}
         {attempts > 1 && <DetailRow label="Attempt">{`${nodeRun.attempt + 1} of ${attempts}`}</DetailRow>}
         {nodeRun.laneSetup && <DetailRow label="Lane setup">{nodeRun.laneSetup}</DetailRow>}
+        {mergeOrder.length > 1 && (
+          <DetailRow label="Merge order">
+            {mergeOrder.map((l, i) => (
+              <span key={i} className="block">
+                {i + 1}. {l}
+              </span>
+            ))}
+          </DetailRow>
+        )}
       </div>
+      {mergeShell && (
+        <p className="text-[11px] text-zinc-400">Resolve the conflicts in the merge shell (edit, then <span className="font-mono">git add</span>), then click Done.</p>
+      )}
       {nodeRun.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-200">{nodeRun.error}</pre>}
     </Section>
   );
@@ -85,7 +102,8 @@ function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun
   const canHold = isClaudeNode(node) && !runFinal && (active || s === "pending" || s === "ready");
   const canReopen = isClaudeNode(node) && !!nodeRun.sessionId && !active;
   const canReview = s === "waiting_approval";
-  if (!(canDone || active || canHold || canRetry || canSkip || canReview || nodeRun.ptyId || canReopen)) return null;
+  const mergeShell = node.type === "merge" && nodeRun.waitingReason?.kind === "merge_conflict";
+  if (!(canDone || active || canHold || canRetry || canSkip || canReview || nodeRun.ptyId || canReopen || nodeRun.laneSetup)) return null;
   const id = nodeRun.id;
   return (
     <Section title="Controls">
@@ -121,8 +139,13 @@ function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun
           </Button>
         )}
         {nodeRun.ptyId && (
-          <Button size="sm" variant="ghost" onClick={() => openNodeTerminal(nodeRun, label)}>
-            <Icons.terminal /> Terminal
+          <Button size="sm" variant="ghost" onClick={() => openNodeTerminal(nodeRun, mergeShell ? `${label} (merge shell)` : label)}>
+            <Icons.terminal /> {mergeShell ? "Merge shell" : "Terminal"}
+          </Button>
+        )}
+        {nodeRun.laneSetup && (
+          <Button size="sm" variant="ghost" onClick={() => openSetupTerminal(nodeRun, label)} title="Output of the graph's workspace setup in this new worktree">
+            <Icons.terminal /> Setup log
           </Button>
         )}
         {canReopen && (

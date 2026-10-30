@@ -3,6 +3,11 @@ export function claudeBin(env: NodeJS.ProcessEnv = process.env): string {
   return env.PG_CLAUDE_BIN || "claude";
 }
 
+/** GitHub CLI binary (pr nodes); tests point it at test/fixtures/fake-gh. */
+export function ghBin(env: NodeJS.ProcessEnv = process.env): string {
+  return env.PG_GH_BIN || "gh";
+}
+
 /**
  * Variables that make a child `claude` behave as a nested/hermetic session (SPIKE): it would not persist
  * transcripts or would refuse to start. Stripped from every child process env.

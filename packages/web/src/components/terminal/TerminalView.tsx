@@ -18,11 +18,15 @@ const THEME = {
 
 /**
  * One xterm.js instance bound to a PTY over the shared WebSocket: replay + live output, keystrokes and
- * resizes go to the server while the process is live; otherwise read-only.
+ * resizes go to the server while the process is live; otherwise read-only. A live terminal fits its
+ * container (and drives the PTY size); a replay renders at the PTY's own cols/rows (from pty:attached),
+ * since a full-screen TUI redrawn at another width is garbled, and scrolls inside the container instead.
  */
 export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visible: boolean; onState: (s: PtyState) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  /** Replay: the PTY's size; the container scrolls instead of fitting. null = live (fit). */
+  const [fixedSize, setFixedSize] = useState<{ cols: number; rows: number } | null>(null);
   const onStateRef = useRef(onState);
   onStateRef.current = onState;
   const [term, setTerm] = useState<Terminal | null>(null);
@@ -67,7 +71,14 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
       if (msg.type === "pty:attached") {
         term.reset();
         setLive(msg.live);
-        if (msg.live && (msg.cols !== term.cols || msg.rows !== term.rows)) wsClient.resizePty(ptyId, term.cols, term.rows);
+        if (msg.live) {
+          setFixedSize(null);
+          if (fitRef.current) safeFit(fitRef.current);
+          if (msg.cols !== term.cols || msg.rows !== term.rows) wsClient.resizePty(ptyId, term.cols, term.rows);
+        } else {
+          setFixedSize({ cols: msg.cols, rows: msg.rows });
+          term.resize(msg.cols, msg.rows);
+        }
         onStateRef.current(msg.live ? { phase: "live" } : { phase: "replay" });
       } else if (msg.type === "pty:exit") {
         setLive(false);
@@ -94,17 +105,24 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
 
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || !visible) return;
+    if (!el || !visible || fixedSize) return;
     const ro = new ResizeObserver(() => {
       if (fitRef.current) safeFit(fitRef.current);
     });
     ro.observe(el);
     if (fitRef.current) safeFit(fitRef.current);
-    term?.focus();
     return () => ro.disconnect();
+  }, [visible, term, fixedSize]);
+
+  useEffect(() => {
+    if (visible) term?.focus();
   }, [visible, term]);
 
-  return <div ref={containerRef} className={`pg-terminal h-full w-full ${visible ? "" : "hidden"}`} />;
+  return (
+    <div className={`h-full w-full ${fixedSize ? "overflow-auto" : ""} ${visible ? "" : "hidden"}`}>
+      <div ref={containerRef} className={`pg-terminal ${fixedSize ? "pg-terminal-fixed h-max w-max" : "h-full w-full"}`} />
+    </div>
+  );
 }
 
 function safeFit(fit: FitAddon): void {

@@ -6,7 +6,7 @@ import { parseCliArgs } from "../src/cli/args.js";
 import { checkPrereqs } from "../src/cli/prereqs.js";
 import { startServer } from "../src/cli/server.js";
 import { LaneManager } from "../src/workspace/lane-manager.js";
-import { createTempRepo, FAKE_CLAUDE, fakeClaudeEnv, tempDir } from "./helpers.js";
+import { createTempRepo, FAKE_CLAUDE, FAKE_GH, fakeClaudeEnv, tempDir } from "./helpers.js";
 
 describe("parseCliArgs", () => {
   it("applies defaults", () => {
@@ -37,7 +37,13 @@ describe("checkPrereqs", () => {
     const report = await checkPrereqs({ PATH: "/nonexistent", PG_CLAUDE_BIN: "/nonexistent/claude" });
     expect(report.errors).toEqual(["git not found: promptgraph needs git on PATH"]);
     expect(report.warnings).toContainEqual(expect.stringContaining("Claude Code (/nonexistent/claude) not found"));
-    expect(report.warnings).toContain("gh not found: PR nodes will fail");
+    expect(report.warnings).toContain("GitHub CLI (gh) not found: PR nodes will fail");
+  });
+
+  it("checks the gh binary set by PG_GH_BIN", async () => {
+    const env = { ...process.env, PG_CLAUDE_BIN: FAKE_CLAUDE };
+    expect((await checkPrereqs({ ...env, PG_GH_BIN: FAKE_GH })).warnings.some((w) => w.includes("GitHub CLI"))).toBe(false);
+    expect((await checkPrereqs({ ...env, PG_GH_BIN: "/nonexistent/gh" })).warnings).toContain("GitHub CLI (/nonexistent/gh) not found: PR nodes will fail");
   });
 });
 

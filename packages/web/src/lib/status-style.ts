@@ -55,19 +55,3 @@ export const RUN_STATUS_STYLE: Record<RunStatus, { label: string; dot: string; t
   failed: { label: "Failed", dot: "bg-status-failed", text: "text-red-300" },
   cancelled: { label: "Cancelled", dot: "bg-status-cancelled", text: "text-zinc-400" },
 };
-
-/** Lane colours by Lane.index, so parallel worktrees are distinguishable at a glance. */
-const LANE_COLORS = [
-  "bg-cyan-500/20 text-cyan-300 ring-cyan-500/40",
-  "bg-fuchsia-500/20 text-fuchsia-300 ring-fuchsia-500/40",
-  "bg-lime-500/20 text-lime-300 ring-lime-500/40",
-  "bg-orange-500/20 text-orange-300 ring-orange-500/40",
-  "bg-teal-500/20 text-teal-300 ring-teal-500/40",
-  "bg-pink-500/20 text-pink-300 ring-pink-500/40",
-  "bg-indigo-500/20 text-indigo-300 ring-indigo-500/40",
-  "bg-yellow-500/20 text-yellow-300 ring-yellow-500/40",
-] as const;
-
-export function laneColor(index: number): string {
-  return LANE_COLORS[((index % LANE_COLORS.length) + LANE_COLORS.length) % LANE_COLORS.length]!;
-}

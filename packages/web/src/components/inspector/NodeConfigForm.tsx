@@ -1,8 +1,10 @@
 import type { ConditionEvaluator, GraphNode, GraphNodeOf, GraphSettings, NodeConfigMap, NodeType } from "@promptgraph/shared";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { mergeInputLabels } from "../../lib/lanes";
 import { useAppStore } from "../../store/app-store";
 import { useEditorStore } from "../../store/editor-store";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea, parseEnv } from "../common/fields";
+import { Icons } from "../common/icons";
 import { Checkbox, Field } from "../common/ui";
 import { ClaudeOptions } from "./ClaudeOptions";
 
@@ -136,7 +138,7 @@ function PrForm({ node, settings, disabled, patch }: FormProps<"pr">) {
   const branches = useAppStore((s) => s.repo?.branches ?? []);
   return (
     <div className="space-y-3">
-      <Field label="Title" hint="Empty = generated from the lane's changes.">
+      <Field label="Title" hint="Leave title or body empty to generate it with Claude from the lane's changes; you can edit both when approving.">
         <OptionalText value={node.config.title} disabled={disabled} placeholder="Generated" onChange={(title) => patch({ title })} />
       </Field>
       <Field label="Body">
@@ -154,10 +156,17 @@ function PrForm({ node, settings, disabled, patch }: FormProps<"pr">) {
       <Checkbox
         checked={node.config.requireApproval}
         disabled={disabled || (!settings.allowPrWithoutApproval && node.config.requireApproval)}
-        label="Require approval before pushing"
+        label={
+          <>
+            Require approval before pushing
+            {!settings.allowPrWithoutApproval && node.config.requireApproval && <Icons.lock className="text-zinc-500" />}
+          </>
+        }
         onChange={(requireApproval) => patch({ requireApproval })}
       />
-      {!settings.allowPrWithoutApproval && <p className="text-[11px] text-zinc-500">Nothing leaves the machine without approval. Unlock in graph settings.</p>}
+      {!settings.allowPrWithoutApproval && (
+        <p className="text-[11px] text-zinc-500">Nothing leaves the machine without approval. Unlock "Allow PR nodes without approval" in graph settings.</p>
+      )}
     </div>
   );
 }
@@ -174,9 +183,28 @@ function ApprovalForm({ node, disabled, patch }: FormProps<"approval">) {
 }
 
 function MergeForm({ node, disabled, patch }: FormProps<"merge">) {
+  const graph = useEditorStore((s) => s.graph);
+  const inputs = useMemo(() => (graph ? mergeInputLabels(graph, node.id) : []), [graph, node.id]);
   return (
     <div className="space-y-3">
-      <Field label="Strategy" hint="Other lanes are merged one at a time, in canvas order.">
+      <div className="space-y-1">
+        <span className="block text-xs font-medium text-zinc-400">Merge order</span>
+        {inputs.length < 2 ? (
+          <p className="text-[11px] text-zinc-500">Connect two or more parallel branches to this node.</p>
+        ) : (
+          <ol className="space-y-0.5 rounded-md bg-zinc-950 px-2 py-1.5 text-xs ring-1 ring-zinc-800">
+            {inputs.map((label, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="w-3 text-right font-mono text-zinc-500">{i + 1}</span>
+                <span className="truncate text-zinc-200">{label}</span>
+                <span className="ml-auto shrink-0 text-[10px] text-zinc-500">{i === 0 ? "continues its lane" : "merged in"}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        <span className="block text-[11px] leading-snug text-zinc-500">Inputs follow canvas order (left to right, then top to bottom); move nodes to reorder.</span>
+      </div>
+      <Field label="Strategy" hint="Other lanes are merged one at a time, in the order above.">
         <Select
           value={node.config.strategy}
           disabled={disabled}

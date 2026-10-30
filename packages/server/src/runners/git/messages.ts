@@ -17,8 +17,10 @@ export interface GenerateMessageInput {
   cwd: string;
   /** "commit" → conventional commit title + body; "pr" → PR title + markdown body. */
   kind: "commit" | "pr";
-  /** `git diff --cached --stat` (commit) or `git diff --stat <base>...HEAD` (pr). */
+  /** `git diff --cached --stat --summary` (commit) or `git diff --stat --summary <base>...HEAD` (pr). */
   diffStat: string;
+  /** pr: subjects of the lane's commits since the base (checkpoints excluded). */
+  commits?: string[];
   /** Outputs of the nodes since the last commit in the lane. */
   outputs: PredecessorOutput[];
   model?: string;
@@ -48,6 +50,7 @@ export function buildMessagePrompt(input: GenerateMessageInput): string {
   return [
     INSTRUCTIONS[input.kind],
     `Diff stat:\n${truncate(input.diffStat.trim() || "(empty)", DIFF_STAT_LIMIT)}`,
+    input.commits?.length ? `Commits:\n${truncate(input.commits.map((c) => `- ${c}`).join("\n"), DIFF_STAT_LIMIT)}` : "",
     outputs ? `Work done by the previous steps:\n\n${outputs}` : "",
   ]
     .filter(Boolean)

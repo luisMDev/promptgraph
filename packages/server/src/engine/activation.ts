@@ -68,6 +68,11 @@ export class ActivationTracker {
     return [...this.delivered].filter(([, d]) => d === "activation").map(([id]) => id);
   }
 
+  /** Whether the edge delivered an activation (false for skips and edges that have not delivered yet). */
+  isActivated(edgeId: string): boolean {
+    return this.delivered.get(edgeId) === "activation";
+  }
+
   /** Whether the node's outgoing edges have delivered (completed, user-skipped or dead path). */
   isResolved(nodeId: string): boolean {
     return this.resolved.has(nodeId);

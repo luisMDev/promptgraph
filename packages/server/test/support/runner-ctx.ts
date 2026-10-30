@@ -78,6 +78,8 @@ export function makeCtx(opts: {
   predecessors?: PredecessorOutput[];
   laneOutputs?: PredecessorOutput[];
   previousAttempt?: NodeRun | null;
+  mergeSources?: Lane[];
+  baseBranch?: string;
 }): TestContext {
   const abort = new AbortController();
   const ctx: TestContext = {
@@ -88,6 +90,9 @@ export function makeCtx(opts: {
     predecessors: opts.predecessors ?? [],
     laneOutputs: opts.laneOutputs ?? opts.predecessors ?? [],
     previousAttempt: opts.previousAttempt ?? null,
+    mergeSources: opts.mergeSources ?? [],
+    baseBranch: opts.baseBranch ?? opts.run.graphSnapshot.settings.baseBranch,
+    claudeSlot: async () => {},
     signal: abort.signal,
     abort,
     patches: [],

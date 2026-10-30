@@ -1,5 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { ApprovalDialog } from "./components/approval/ApprovalDialog";
+import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { Canvas } from "./components/canvas/Canvas";
 import { Banners } from "./components/common/Banners";
 import { PromptDialog } from "./components/common/PromptDialog";
@@ -16,6 +15,9 @@ import { useAppStore } from "./store/app-store";
 import { useEditorStore } from "./store/editor-store";
 import { useRunStore } from "./store/run-store";
 import { useUiStore, type LeftPanel } from "./store/ui-store";
+
+/** Lazy: the dialog pulls in diff2html, which the rest of the app does not need. */
+const ApprovalDialog = lazy(() => import("./components/approval/ApprovalDialog").then((m) => ({ default: m.ApprovalDialog })));
 
 /** Layout shell: header / palette | canvas | inspector / terminal drawer (§13). */
 export function App() {
@@ -53,9 +55,19 @@ export function App() {
           <Inspector />
         </aside>
       </div>
-      <ApprovalDialog />
+      <ApprovalGate />
       <Toasts />
     </div>
+  );
+}
+
+function ApprovalGate() {
+  const nodeRunId = useUiStore((s) => s.approvalNodeRunId);
+  if (!nodeRunId) return null;
+  return (
+    <Suspense fallback={null}>
+      <ApprovalDialog key={nodeRunId} nodeRunId={nodeRunId} />
+    </Suspense>
   );
 }
 

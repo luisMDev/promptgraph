@@ -177,7 +177,7 @@ function setup(runners: RunnerRegistry): Setup {
   return { engine: makeEngine(runners), store, graphs, bus, lanes, ptys, claude, events, attention, makeEngine };
 }
 
-type NodeSpec = { id: string; type?: NodeType; x?: number; y?: number; onError?: "fail-run" | "pause"; label?: string };
+type NodeSpec = { id: string; type?: NodeType; x?: number; y?: number; onError?: "fail-run" | "pause"; label?: string; config?: object };
 
 function makeGraph(nodes: NodeSpec[], edges: Array<[string, string]>, settings: GraphInput["settings"] = {}) {
   const config = (type: NodeType) =>
@@ -192,7 +192,7 @@ function makeGraph(nodes: NodeSpec[], edges: Array<[string, string]>, settings: 
       type: n.type ?? "prompt",
       label: n.label ?? n.id.toUpperCase(),
       position: { x: n.x ?? i * 200, y: n.y ?? 0 },
-      config: config(n.type ?? "prompt"),
+      config: n.config ?? config(n.type ?? "prompt"),
       ...(n.onError ? { onError: n.onError } : {}),
     })),
     edges: edges.map(([s, t]) => ({ id: `${s}-${t}`, source: s, target: t })),
@@ -406,6 +406,143 @@ describe("Engine DAG scheduling", () => {
     await engine.retry(s.store.listNodeRuns(run.id)[0]!.id);
     await waitRun(s, run.id, "succeeded");
     expect(vi.mocked(runWorkspaceSetup)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Engine lanes (§9)", () => {
+  it("gives every root its own lane from baseBranch and passes checkpointed merge sources", async () => {
+    const runner = new FakeRunner();
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a", x: 0, y: 0 },
+          { id: "b", x: 0, y: 100 },
+          { id: "m", type: "merge", x: 200 },
+        ],
+        [["a", "m"], ["b", "m"]],
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "succeeded");
+    expect(s.lanes.calls.filter((c) => c.startsWith("create"))).toEqual(["create:main:main", "create:l2:main"]);
+    const m = runner.last("m")!.ctx;
+    expect(m.lane.id).toBe("main");
+    expect(m.mergeSources.map((l) => [l.id, l.branch])).toEqual([["l2", `pg/flow/${run.shortId}/l2`]]);
+    // §9.3: every lane the merge reads is checkpointed first, labelled after its input node.
+    expect(s.lanes.calls.filter((c) => c.startsWith("checkpoint"))).toEqual(["checkpoint:main:A", "checkpoint:l2:B"]);
+    expect(runner.last("a")!.ctx.mergeSources).toEqual([]);
+    expect(s.engine.getRun(run.id).lanes.map((l) => [l.id, l.index, l.status])).toEqual([
+      ["main", 0, "active"],
+      ["l2", 1, "active"],
+    ]);
+  });
+
+  it("forks the lane of a fan-out edge straight into a merge when the parent finishes", async () => {
+    const runner = new FakeRunner((e) => {
+      if (e.ctx.node.id !== "b") queueMicrotask(() => e.succeed());
+    });
+    const s = setup(allTypes(runner));
+    // b sits left of a, so it is the merge's first input (lane main) and a→m grants fork lane l2.
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a", x: 0, y: 0 },
+          { id: "b", x: -200, y: 100 },
+          { id: "m", type: "merge", x: 200 },
+        ],
+        [["a", "b"], ["a", "m"], ["b", "m"]],
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => runner.last("b"));
+    // l2 captured a's state before b could change the parent lane.
+    expect(s.lanes.calls).toEqual(["create:main:main", "checkpoint:main:A", expect.stringMatching(/^create:l2:head-main-/)]);
+    runner.last("b")!.succeed();
+    await waitRun(s, run.id, "succeeded");
+    expect(runner.last("m")!.ctx.lane.id).toBe("main");
+    expect(runner.last("m")!.ctx.mergeSources.map((l) => l.id)).toEqual(["l2"]);
+  });
+
+  it("gives pr runners their base branch", async () => {
+    const runner = new FakeRunner();
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a" },
+          { id: "p", type: "pr", config: { base: "release" } },
+          { id: "q", type: "pr", x: 400, y: 100 },
+        ],
+        [["a", "p"], ["a", "q"]],
+        { baseBranch: "develop" },
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "succeeded");
+    expect(runner.last("a")!.ctx.baseBranch).toBe("develop");
+    expect(runner.last("p")!.ctx.baseBranch).toBe("release");
+    expect(runner.last("q")!.ctx).toMatchObject({ baseBranch: "develop", lane: { id: "l2" } });
+  });
+
+  it("merge nodes take a Claude slot under maxParallelClaude before resolving with Claude", async () => {
+    const granted: string[] = [];
+    const runner = new FakeRunner((e) => {
+      if (e.ctx.node.type === "prompt") return;
+      if (e.ctx.node.type !== "merge") return queueMicrotask(() => e.succeed());
+      void e.ctx.claudeSlot().then(
+        () => granted.push("slot"),
+        (err: Error) => granted.push(`rejected:${err.message}`),
+      );
+    });
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a", type: "shell", x: 0, y: 0 },
+          { id: "b", type: "shell", x: 0, y: 100 },
+          { id: "c", x: 0, y: 200 },
+          { id: "m", type: "merge", x: 200 },
+        ],
+        [["a", "m"], ["b", "m"]],
+        { maxParallelClaude: 1 },
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => runner.last("m"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(granted).toEqual([]); // c holds the only slot
+    runner.last("c")!.succeed();
+    await waitFor(() => granted.length === 1);
+    expect(granted).toEqual(["slot"]);
+    runner.last("m")!.succeed();
+    await waitRun(s, run.id, "succeeded");
+  });
+
+  it("rejects a pending Claude slot when the run is cancelled", async () => {
+    const granted: string[] = [];
+    const runner = new FakeRunner((e) => {
+      if (e.ctx.node.type === "prompt") return;
+      if (e.ctx.node.type !== "merge") return queueMicrotask(() => e.succeed());
+      void e.ctx.claudeSlot().catch((err: Error) => granted.push(`rejected:${err.message}`));
+    });
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [
+          { id: "a", type: "shell", x: 0, y: 0 },
+          { id: "b", type: "shell", x: 0, y: 100 },
+          { id: "c", x: 0, y: 200 },
+          { id: "m", type: "merge", x: 200 },
+        ],
+        [["a", "m"], ["b", "m"]],
+        { maxParallelClaude: 1 },
+      ),
+    );
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => runner.last("m"));
+    await s.engine.cancelRun(run.id);
+    expect(granted).toEqual(["rejected:Cancelled"]);
   });
 });
 

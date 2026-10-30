@@ -40,6 +40,18 @@ export interface RunnerContext {
   laneOutputs: PredecessorOutput[];
   /** Latest earlier attempt of this node (retry); for Claude nodes interrupted → resume its session. */
   previousAttempt: NodeRun | null;
+  /**
+   * merge nodes: the other input lanes to merge into `lane`, in canvas order of the inputs (§9.5, §18 Q4:
+   * sequential pairwise). Already checkpointed by the engine, as is `lane`. Empty for other node types.
+   */
+  mergeSources: Lane[];
+  /** Branch a pr targets (non-empty `config.base`, else `settings.baseBranch`); `settings.baseBranch` for other nodes. */
+  baseBranch: string;
+  /**
+   * Waits for a slot under the run's `maxParallelClaude` cap (§8.4) before a non-Claude node spawns a
+   * Claude session (merge conflict resolution); held until the node finishes. Rejects when `signal` aborts.
+   */
+  claudeSlot(): Promise<void>;
   /** Aborted when the run or node is cancelled. */
   signal: AbortSignal;
   /**

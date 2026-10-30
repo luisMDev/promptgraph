@@ -84,7 +84,7 @@ export class CommitRunner implements Runner {
       const generated = await generateMessage({
         cwd,
         kind: "commit",
-        diffStat: await gitOk(cwd, ["diff", "--cached", "--stat"]),
+        diffStat: await gitOk(cwd, ["diff", "--cached", "--stat", "--summary"]),
         outputs: ctx.laneOutputs,
         model: ctx.run.graphSnapshot.settings.defaults.model,
         signal,

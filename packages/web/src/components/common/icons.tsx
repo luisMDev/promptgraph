@@ -155,6 +155,17 @@ export const Icons = {
       <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
     </Svg>
   ),
+  lock: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </Svg>
+  ),
+  fit: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />
+    </Svg>
+  ),
 } as const;
 
 export function NodeTypeIcon({ type, ...props }: { type: NodeType } & IconProps) {

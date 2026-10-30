@@ -16,6 +16,7 @@ import {
   type LanePlan,
   type NodeOutcome,
   type NodeRun,
+  type NodeRunOutput,
   type NodeStatus,
   type NodeType,
   type PlannedLane,
@@ -114,6 +115,19 @@ interface LiveRun {
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 const labelOf = (node: GraphNode): string => node.label || node.id;
+
+/** `p`, rejected as soon as `signal` aborts. */
+function unlessAborted(p: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("Cancelled"));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new Error("Cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void p.then(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
+}
 
 function withTimeout(p: Promise<unknown>, ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -366,7 +380,7 @@ export class Engine {
       predecessorOutputs: preds.map((p) => ({
         nodeId: p.nodeId,
         label: p.label,
-        text: p.output?.text ?? p.output?.stdoutTail ?? p.error ?? "",
+        text: p.output?.text ?? p.output?.stdoutTail ?? p.error ?? gitStepSummary(p.output),
       })),
     };
   }
@@ -546,6 +560,9 @@ export class Engine {
       await this.deps.lanes.checkpoint(lane, predecessors[0]?.label ?? labelOf(node));
       if (signal.aborted) return { status: "cancelled" };
     }
+    const mergeSources = node.type === "merge" ? await this.prepareMerge(live, node, lane) : [];
+    if (signal.aborted) return { status: "cancelled" };
+    const settings = live.graph.settings;
 
     const previousAttempt =
       store
@@ -560,6 +577,9 @@ export class Engine {
       predecessors,
       laneOutputs: this.laneOutputsOf(live, node.id),
       previousAttempt,
+      mergeSources,
+      baseBranch: (node.type === "pr" && node.config.base?.trim()) || settings.baseBranch,
+      claudeSlot: () => unlessAborted(live.scheduler.acquireClaudeSlot(nodeRun.id), signal),
       signal,
       update: (patch) => this.runnerUpdate(live, nodeRun.id, patch),
       event: (type, payload) => {
@@ -576,13 +596,14 @@ export class Engine {
   private async finishNode(live: LiveRun, exec: LiveExecution, result: RunnerResult): Promise<void> {
     if (this.shuttingDown) return; // shutdown marks everything interrupted
     live.inflight++;
+    // Stamped before the release starts the next queued node, so finishedAt <= its startedAt.
+    const finishedAt = this.now();
     live.executions.delete(exec.nodeRunId);
     live.scheduler.release(exec.nodeRunId);
     try {
       const nr = this.requireNodeRun(exec.nodeRunId);
       if (isFinalNodeStatus(nr.status)) return; // already settled by cancel/terminate
       const node = live.nodes.get(nr.nodeId)!;
-      const finishedAt = this.now();
       if (result.status === "succeeded") {
         this.patchNodeRun(nr.id, { status: "succeeded", output: { ...nr.output, ...result.output }, finishedAt });
         if (!live.terminating) await this.advance(live, node.id, { kind: "success", port: result.output.port });
@@ -610,8 +631,12 @@ export class Engine {
    */
   private async advance(live: LiveRun, nodeId: string, outcome: NodeOutcome | "user-skip"): Promise<void> {
     const delta = outcome === "user-skip" ? live.tracker.skipAsSuccess(nodeId) : live.tracker.complete(nodeId, outcome);
-    const ready = new Set(delta.ready);
-    const forks = live.plan.lanes.filter((l) => l.forkAfterNodeId === nodeId && ready.has(l.firstNodeId));
+    // Lanes granted by activated edges (dead branches get none), also when the target is a merge that is
+    // not ready yet: the fork must capture the parent as it is now, not when the merge starts.
+    const granted = new Set(
+      (live.topo.outgoing.get(nodeId) ?? []).filter((e) => live.tracker.isActivated(e.id)).map((e) => live.plan.edgeLane.get(e.id)),
+    );
+    const forks = live.plan.lanes.filter((l) => l.forkAfterNodeId === nodeId && granted.has(l.id));
     // Errors surface again when the lane's first node starts (ensureLane) and fail that node.
     await Promise.allSettled(forks.map((l) => this.ensureLane(live, l.id)));
     if (live.terminating || this.shuttingDown) return;
@@ -708,6 +733,30 @@ export class Engine {
         return this.deps.lanes.createLane(run, planned, head);
       })(),
     );
+  }
+
+  /**
+   * §9.3/§9.5: checkpoints the merge's own lane and returns the other lanes it merges, in canvas order of
+   * its inputs, each checkpointed (labelled after its input node). Lanes reached only through skipped
+   * edges (Phase 2 dead paths) are left out.
+   */
+  private async prepareMerge(live: LiveRun, node: GraphNode, lane: Lane): Promise<Lane[]> {
+    const inputs = live.topo.incoming.get(node.id) ?? [];
+    const inputLabel = (laneId: string): string => {
+      const edge = inputs.find((e) => live.plan.edgeLane.get(e.id) === laneId);
+      return labelOf(live.nodes.get(edge?.source ?? node.id)!);
+    };
+    await this.deps.lanes.checkpoint(lane, inputLabel(lane.id));
+    const sourceIds = (live.plan.mergeSources.get(node.id) ?? []).filter((id) =>
+      inputs.some((e) => live.plan.edgeLane.get(e.id) === id && live.tracker.isActivated(e.id)),
+    );
+    const sources: Lane[] = [];
+    for (const id of sourceIds) {
+      const source = await this.ensureLane(live, id);
+      await this.deps.lanes.checkpoint(source, inputLabel(id));
+      sources.push(source);
+    }
+    return sources;
   }
 
   private createLane(live: LiveRun, run: Run, planned: PlannedLane, fromRef: string): Promise<Lane> {
@@ -891,4 +940,14 @@ export class Engine {
     if (isFinalRunStatus(run.status)) throw new EngineError("invalid_state", `Run ${id} is already ${run.status}`);
     return run;
   }
+}
+
+/** Approval-dialog text for commit/merge predecessors, which have no text output. */
+function gitStepSummary(output: NodeRunOutput | null): string {
+  if (output?.noop) return "Nothing to commit.";
+  if (!output?.sha) return "";
+  const sha = output.sha.slice(0, 8);
+  if (output.message !== undefined) return `Commit ${sha}: ${output.message}`;
+  const resolved = output.conflictedFiles?.length ? `, resolved conflicts in ${output.conflictedFiles.join(", ")}` : "";
+  return `Merged at ${sha}${resolved}`;
 }

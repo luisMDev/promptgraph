@@ -1,4 +1,4 @@
-import { GraphSchema, emptyUsage, type Graph, type GraphInput, type NodeRun, type RunDetail } from "@promptgraph/shared";
+import { GraphSchema, emptyUsage, type Graph, type GraphInput, type Lane, type NodeRun, type RunDetail } from "@promptgraph/shared";
 
 /** Shared builders for the web unit tests. */
 
@@ -61,4 +61,26 @@ export function runDetailOf(graph: Graph, nodeRuns: NodeRun[], id = "r1"): RunDe
     lanes: [],
     nodeRuns,
   };
+}
+
+/** a → (b, c) → merge m: b keeps lane "main", c forks "l2", m continues "main" and merges "l2". */
+export function forkMergeGraph(): Graph {
+  return graphOf({
+    nodes: [
+      { id: "a", type: "prompt", label: "Plan", position: { x: 0, y: 0 }, config: { prompt: "plan" } },
+      { id: "b", type: "prompt", label: "Backend", position: { x: 300, y: 0 }, config: { prompt: "api" } },
+      { id: "c", type: "prompt", label: "Frontend", position: { x: 300, y: 200 }, config: { prompt: "ui" } },
+      { id: "m", type: "merge", label: "Join", position: { x: 600, y: 100 } },
+    ],
+    edges: [
+      { id: "ab", source: "a", target: "b" },
+      { id: "ac", source: "a", target: "c" },
+      { id: "cm", source: "c", target: "m" },
+      { id: "bm", source: "b", target: "m" },
+    ],
+  });
+}
+
+export function laneOf(patch: Partial<Lane> & Pick<Lane, "id" | "index">): Lane {
+  return { runId: "r1", branch: `pg/g1/ab12/${patch.id}`, worktreePath: `/w/${patch.id}`, baseRef: "base", status: "active", pushed: false, ...patch };
 }

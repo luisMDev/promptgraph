@@ -1,7 +1,7 @@
 import { formatCostUsd, isFinalRunStatus, type GraphEdge, type GraphNode, type OnError } from "@promptgraph/shared";
 import { formatDuration } from "../../lib/format";
 import { NODE_TYPE_META } from "../../lib/node-meta";
-import { RUN_STATUS_STYLE, laneColor } from "../../lib/status-style";
+import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
@@ -9,6 +9,7 @@ import { Select } from "../common/fields";
 import { NodeTypeIcon } from "../common/icons";
 import { Button, Field, Section, StatusDot, inputClass } from "../common/ui";
 import { GraphSettingsForm } from "../settings/GraphSettingsForm";
+import { LaneLegend } from "./LaneLegend";
 import { NodeConfigForm } from "./NodeConfigForm";
 import { NodeRunDetails, UsageSection } from "./NodeRunDetails";
 import { ValidationList } from "./ValidationList";
@@ -192,7 +193,7 @@ function RunInspector() {
 
 function RunOverview() {
   const detail = useRunStore((s) => s.detail)!;
-  const { run, lanes } = detail;
+  const { run } = detail;
   const style = RUN_STATUS_STYLE[run.status];
   const now = useNow(!isFinalRunStatus(run.status));
   return (
@@ -210,21 +211,7 @@ function RunOverview() {
         )}
         <p className="text-xs text-zinc-500">Click a node to see its details and open its terminal.</p>
       </Section>
-      {lanes.length > 0 && (
-        <Section title="Lanes">
-          <ul className="space-y-1.5">
-            {lanes.map((l) => (
-              <li key={l.id} className="flex items-center gap-2 text-xs">
-                <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ring-1 ${laneColor(l.index)}`}>{l.id}</span>
-                <span className="truncate font-mono text-zinc-300" title={l.worktreePath}>
-                  {l.branch}
-                </span>
-                <span className="ml-auto text-zinc-500">{l.pushed ? "pushed" : l.status}</span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
+      <LaneLegend />
       <UsageSection usage={run.usage} title={`Usage · ${formatCostUsd(run.usage.costUsd)}`} />
     </>
   );

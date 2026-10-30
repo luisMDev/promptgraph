@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EventBus } from "../src/events/bus.js";
-import { PtyManager } from "../src/pty/pty-manager.js";
+import { PtyManager, logSizePath } from "../src/pty/pty-manager.js";
 import { tempDir, waitFor } from "./helpers.js";
 
 const cleanups: Array<() => void> = [];
@@ -91,6 +91,19 @@ describe("PtyManager", () => {
     expect(ptys.attach("old")).toMatchObject({ live: false, cols: 120, rows: 40 });
     expect(ptys.attach("old").replay.toString()).toBe("previous output");
     expect(() => ptys.attach("nope")).toThrow(/Unknown PTY/);
+  });
+
+  it("replays a finished PTY at its last size, also after a restart (size sidecar next to the log)", async () => {
+    const { dir, bus, ptys, env } = setup();
+    const logPath = path.join(dir, "sized.log");
+    const h = ptys.spawn({ id: "sized", file: "sh", args: ["-c", "read line"], cwd: dir, env, logPath, cols: 100, rows: 30 });
+    ptys.resize("sized", 132, 43);
+    ptys.userInput("sized", "x\r");
+    await h.exited;
+    expect(ptys.attach("sized", { cols: 80, rows: 20 })).toMatchObject({ live: false, cols: 132, rows: 43 });
+    expect(JSON.parse(fs.readFileSync(logSizePath(logPath), "utf8"))).toEqual({ cols: 132, rows: 43 });
+    const restarted = new PtyManager(bus, (id) => (id === "sized" ? logPath : null));
+    expect(restarted.attach("sized")).toMatchObject({ live: false, cols: 132, rows: 43 });
   });
 
   it("refuses a duplicate live id and killAll stops everything", async () => {

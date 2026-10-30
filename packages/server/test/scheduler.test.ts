@@ -63,4 +63,37 @@ describe("Scheduler", () => {
     s.release("c");
     expect(started).toEqual(["a", "c", "b"]);
   });
+
+  it("lets a running merge take a Claude slot ahead of queued Claude items", async () => {
+    const started: string[] = [];
+    const s = new Scheduler(1, (i) => started.push(i.nodeRunId));
+    s.enqueue(item("p1"));
+    s.enqueue(item("mg", "merge"));
+    s.enqueue(item("p2"));
+    expect(started).toEqual(["p1", "mg"]);
+    await expect(s.acquireClaudeSlot("p1")).resolves.toBeUndefined(); // Claude items already hold one
+
+    let granted = false;
+    const slot = s.acquireClaudeSlot("mg").then(() => (granted = true));
+    await Promise.resolve();
+    expect(granted).toBe(false);
+    s.release("p1");
+    await slot;
+    expect(started).toEqual(["p1", "mg"]); // p2 still waits: the merge holds the slot
+    await expect(s.acquireClaudeSlot("mg")).resolves.toBeUndefined();
+    s.release("mg");
+    expect(started).toEqual(["p1", "mg", "p2"]);
+  });
+
+  it("drops a slot request when its item is released while waiting", () => {
+    const started: string[] = [];
+    const s = new Scheduler(1, (i) => started.push(i.nodeRunId));
+    s.enqueue(item("p1"));
+    s.enqueue(item("mg", "merge"));
+    void s.acquireClaudeSlot("mg");
+    s.release("mg");
+    s.enqueue(item("p2"));
+    s.release("p1");
+    expect(started).toEqual(["p1", "mg", "p2"]);
+  });
 });

@@ -192,12 +192,10 @@ function SelectorItem({ active, onClick, children }: { active: boolean; onClick:
   );
 }
 
-/** Header counter of approvals waiting across all runs; click to review. */
+/** Header counter of approvals waiting across all runs of the repo; click one to review it. */
 export function PendingApprovals() {
   const pending = useAppStore((s) => s.pending);
-  const detail = useRunStore((s) => s.detail);
-  const labelOf = (runId: string, nodeId: string) =>
-    (detail?.run.id === runId ? detail.run.graphSnapshot.nodes.find((n) => n.id === nodeId)?.label : undefined) || nodeId;
+  const runs = useAppStore((s) => s.pendingRuns);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
@@ -219,23 +217,28 @@ export function PendingApprovals() {
         )}
       </button>
       {open && (
-        <div className="absolute top-10 right-0 z-40 w-72 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
+        <div className="absolute top-10 right-0 z-40 w-80 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
           {count === 0 && <p className="px-3 py-2 text-xs text-zinc-500">No approvals pending.</p>}
-          {pending.map((nr) => (
-            <button
-              key={nr.id}
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                useUiStore.getState().openApproval(nr.id);
-              }}
-              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
-            >
-              <StatusDot className="bg-status-waiting-approval" />
-              <span className="truncate">{labelOf(nr.runId, nr.nodeId)}</span>
-              <span className="ml-auto font-mono text-[11px] text-zinc-500">run {nr.runId.slice(0, 6)}</span>
-            </button>
-          ))}
+          {pending.map((nr) => {
+            const info = runs[nr.runId];
+            return (
+              <button
+                key={nr.id}
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  useUiStore.getState().openApproval(nr.id);
+                }}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+              >
+                <StatusDot className="bg-status-waiting-approval" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{info?.nodeLabels[nr.nodeId] ?? nr.nodeId}</span>
+                  <span className="block truncate text-[11px] text-zinc-500">{info ? `${info.graphName} · run #${info.shortId}` : `run ${nr.runId}`}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

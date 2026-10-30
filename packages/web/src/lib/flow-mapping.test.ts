@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linearGraph, nodeRunOf } from "../test-fixtures";
+import { forkMergeGraph, linearGraph, nodeRunOf } from "../test-fixtures";
 import { toFlowEdges, toFlowNodes } from "./flow-mapping";
 
 describe("flow mapping", () => {
@@ -29,8 +29,21 @@ describe("flow mapping", () => {
       lanes: { main: { id: "main", runId: "r1", branch: "pg/g1/ab12/main", worktreePath: "/w", baseRef: "x", status: "active" as const, index: 0, pushed: false } },
     };
     const nodes = toFlowNodes({ ...base, graph, validation: { errors: [], warnings: [] }, run });
-    expect(nodes[0]!.data).toMatchObject({ runMode: true, lane: { id: "main" } });
+    expect(nodes[0]!.data).toMatchObject({ runMode: true, lane: { id: "main", index: 0 } });
     expect(nodes[0]!.data.nodeRun?.status).toBe("running");
     expect(toFlowEdges({ ...base, graph, validation: { errors: [], warnings: [] }, run })[0]!.animated).toBe(true);
+  });
+
+  it("shows planned lanes in run mode and the merge order on merge nodes", () => {
+    const graph = forkMergeGraph();
+    const validation = { errors: [], warnings: [] };
+    const run = { currentByNode: {}, lanes: {} };
+    const byId = Object.fromEntries(toFlowNodes({ ...base, graph, validation, run }).map((n) => [n.id, n.data]));
+    expect(byId.c!.lane).toEqual({ id: "l2", index: 1 });
+    expect(byId.m!.mergeInputs).toEqual(["Backend", "Frontend"]);
+    expect(byId.a!.mergeInputs).toEqual([]);
+    // Edit mode: merge order shown, no lanes.
+    const edit = toFlowNodes({ ...base, graph, validation });
+    expect(edit.find((n) => n.id === "m")!.data).toMatchObject({ lane: null, mergeInputs: ["Backend", "Frontend"] });
   });
 });

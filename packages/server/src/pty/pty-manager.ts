@@ -164,7 +164,7 @@ export class PtyManager {
       size,
       (data) => this.bus.emit("pty:data", { ptyId: id, data }),
       async (h, exit) => {
-        await flushLog(h.logPath, h.ring.snapshot());
+        await flushLog(h.logPath, h.ring.snapshot(), { cols: h.cols, rows: h.rows });
         // attach() of a finished PTY reads the log: the buffer would only hold memory from now on.
         h.ring.clear();
         this.bus.emit("pty:exit", { ptyId: id, code: exit.code });
@@ -187,12 +187,9 @@ export class PtyManager {
     }
     const logPath = handle?.logPath ?? this.resolveLogPath(id);
     if (!logPath) throw new Error(`Unknown PTY ${id}`);
-    return {
-      live: false,
-      cols: handle?.cols ?? DEFAULT_COLS,
-      rows: handle?.rows ?? DEFAULT_ROWS,
-      replay: readLog(logPath),
-    };
+    // The size the output was drawn at, so viewers replay a full-screen TUI without garbling it.
+    const drawn = handle ? { cols: handle.cols, rows: handle.rows } : (readLogSize(logPath) ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
+    return { live: false, ...drawn, replay: readLog(logPath) };
   }
 
   /** Input typed by a user in the browser: writes to the PTY and notifies input listeners. */
@@ -228,12 +225,31 @@ export class PtyManager {
   }
 }
 
-async function flushLog(logPath: string, data: Buffer): Promise<void> {
+/** Sidecar of a PTY log holding its final size (`<log>.size.json`), read when replaying after a restart. */
+export function logSizePath(logPath: string): string {
+  return `${logPath}.size.json`;
+}
+
+async function flushLog(logPath: string, data: Buffer, size: { cols: number; rows: number }): Promise<void> {
   try {
     await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
     await fs.promises.writeFile(logPath, data);
+    await fs.promises.writeFile(logSizePath(logPath), JSON.stringify(size));
   } catch {
     // A missing log only loses the replay of a finished terminal.
+  }
+}
+
+function readLogSize(logPath: string): { cols: number; rows: number } | null {
+  try {
+    const v: unknown = JSON.parse(fs.readFileSync(logSizePath(logPath), "utf8"));
+    if (typeof v !== "object" || v === null) return null;
+    const { cols, rows } = v as { cols?: unknown; rows?: unknown };
+    return Number.isInteger(cols) && Number.isInteger(rows) && (cols as number) > 0 && (rows as number) > 0
+      ? { cols: cols as number, rows: rows as number }
+      : null;
+  } catch {
+    return null;
   }
 }
 

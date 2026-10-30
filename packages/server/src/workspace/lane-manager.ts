@@ -178,6 +178,17 @@ export class LaneManager {
     store.updateRun(runId, { cleanedUp: true });
   }
 
+  /** A source lane whose conflicted merge was concluded (clean merges are marked by `merge`). */
+  markMerged(lane: Lane): void {
+    this.setStatus(lane, "merged");
+  }
+
+  /** The lane's branch was pushed (pr node): cleanup keeps it (§9.6). */
+  markPushed(lane: Lane): void {
+    const updated = this.deps.store.updateLane(lane.runId, lane.id, { pushed: true });
+    this.deps.bus.emit("lane:update", { lane: updated });
+  }
+
   /** `git worktree prune` (server start). */
   async prune(): Promise<void> {
     await gitOk(this.deps.repo.path, ["worktree", "prune"]);

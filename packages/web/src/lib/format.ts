@@ -40,3 +40,9 @@ export function preview(text: string | undefined, max = 80): string {
   const line = (text ?? "").trim().split("\n")[0] ?? "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
+
+/** "owner/repo#12" for GitHub pull request URLs, else the URL itself. */
+export function prLabel(url: string): string {
+  const m = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(url);
+  return m ? `${m[1]}#${m[2]}` : url;
+}
