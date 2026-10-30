@@ -33,6 +33,7 @@ export function edgeRunState(edge: GraphEdge, source: NodeRun | undefined): Edge
 }
 
 function outcomeOf(nr: NodeRun): NodeOutcome | null {
+  if (nr.status === "skipped" && nr.output?.skippedByUser) return { kind: "success" };
   if (nr.status === "succeeded") return nr.output?.port ? { kind: "success", port: nr.output.port } : { kind: "success" };
   if (nr.status === "failed") return { kind: "failure" };
   return null;

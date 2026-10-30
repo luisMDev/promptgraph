@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import {
   describeToolActivity,
   isClaudeNode,
@@ -14,8 +15,9 @@ import {
   type Run,
 } from "@promptgraph/shared";
 import { childEnv, claudeBin } from "../../config/child-env.js";
-import { hooksSettingsPath, ptyLogPath, type PgPaths } from "../../config/paths.js";
+import { hooksSettingsPath, ptyLogPath, runDir, type PgPaths } from "../../config/paths.js";
 import type { HookMessage, HookRouter } from "../../hooks/hook-router.js";
+import { hookToken } from "../../hooks/hook-token.js";
 import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
 import type { NodeRunPatch } from "../../store/store.js";
 import { newId, newSessionId } from "../../util/ids.js";
@@ -25,7 +27,7 @@ import { buildClaudeArgs, toCliPermissionMode } from "./args.js";
 import { CompletionController } from "./completion.js";
 import { buildInitialMessage, INTERRUPTED_MESSAGE } from "./context.js";
 import { writeHooksSettings } from "./hooks-settings.js";
-import { lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "./transcript.js";
+import { assistantMessageIds, lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "./transcript.js";
 import { preTrustDirectory, TRUST_DIALOG_PATTERN } from "./trust.js";
 
 export interface ServerEndpoint {
@@ -67,6 +69,8 @@ const PTY_COLS = 120;
 const PTY_ROWS = 40;
 /** §7.4: after "/exit", wait this long before killing. */
 const EXIT_WAIT_MS = 3000;
+/** Reopened sessions are ended with SIGTERM (a dialog may be open, so nothing is typed), then SIGKILL. */
+const REOPEN_KILL_MS = 3000;
 const KILL_WAIT_MS = 2000;
 /** Lets the TUI register the typed command before Enter. */
 const ENTER_DELAY_MS = 100;
@@ -80,16 +84,22 @@ const TRUST_MESSAGE = "Claude Code asks whether you trust this folder. Answer in
  *    TRUST_DIALOG_PATTERN → waiting_input {kind:"trust_dialog"};
  * 3. message = buildInitialMessage (or INTERRUPTED_MESSAGE + --resume when previousAttempt was
  *    interrupted; context "resume" → --resume <predecessor sessionId>);
- * 4. spawn claudeBin() in a PTY (id = nodeRun.id, logPath ptyLogPath) with childEnv(PG_PORT, PG_TOKEN,
- *    PG_NODE_RUN_ID); update {ptyId, sessionId, transcriptPath?};
+ * 4. spawn claudeBin() in a PTY (id = nodeRun.id, logPath ptyLogPath) with childEnv(PG_PORT,
+ *    PG_HOOK_HEADER_FILE, PG_NODE_RUN_ID); update {ptyId, sessionId, transcriptPath?}. The session
+ *    token never reaches the child: the header file (0600, in the run dir) holds the node run's
+ *    hookToken, valid only for its own /hooks/<nodeRunId>/* routes, and keeps it out of curl's argv;
  * 5. hooks: session-start → confirm sessionId/transcriptPath, status running; activity → activity text
  *    (describeToolActivity), waiting_input → running; notification → waiting_input {kind:"notification"};
  *    stop → output.text = last_assistant_message ?? transcript fallback, output.usage =
- *    usageFromTranscript, then CompletionController.onStop;
- * 6. success → write "/exit\r", wait 3s, kill; result succeeded {text, usage};
+ *    usageFromTranscript minus the messages already in a resumed transcript, then CompletionController.onStop;
+ * 6. ending → at the input prompt (turn ended) write "/exit\r", wait 3s, kill; otherwise (working, a
+ *    permission/trust dialog may be open, where Enter would accept the default "Yes") SIGTERM directly;
  *    PTY exit before success → failed "Claude exited unexpectedly (code N)".
  */
 export class ClaudeRunner implements Runner {
+  /** Live "Reopen session" PTYs by node run id: one per node run. */
+  private readonly reopened = new Map<string, PtyHandle>();
+
   constructor(private readonly deps: ClaudeRunnerDeps) {}
 
   start(ctx: RunnerContext): NodeExecution {
@@ -99,10 +109,13 @@ export class ClaudeRunner implements Runner {
 
   /**
    * "Reopen session" (§7.3): `claude --resume <nodeRun.sessionId>` in a new PTY in the lane worktree
-   * (or the repo if the worktree is gone), not tracked by the run. Returns the new ptyId (`reopen-<id>`).
+   * (or the repo if the worktree is gone), not tracked by the run. Returns its ptyId (`reopen-<id>`); while
+   * that PTY is live, the same id is returned instead of starting a second session on the transcript.
    */
   reopen(run: Run, nodeRun: NodeRun, lane: Lane | null, repoPath: string): string {
     if (!nodeRun.sessionId) throw new Error("This node run has no Claude session to reopen");
+    const existing = this.reopened.get(nodeRun.id);
+    if (existing?.isLive) return existing.id;
     const env = this.deps.env ?? process.env;
     const cwd = lane && fs.existsSync(lane.worktreePath) ? lane.worktreePath : repoPath;
     const node = run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId);
@@ -112,7 +125,7 @@ export class ClaudeRunner implements Runner {
     if (opts?.model) args.push("--model", opts.model);
     if (opts?.effort) args.push("--effort", opts.effort);
     const id = `reopen-${newId()}`;
-    this.deps.ptys.spawn({
+    const handle = this.deps.ptys.spawn({
       id,
       file: claudeBin(env),
       args,
@@ -122,7 +135,20 @@ export class ClaudeRunner implements Runner {
       rows: PTY_ROWS,
       logPath: ptyLogPath(this.deps.paths, run.id, id),
     });
+    this.reopened.set(nodeRun.id, handle);
+    void handle.exited.then(() => {
+      if (this.reopened.get(nodeRun.id) === handle) this.reopened.delete(nodeRun.id);
+    });
     return id;
+  }
+
+  /** Ends a live reopened session (its terminal tab was closed). False when no such PTY is live. */
+  closeReopened(ptyId: string): boolean {
+    const handle = [...this.reopened.values()].find((h) => h.id === ptyId);
+    if (!handle?.isLive) return false;
+    handle.kill("SIGTERM");
+    void exitsWithin(handle, REOPEN_KILL_MS).then((exited) => exited || handle.kill("SIGKILL"));
+    return true;
   }
 }
 
@@ -134,6 +160,8 @@ interface LaunchPlan {
   message: string;
   sessionId: string;
   resumeSessionId?: string;
+  /** Transcript of the resumed session, when known before the start. */
+  resumeTranscriptPath?: string | null;
 }
 
 /** One live Claude node run: PTY + hooks + completion policy. */
@@ -148,8 +176,14 @@ class ClaudeExecution {
   private controller: CompletionController | null = null;
   private output: NodeRunOutput = {};
   private transcriptPath: string | null;
-  /** A Stop arrived and no activity/input since: an idle_prompt notification adds nothing. */
+  /**
+   * A Stop arrived and no activity/input/dialog since: Claude sits at its input prompt, an idle_prompt
+   * notification adds nothing, and typing "/exit" is safe.
+   */
   private turnEnded = false;
+  /** Assistant message ids already in a resumed transcript: their usage is not this node's. */
+  private usageBaseline: ReadonlySet<string> | null = null;
+  private resuming = false;
   /** Hold may be toggled before the controller exists (or persisted from an earlier start). */
   private hold: boolean;
   private hookChain: Promise<void> = Promise.resolve();
@@ -199,12 +233,19 @@ class ClaudeExecution {
         succeed: () => this.end({ kind: "succeeded" }),
         idle: () => this.update({ status: "idle", waitingReason: null }),
         resume: () => this.update({ status: "running", waitingReason: null }),
+        holdReleased: () => {
+          this.hold = false;
+          this.update({ hold: false });
+        },
       });
       this.controller.setHold(this.hold);
       this.cleanups.push(() => this.controller?.dispose());
       this.cleanups.push(this.deps.hooks.register(nodeRun.id, (m) => this.enqueueHook(m)));
 
+      this.resuming = plan.resumeSessionId !== undefined;
+      if (this.resuming && plan.resumeTranscriptPath) this.usageBaseline = assistantMessageIds(plan.resumeTranscriptPath);
       const endpoint = this.deps.endpoint();
+      const headerFile = this.writeHookHeader(endpoint.token);
       const args = buildClaudeArgs({
         message: plan.message,
         sessionId: plan.sessionId,
@@ -221,7 +262,7 @@ class ClaudeExecution {
         file: claudeBin(this.env),
         args,
         cwd: lane.worktreePath,
-        env: childEnv({ PG_PORT: String(endpoint.port), PG_TOKEN: endpoint.token, PG_NODE_RUN_ID: nodeRun.id }, this.env),
+        env: childEnv({ PG_PORT: String(endpoint.port), PG_HOOK_HEADER_FILE: headerFile, PG_NODE_RUN_ID: nodeRun.id }, this.env),
         cols: PTY_COLS,
         rows: PTY_ROWS,
         logPath: ptyLogPath(this.deps.paths, run.id, nodeRun.id),
@@ -243,7 +284,7 @@ class ClaudeExecution {
     const options = resolveClaudeOptions(node, run.graphSnapshot.settings.defaults);
     if (previousAttempt?.status === "interrupted" && previousAttempt.sessionId) {
       const sid = previousAttempt.sessionId;
-      return { node, options, message: INTERRUPTED_MESSAGE, sessionId: sid, resumeSessionId: sid };
+      return { node, options, message: INTERRUPTED_MESSAGE, sessionId: sid, resumeSessionId: sid, resumeTranscriptPath: previousAttempt.transcriptPath };
     }
     const message = buildInitialMessage(node, predecessors, options.completion);
     if (node.config.context === "resume") {
@@ -251,7 +292,7 @@ class ClaudeExecution {
         (p) => (p.type === "prompt" || p.type === "command") && p.sessionId && p.laneId === nodeRun.laneId,
       );
       if (!pred?.sessionId) throw new Error('Context "resume" needs a predecessor Claude node with a session in the same lane');
-      return { node, options, message, sessionId: pred.sessionId, resumeSessionId: pred.sessionId };
+      return { node, options, message, sessionId: pred.sessionId, resumeSessionId: pred.sessionId, resumeTranscriptPath: pred.transcriptPath };
     }
     return { node, options, message, sessionId: newSessionId() };
   }
@@ -265,6 +306,8 @@ class ClaudeExecution {
     switch (m.event) {
       case "session-start":
         this.transcriptPath = m.payload.transcript_path ?? this.transcriptPath;
+        // Fallback when the resumed transcript was unknown at start: SessionStart precedes the first turn.
+        if (this.resuming && !this.usageBaseline && this.transcriptPath) this.usageBaseline = assistantMessageIds(this.transcriptPath);
         this.update({ sessionId: m.payload.session_id, transcriptPath: this.transcriptPath, status: "running", waitingReason: null });
         return;
       case "activity":
@@ -274,6 +317,7 @@ class ClaudeExecution {
         return;
       case "notification":
         if (m.payload.notification_type === "idle_prompt" && (this.turnEnded || this.status === "idle")) return;
+        if (m.payload.notification_type !== "idle_prompt") this.turnEnded = false;
         this.update({
           status: "waiting_input",
           waitingReason: {
@@ -289,7 +333,7 @@ class ClaudeExecution {
         const text = m.payload.last_assistant_message ?? (transcript ? await waitForLastAssistantText(transcript) : null);
         if (this.ending) return;
         this.turnEnded = true;
-        this.output = { ...this.output, ...(text !== null ? { text } : {}), ...(transcript ? { usage: usageFromTranscript(transcript) } : {}) };
+        this.output = { ...this.output, ...(text !== null ? { text } : {}), ...(transcript ? { usage: this.usageOf(transcript) } : {}) };
         this.update({ output: this.output, transcriptPath: transcript, ...this.leaveWaiting() });
         this.controller?.onStop(text);
         return;
@@ -332,10 +376,14 @@ class ClaudeExecution {
   private async stopProcess(): Promise<void> {
     const h = this.handle;
     if (!h?.isLive) return;
-    h.write("/exit");
-    await sleep(ENTER_DELAY_MS);
-    h.write("\r");
-    if (await exitsWithin(h, EXIT_WAIT_MS)) return;
+    // Only at the input prompt: in a select dialog (permission, trust) the typed text matches no option
+    // and Enter would accept the highlighted default ("Yes").
+    if (this.turnEnded) {
+      h.write("/exit");
+      await sleep(ENTER_DELAY_MS);
+      h.write("\r");
+      if (await exitsWithin(h, EXIT_WAIT_MS)) return;
+    }
     h.kill("SIGTERM");
     if (await exitsWithin(h, KILL_WAIT_MS)) return;
     h.kill("SIGKILL");
@@ -356,7 +404,22 @@ class ClaudeExecution {
     const transcript = this.transcriptPath;
     if (!transcript || !fs.existsSync(transcript)) return this.output;
     const text = this.output.text ?? lastAssistantText(transcript) ?? undefined;
-    return { ...this.output, ...(text !== undefined ? { text } : {}), usage: usageFromTranscript(transcript) };
+    return { ...this.output, ...(text !== undefined ? { text } : {}), usage: this.usageOf(transcript) };
+  }
+
+  private usageOf(transcript: string): NonNullable<NodeRunOutput["usage"]> {
+    return usageFromTranscript(transcript, this.usageBaseline ?? undefined);
+  }
+
+  /** `Authorization: Bearer <hookToken>` for curl's `-H @file`, readable by the user only. */
+  private writeHookHeader(sessionToken: string): string {
+    const { run, nodeRun } = this.ctx;
+    const file = path.join(runDir(this.deps.paths, run.id), `hook-${nodeRun.id}.header`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(file, `Authorization: Bearer ${hookToken(sessionToken, nodeRun.id)}\n`, { mode: 0o600 });
+    this.cleanups.push(() => fs.rmSync(file, { force: true }));
+    return file;
   }
 
   private settle(result: RunnerResult): void {

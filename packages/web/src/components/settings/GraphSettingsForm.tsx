@@ -1,4 +1,4 @@
-import type { GraphSettings, KeepWorktrees } from "@promptgraph/shared";
+import { resolveBranchPrefix, type GraphSettings, type KeepWorktrees } from "@promptgraph/shared";
 import { CompletionEditor, EFFORT_OPTIONS, InheritSelect, MODEL_SUGGESTIONS, PERMISSION_OPTIONS } from "../inspector/ClaudeOptions";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea } from "../common/fields";
 import { useAppStore } from "../../store/app-store";
@@ -17,7 +17,10 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
   const update = (patch: Partial<GraphSettings>) => useEditorStore.getState().updateSettings((s) => ({ ...s, ...patch }));
   const updateDefaults = (patch: Partial<GraphSettings["defaults"]>) =>
     useEditorStore.getState().updateSettings((s) => ({ ...s, defaults: { ...s.defaults, ...patch } }));
-  const branchOptions = branches.includes(settings.baseBranch) ? branches : [settings.baseBranch, ...branches];
+  // promptgraph's own lane branches (default prefix "pg/", or this graph's prefix) are not base branches.
+  const lanePrefixes = ["pg/", `${resolveBranchPrefix({ id: graphId, settings })}/`];
+  const baseBranches = branches.filter((b) => !lanePrefixes.some((p) => b.startsWith(p)));
+  const branchOptions = baseBranches.includes(settings.baseBranch) ? baseBranches : [settings.baseBranch, ...baseBranches];
 
   return (
     <div className="space-y-3">

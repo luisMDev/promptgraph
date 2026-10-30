@@ -5,7 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { linearGraph, nodeRunOf, runDetailOf } from "./test-fixtures";
 
 const graph = linearGraph();
-const repo: RepoInfoResponse = { path: "/repo", name: "repo", currentBranch: "main", branches: ["main"], version: "0.1.0", phase: 1, warnings: [] };
+const repo: RepoInfoResponse = { path: "/repo", name: "repo", currentBranch: "main", branches: ["main"], version: "0.1.0", phase: 1, warnings: [], supportedNodeTypes: ["prompt", "command", "shell", "commit"], notificationsAvailable: true };
 
 vi.mock("./api/rest", async (orig) => {
   const actual = await orig<typeof import("./api/rest")>();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppSettingsStore } from "../src/config/app-settings.js";
 import { EventBus, type BusEvents } from "../src/events/bus.js";
-import { attentionText, detectNotifyPlatform, Notifier, sendDesktopNotification, wslToastScript, type NotifyPlatform } from "../src/notify/notifier.js";
+import { attentionText, detectNotifyPlatform, Notifier, psString, sendDesktopNotification, wslToastScript, type NotifyPlatform } from "../src/notify/notifier.js";
 import { makeNodeRun } from "./support/runner-ctx.js";
 
 function attention(kind: BusEvents["attention"]["kind"], message: string | null = null): BusEvents["attention"] {
@@ -24,6 +24,11 @@ describe("notifications", () => {
     const script = wslToastScript("it's", "a 'b'");
     expect(script).toContain("CreateTextNode('it''s')");
     expect(script).toContain("CreateTextNode('a ''b''')");
+  });
+
+  it("doubles the Unicode single quotes PowerShell also treats as delimiters", () => {
+    expect(psString("x\u2019; Start-Process calc; \u2018")).toBe("'x\u2019\u2019; Start-Process calc; \u2018\u2018'");
+    expect(psString("\u201A\u201B")).toBe("'\u201A\u201A\u201B\u201B'");
   });
 
   it("formats titles per attention kind", () => {

@@ -34,6 +34,7 @@ function reportError(prefix: string, err: unknown): void {
 export async function selectGraph(id: string | null): Promise<void> {
   const runs = useRunStore.getState();
   await runs.selectRun(null);
+  for (const ptyId of useUiStore.getState().terminalTabs) if (ptyId.startsWith(REOPEN_PTY_PREFIX)) void closeTerminalTab(ptyId);
   useUiStore.getState().closeAllTerminals();
   rememberGraph(id);
   if (!id) {
@@ -121,6 +122,14 @@ export async function cancelRun(runId: string): Promise<void> {
   }
 }
 
+export async function resumeRun(runId: string): Promise<void> {
+  try {
+    await api.resumeRun(runId);
+  } catch (err) {
+    reportError("Could not resume the run", err);
+  }
+}
+
 export async function cleanupRun(runId: string): Promise<void> {
   try {
     await api.cleanupRun(runId);
@@ -129,6 +138,9 @@ export async function cleanupRun(runId: string): Promise<void> {
     reportError("Cleanup failed", err);
   }
 }
+
+/** PTY ids of "Reopen session" terminals (CONTRACTS § PTY ids). */
+const REOPEN_PTY_PREFIX = "reopen-";
 
 export function openNodeTerminal(nodeRun: NodeRun, label: string): void {
   if (!nodeRun.ptyId) return;
@@ -141,6 +153,18 @@ export async function reopenSession(nodeRunId: string, label: string): Promise<v
     useUiStore.getState().openTerminal(ptyId, { title: `${label} (reopened)`, nodeRunId: null });
   } catch (err) {
     reportError("Could not reopen the session", err);
+  }
+}
+
+/** Closing a "Reopen session" tab ends that claude process (it is not part of any run). */
+export async function closeTerminalTab(ptyId: string): Promise<void> {
+  useUiStore.getState().closeTerminal(ptyId);
+  if (!ptyId.startsWith(REOPEN_PTY_PREFIX)) return;
+  try {
+    await api.closePty(ptyId);
+  } catch (err) {
+    // Already exited: nothing to stop.
+    if (!(err instanceof ApiRequestError && err.status === 404)) reportError("Could not stop the reopened session", err);
   }
 }
 

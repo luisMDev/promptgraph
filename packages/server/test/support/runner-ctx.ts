@@ -76,6 +76,7 @@ export function makeCtx(opts: {
   lane: Lane;
   nodeRunId?: string;
   predecessors?: PredecessorOutput[];
+  laneOutputs?: PredecessorOutput[];
   previousAttempt?: NodeRun | null;
 }): TestContext {
   const abort = new AbortController();
@@ -85,6 +86,7 @@ export function makeCtx(opts: {
     nodeRun: makeNodeRun(opts.nodeRunId ?? `nr-${opts.node.id}`, opts.node.id),
     lane: opts.lane,
     predecessors: opts.predecessors ?? [],
+    laneOutputs: opts.laneOutputs ?? opts.predecessors ?? [],
     previousAttempt: opts.previousAttempt ?? null,
     signal: abort.signal,
     abort,

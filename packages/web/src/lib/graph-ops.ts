@@ -45,19 +45,37 @@ export interface ConnectRequest {
   target: string;
 }
 
-/** Why a connection is refused, or null if it can be made. */
-export function connectionError(graph: Graph, c: ConnectRequest): string | null {
+/**
+ * Why a connection is refused, or null if it can be made. Before phase 2 there are no loop edges, so a
+ * connection that would close a cycle is refused while dragging instead of becoming a validation error.
+ */
+export function connectionError(graph: Graph, c: ConnectRequest, phase: 1 | 2 = 2): string | null {
   if (c.source === c.target) return "A node cannot connect to itself";
   const ids = new Set(graph.nodes.map((n) => n.id));
   if (!ids.has(c.source) || !ids.has(c.target)) return "Unknown node";
   if (graph.edges.some((e) => e.source === c.source && e.target === c.target && e.sourcePort === c.sourcePort)) {
     return "These nodes are already connected";
   }
+  if (phase < 2 && reaches(graph, c.target, c.source)) return "This connection would create a cycle";
   return null;
 }
 
-export function connect(graph: Graph, c: ConnectRequest): Graph {
-  if (connectionError(graph, c)) return graph;
+/** True when `to` can be reached from `from` along forward (non-loop) edges. */
+function reaches(graph: Graph, from: string, to: string): boolean {
+  const seen = new Set<string>();
+  const stack = [from];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (id === to) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const e of graph.edges) if (e.source === id && !e.loop) stack.push(e.target);
+  }
+  return false;
+}
+
+export function connect(graph: Graph, c: ConnectRequest, phase: 1 | 2 = 2): Graph {
+  if (connectionError(graph, c, phase)) return graph;
   const edge: GraphEdge = {
     id: uniqueId("e", new Set(graph.edges.map((e) => e.id))),
     source: c.source,

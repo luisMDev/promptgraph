@@ -36,6 +36,11 @@ export class RingBuffer {
     return Buffer.from(this.chunks[0] ?? Buffer.alloc(0));
   }
 
+  clear(): void {
+    this.chunks = [];
+    this.bytes = 0;
+  }
+
   get size(): number {
     return this.bytes;
   }

@@ -208,7 +208,7 @@ claude "<initial message>" \
 or, when `context = "resume"` (§7.5): `claude --resume <previous-session-id> "<message>" ...`.
 
 - `cols/rows`: start at 120×40; resized on attach from the browser (`pty.resize`).
-- Env: inherits the user's env plus `TERM=xterm-256color`, `PG_PORT`, `PG_TOKEN`, `PG_NODE_RUN_ID`.
+- Env: inherits the user's env plus `TERM=xterm-256color`, `PG_PORT`, `PG_HOOK_HEADER_FILE`, `PG_NODE_RUN_ID`. The session token is never passed to Claude: the header file (mode 0600, in the run dir) holds a per-node-run hook token, `HMAC(session token, nodeRunId)`, that only authorises `POST /hooks/<nodeRunId>/*`.
 - `<initial message>` for `command` nodes is the slash command itself (`/simplify`); for `prompt` nodes it is the prompt plus the context block (§7.5).
 
 ### 7.2 Hook injection
@@ -232,7 +232,7 @@ or, when `context = "resume"` (§7.5): `claude --resume <previous-session-id> "<
 #!/bin/sh
 # Forwards the hook payload (stdin JSON) to the promptgraph server. Never blocks Claude.
 curl -s -m 2 -X POST \
-  -H "Authorization: Bearer $PG_TOKEN" -H "Content-Type: application/json" \
+  -H @"$PG_HOOK_HEADER_FILE" -H "Content-Type: application/json" \
   --data-binary @- "http://127.0.0.1:$PG_PORT/hooks/$PG_NODE_RUN_ID/$1" >/dev/null 2>&1
 exit 0
 ```
@@ -270,7 +270,7 @@ type CompletionPolicy =
 
 A node in the canvas can be toggled to **Hold** at any time while running: it behaves as `manual` for the current turn.
 
-On success the server sends `/exit` to the PTY, waits 3s, then kills it. The session stays on disk.
+On success the server sends `/exit` to the PTY, waits 3s, then kills it. The session stays on disk. `/exit` is only typed while Claude sits at its input prompt; when it may be showing a permission or trust dialog (where Enter accepts the default "Yes"), the process gets SIGTERM instead.
 
 ### 7.5 Context between nodes
 
@@ -403,7 +403,7 @@ git merge --no-ff <other-lane-branch>        # for each other input, in canvas o
 
 ### 9.6 Cleanup
 
-At run end, per `keepWorktrees`: `git worktree remove --force` + delete local branches that were not pushed. Pushed branches are kept. A **"Clean up"** action in run history does the same on demand. `git worktree prune` runs at server start.
+At run end, per `keepWorktrees`: `git worktree remove --force` + delete local branches that were not pushed and hold no commits of their own (or were merged). Pushed branches, and unpushed branches carrying commits (e.g. from a commit node), are kept so no committed work is lost. A **"Clean up"** action in run history does the same on demand. `git worktree prune` runs at server start.
 
 ---
 

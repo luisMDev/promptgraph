@@ -4,6 +4,7 @@ import pty, { type IPty } from "node-pty";
 import type { EventBus } from "../events/bus.js";
 import { newId } from "../util/ids.js";
 import { RingBuffer } from "./ring-buffer.js";
+import { isUserTyping } from "./terminal-reports.js";
 
 export interface SpawnPtyOptions {
   /** Defaults to a fresh id. Node PTYs use the nodeRunId (see CONTRACTS.md § PTY ids). */
@@ -45,7 +46,10 @@ export interface PtyAttachResult {
   replay: Buffer;
 }
 
-/** Called for every chunk of user input from a viewer (engine cancels auto grace / clears waiting_input). */
+/**
+ * Called for user input from a viewer (engine cancels auto grace / clears waiting_input). Chunks made
+ * only of terminal reports (focus, mouse, query replies) are not user input.
+ */
 export type UserInputListener = (ptyId: string) => void;
 
 const DEFAULT_COLS = 120;
@@ -161,6 +165,8 @@ export class PtyManager {
       (data) => this.bus.emit("pty:data", { ptyId: id, data }),
       async (h, exit) => {
         await flushLog(h.logPath, h.ring.snapshot());
+        // attach() of a finished PTY reads the log: the buffer would only hold memory from now on.
+        h.ring.clear();
         this.bus.emit("pty:exit", { ptyId: id, code: exit.code });
       },
     );
@@ -194,6 +200,7 @@ export class PtyManager {
     const handle = this.handles.get(id);
     if (!handle?.isLive) throw new Error(`PTY ${id} is not running`);
     handle.write(data);
+    if (!isUserTyping(data)) return;
     for (const l of this.inputListeners) l(id);
   }
 

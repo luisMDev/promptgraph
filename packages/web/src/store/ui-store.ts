@@ -29,7 +29,10 @@ export interface UiStore extends UiState {
   drawerOpen: boolean;
   leftPanel: LeftPanel;
   toasts: Toast[];
+  /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
+  revealNodeId: string | null;
 
+  revealNode(nodeId: string | null): void;
   openTerminal(ptyId: string, meta: TerminalTabMeta): void;
   closeTerminal(ptyId: string): void;
   setActiveTerminal(ptyId: string): void;
@@ -61,6 +64,11 @@ export const useUiStore = create<UiStore>()((set, get) => ({
   drawerOpen: false,
   leftPanel: "palette",
   toasts: [],
+  revealNodeId: null,
+
+  revealNode(nodeId) {
+    set({ revealNodeId: nodeId });
+  },
 
   openTerminal(ptyId, meta) {
     const s = get();

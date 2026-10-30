@@ -29,5 +29,8 @@ describe("run-view", () => {
     expect(edgeRunState(edge, nodeRunOf({ id: "1", nodeId: "a", status: "succeeded" }))).toBe("activated");
     expect(edgeRunState(edge, nodeRunOf({ id: "1", nodeId: "a", status: "failed" }))).toBe("dead");
     expect(edgeRunState({ ...edge, sourcePort: "error" }, nodeRunOf({ id: "1", nodeId: "a", status: "failed" }))).toBe("activated");
+    // A user skip is success downstream; a skip from a dead path is not.
+    expect(edgeRunState(edge, nodeRunOf({ id: "1", nodeId: "a", status: "skipped", output: { skippedByUser: true } }))).toBe("activated");
+    expect(edgeRunState(edge, nodeRunOf({ id: "1", nodeId: "a", status: "skipped" }))).toBe("dead");
   });
 });

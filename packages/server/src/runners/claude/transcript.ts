@@ -78,9 +78,22 @@ export async function waitForLastAssistantText(transcriptPath: string, timeoutMs
   return lastAssistantText(transcriptPath);
 }
 
-/** Sum of message.usage over assistant lines (dedup by message.id), costed with costFromUsage. */
-export function usageFromTranscript(transcriptPath: string): TokenUsage {
-  const seen = new Set<string>();
+/** message.ids of the assistant lines already in a transcript (the usage baseline of a resumed session). */
+export function assistantMessageIds(transcriptPath: string): Set<string> {
+  const ids = new Set<string>();
+  for (const line of readLines(transcriptPath)) {
+    if (line.type === "assistant" && line.message?.id) ids.add(line.message.id);
+  }
+  return ids;
+}
+
+/**
+ * Sum of message.usage over assistant lines (dedup by message.id), costed with costFromUsage.
+ * `exclude`: ids present before this node started (`--resume` appends to the same transcript, so the
+ * earlier usage belongs to the predecessor or previous attempt and is already counted there).
+ */
+export function usageFromTranscript(transcriptPath: string, exclude: ReadonlySet<string> = new Set()): TokenUsage {
+  const seen = new Set<string>(exclude);
   let usage = emptyUsage();
   for (const line of readLines(transcriptPath)) {
     const message = line.message;

@@ -2,12 +2,13 @@ import { formatCostUsd, isFinalRunStatus } from "@promptgraph/shared";
 import { useRef, useState, type ReactNode } from "react";
 import { formatDateTime } from "../../lib/format";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
-import { cancelRun, startRun } from "../../store/app-actions";
+import { cancelRun, resumeRun, startRun } from "../../store/app-actions";
 import { useAppStore } from "../../store/app-store";
 import { useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
+import { ConfirmDialog } from "../common/PromptDialog";
 import { Button, StatusDot, useDismiss } from "../common/ui";
 
 /** Run / Cancel, validation summary, and the total cost of the shown run. */
@@ -17,11 +18,19 @@ export function RunControls() {
   const warnings = useEditorStore((s) => s.validation.warnings.length);
   const activeRunId = useEditorStore((s) => s.activeRunId);
   const detail = useRunStore((s) => s.detail);
+  const activeRun = useRunStore((s) => s.runs.find((r) => r.id === activeRunId) ?? null);
+  const currentByNode = useRunStore((s) => s.currentByNode);
   const [starting, setStarting] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   if (!graph) return null;
 
   const shownRun = detail?.run ?? null;
   const cancellable = activeRunId !== null;
+  // A paused run with nothing to retry or skip (e.g. stopped while lanes were being created) resumes as is.
+  const resumable =
+    activeRun?.status === "paused" &&
+    (detail?.run.id !== activeRun.id ||
+      !Object.values(currentByNode).some((nr) => nr.status === "failed" || nr.status === "interrupted" || nr.status === "cancelled"));
   const runDisabled = errors > 0 || starting || activeRunId !== null || graph.nodes.length === 0;
   const runTitle = errors
     ? `Fix ${errors} validation error${errors > 1 ? "s" : ""} first`
@@ -53,8 +62,13 @@ export function RunControls() {
           {formatCostUsd(shownRun.usage.costUsd)}
         </span>
       )}
+      {resumable && (
+        <Button variant="primary" onClick={() => void resumeRun(activeRun.id)} title="Continue the paused run">
+          <Icons.play /> Resume
+        </Button>
+      )}
       {cancellable ? (
-        <Button variant="danger" onClick={() => void cancelRun(activeRunId)}>
+        <Button variant="danger" onClick={() => setConfirmCancel(true)}>
           <Icons.stop /> Cancel
         </Button>
       ) : (
@@ -70,6 +84,15 @@ export function RunControls() {
         >
           <Icons.play /> Run
         </Button>
+      )}
+      {confirmCancel && activeRunId && (
+        <ConfirmDialog
+          title="Cancel run"
+          message={`Cancel run${activeRun ? ` #${activeRun.shortId}` : ""}? Running Claude sessions will be asked to exit and unfinished nodes are cancelled.`}
+          confirmLabel="Cancel run"
+          onConfirm={() => void cancelRun(activeRunId)}
+          onClose={() => setConfirmCancel(false)}
+        />
       )}
     </div>
   );

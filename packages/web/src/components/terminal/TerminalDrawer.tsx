@@ -1,6 +1,6 @@
 import { isClaudeNode } from "@promptgraph/shared";
 import { useCallback, useRef, useState, type PointerEvent } from "react";
-import { reopenSession } from "../../store/app-actions";
+import { closeTerminalTab, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
 import { clampDrawerHeight, useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
@@ -75,7 +75,8 @@ export function TerminalDrawer() {
                   type="button"
                   aria-label="Close terminal"
                   className="rounded p-0.5 text-zinc-500 opacity-60 group-hover:opacity-100 hover:bg-zinc-700 hover:text-zinc-100"
-                  onClick={() => useUiStore.getState().closeTerminal(ptyId)}
+                  title={ptyId.startsWith("reopen-") ? "Close and end this reopened session" : "Close terminal"}
+                  onClick={() => void closeTerminalTab(ptyId)}
                 >
                   <Icons.x />
                 </button>

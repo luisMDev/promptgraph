@@ -127,7 +127,8 @@ function previousAssistantText() {
 
 // ---------------------------------------------------------------------------- markers
 // [[fail]] exit 1 · [[crash]] exit 0 without Stop · [[hang]] never finish the turn · [[ask]] / [[ask:msg]]
-// Notification then wait for a line of input · [[idle]] idle Notification after Stop · [[write:path:content]]
+// Notification then wait for a line of input · [[permit:cmd]] Bash permission select dialog whose highlighted
+// default is "Yes": any answer but Esc / "2" / "n" (including a stray "/exit" + Enter) runs cmd · [[idle]] idle Notification after Stop · [[write:path:content]]
 // Write tool · [[bash:cmd]] Bash tool (runs cmd) · [[tool:Name]] PreToolUse only · [[sleep:ms]] ·
 // [[reply:text]] exact reply · [[marker:TOKEN]] reply ends with TOKEN · [[recall]] reply = previous answer
 // (for --resume tests) · [[exit]] exit 0 after Stop · [[judge:false]] headless boolean fields = false.
@@ -198,6 +199,19 @@ async function runTurn(message) {
     await runHooks("Notification", { message: msg, notification_type: "permission_prompt" });
     answer = await nextLine();
     out(`${C.dim}(answered: ${answer})${C.reset}\r\n`);
+  }
+
+  const permit = has("permit");
+  if (permit) {
+    await runHooks("PreToolUse", { tool_name: "Bash", tool_input: { command: permit.arg, description: "fake" } }, "Bash");
+    out(`Bash command\r\n  ${permit.arg}\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n`);
+    await runHooks("Notification", { message: "Claude needs your permission to use Bash", notification_type: "permission_prompt" });
+    const choice = await nextLine();
+    if (choice.includes("\x1b") || /^(2|n)/i.test(choice.trim())) out("Denied.\r\n");
+    else {
+      out(`Ran 1 shell command: ${permit.arg}\r\n`);
+      await new Promise((r) => spawn("sh", ["-c", permit.arg], { cwd, stdio: "ignore" }).on("close", r));
+    }
   }
 
   if (has("hang")) return new Promise(() => {});

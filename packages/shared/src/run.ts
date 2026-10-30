@@ -39,6 +39,8 @@ export const NodeRunOutputSchema = z.object({
   comment: z.string().optional(),
   /** condition (Phase 2): chosen port. */
   port: z.enum(["true", "false"]).optional(),
+  /** skipped: the user skipped the node (treated as success downstream), not a dead path. */
+  skippedByUser: z.boolean().optional(),
   /** Claude nodes (and headless helpers run on behalf of the node). */
   usage: TokenUsageSchema.optional(),
 });

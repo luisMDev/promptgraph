@@ -46,7 +46,7 @@ export function registerGraphRoutes(app: Hono, ctx: AppContext): void {
   app.post("/api/graphs/:id/validate", async (c) => {
     const body = await readBody(c, ValidateGraphRequestSchema);
     const graph = body.graph ?? ctx.graphs.get(c.req.param("id")).graph;
-    return c.json<ValidateGraphResponse>(validateGraph(graph, { phase: SUPPORTED_PHASE }));
+    return c.json<ValidateGraphResponse>(validateGraph(graph, { phase: SUPPORTED_PHASE, supportedNodeTypes: ctx.engine.supportedNodeTypes() }));
   });
 
   app.post("/api/graphs/:id/runs", async (c) => c.json(await ctx.engine.startRun(c.req.param("id"))));

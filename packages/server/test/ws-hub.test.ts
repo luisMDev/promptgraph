@@ -69,6 +69,11 @@ describe("WsHub", () => {
     await expect(connect("")).rejects.toThrow("HTTP 401");
     await expect(connect("?t=wrong")).rejects.toThrow("HTTP 401");
     await expect(connect(`?t=${TEST_TOKEN}`, { origin: "http://evil.example" })).rejects.toThrow("HTTP 403");
+    setup.ctx.port = port;
+    // Another app on a different localhost port must not reach the PTYs with the user's cookie.
+    await expect(connect("", { cookie: `pg_token=${TEST_TOKEN}`, origin: "http://127.0.0.1:3000" })).rejects.toThrow("HTTP 403");
+    const sameOrigin = await connect("", { cookie: `pg_token=${TEST_TOKEN}`, origin: `http://127.0.0.1:${port}` });
+    expect((await sameOrigin.next((m) => m.type === "hello")).type).toBe("hello");
     const viaCookie = await connect("", { cookie: `pg_token=${TEST_TOKEN}` });
     expect((await viaCookie.next((m) => m.type === "hello")).type).toBe("hello");
   });

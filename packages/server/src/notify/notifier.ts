@@ -34,9 +34,12 @@ async function onPath(bin: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   return false;
 }
 
-/** Single-quoted PowerShell string literal. */
-function psString(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+/**
+ * Single-quoted PowerShell string literal. PowerShell also treats U+2018–U+201B as single quotes, so
+ * every one of them is doubled (as its own EscapeSingleQuotedStringContent does).
+ */
+export function psString(value: string): string {
+  return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, (q) => q + q)}'`;
 }
 
 export function wslToastScript(title: string, body: string): string {
@@ -113,11 +116,16 @@ export class Notifier {
     return this.deps.bus.on("attention", (e) => void this.notify(e));
   }
 
+  /** Detected once; "none" means notifications cannot be shown. */
+  detectPlatform(): Promise<NotifyPlatform> {
+    this.platform ??= (this.deps.detect ?? detectNotifyPlatform)();
+    return this.platform;
+  }
+
   private async notify(e: Attention): Promise<void> {
     try {
       if (!this.deps.settings.get().notifications) return;
-      this.platform ??= (this.deps.detect ?? detectNotifyPlatform)();
-      const platform = await this.platform;
+      const platform = await this.detectPlatform();
       const { title, body } = attentionText(e);
       await (this.deps.send ?? sendDesktopNotification)(platform, title, body);
     } catch {

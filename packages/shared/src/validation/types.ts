@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { NodeType } from "../graph.js";
 
 export const VALIDATION_CODES = [
   // errors
@@ -18,6 +19,7 @@ export const VALIDATION_CODES = [
   "invalid_loop",
   "pr_requires_approval",
   "phase2_unsupported",
+  "unsupported_node_type",
   // warnings
   "uncommitted_before_pr",
   "uncommitted_before_merge",
@@ -49,4 +51,9 @@ export interface ValidateOptions {
    * engine supports.
    */
   phase?: 1 | 2;
+  /**
+   * Node types the engine can run (`unsupported_node_type` error for others). Default: every type.
+   * The server passes its runner registry's types until all milestones land.
+   */
+  supportedNodeTypes?: readonly NodeType[];
 }

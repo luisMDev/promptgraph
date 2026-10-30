@@ -30,6 +30,8 @@ export interface EditorState {
 export interface EditorStore extends EditorState {
   /** Validation phase (RepoInfoResponse.phase). */
   phase: 1 | 2;
+  /** Node types the server can run (RepoInfoResponse.supportedNodeTypes); null = all. */
+  supportedNodeTypes: readonly NodeType[] | null;
   /** Id of the opened graph, also when it failed to load. */
   graphId: string | null;
   loading: boolean;
@@ -44,7 +46,7 @@ export interface EditorStore extends EditorState {
   selectedNodeIds: string[];
   selectedEdgeIds: string[];
 
-  setPhase(phase: 1 | 2): void;
+  setPhase(phase: 1 | 2, supportedNodeTypes?: readonly NodeType[] | null): void;
   openGraph(id: string): Promise<void>;
   closeGraph(): void;
   /** Applies an edit (no-op while read-only); marks dirty, revalidates and schedules the autosave. */
@@ -90,10 +92,10 @@ export function isReadOnly(s: Pick<EditorStore, "graph" | "activeRunId" | "loadE
   return !s.graph || s.activeRunId !== null || s.loadError !== null;
 }
 
-function validate(graph: Graph | null, phase: 1 | 2): ValidationResult {
+function validate(graph: Graph | null, s: Pick<EditorStore, "phase" | "supportedNodeTypes">): ValidationResult {
   if (!graph) return EMPTY_VALIDATION;
   try {
-    return validateGraph(graph, { phase });
+    return validateGraph(graph, { phase: s.phase, ...(s.supportedNodeTypes ? { supportedNodeTypes: s.supportedNodeTypes } : {}) });
   } catch (err) {
     return { errors: [{ code: "invalid_config", message: `Validator crashed: ${errorMessage(err)}` }], warnings: [] };
   }
@@ -149,7 +151,6 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
   }
 
   function applyLoaded(res: GetGraphResponse, keepSelection: boolean): void {
-    const phase = get().phase;
     const selection = keepSelection ? pruneSelection(get(), res.graph) : NO_SELECTION;
     set({
       graph: res.graph,
@@ -161,7 +162,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       loadError: null,
       saveError: null,
       externalChange: false,
-      validation: validate(res.graph, phase),
+      validation: validate(res.graph, get()),
       ...selection,
     });
   }
@@ -176,6 +177,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     selectedNodeId: null,
     selectedEdgeId: null,
     phase: 1,
+    supportedNodeTypes: null,
     graphId: null,
     loading: false,
     loadError: null,
@@ -185,8 +187,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     selectedNodeIds: [],
     selectedEdgeIds: [],
 
-    setPhase(phase) {
-      set({ phase, validation: validate(get().graph, phase) });
+    setPhase(phase, supportedNodeTypes = null) {
+      set({ phase, supportedNodeTypes, validation: validate(get().graph, { phase, supportedNodeTypes }) });
     },
 
     async openGraph(id) {
@@ -223,7 +225,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       if (isReadOnly(s) || !s.graph) return;
       const next = fn(s.graph);
       if (next === s.graph) return;
-      set({ graph: next, dirty: true, validation: validate(next, s.phase), ...pruneSelection(s, next) });
+      set({ graph: next, dirty: true, validation: validate(next, s), ...pruneSelection(s, next) });
       scheduleSave();
     },
 
@@ -249,11 +251,11 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     },
 
     connect(req) {
-      const { graph } = get();
+      const { graph, phase } = get();
       if (!graph || isReadOnly(get())) return "The graph is read-only";
-      const error = ops.connectionError(graph, req);
+      const error = ops.connectionError(graph, req, phase);
       if (error) return error;
-      get().edit((g) => ops.connect(g, req));
+      get().edit((g) => ops.connect(g, req, phase));
       return null;
     },
 

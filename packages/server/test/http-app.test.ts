@@ -3,6 +3,7 @@ import path from "node:path";
 import { createEmptyGraph, type GraphInput, type RunDetail } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EngineError } from "../src/engine/engine.js";
+import { hookToken } from "../src/hooks/hook-token.js";
 import { createHttpApp } from "../src/http/app.js";
 import { createTempRepo, tempDir } from "./helpers.js";
 import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
@@ -75,6 +76,29 @@ describe("security middleware", () => {
     const ok = await app.request("/api/graphs", { headers: { ...HOST, cookie: `pg_token=${TEST_TOKEN}` } });
     expect(ok.status).toBe(200);
     expect((await app.request("/?t=wrong", { headers: HOST })).status).toBe(401);
+  });
+
+  it("rejects other localhost ports once listening (cross-port CSRF) and non-JSON cookie writes", async () => {
+    setup.ctx.port = 4777;
+    const cookie = { ...HOST, cookie: `pg_token=${TEST_TOKEN}` };
+    const crossPort = { ...cookie, origin: "http://127.0.0.1:3000", "content-type": "text/plain" };
+    expect((await app.request("/api/runs/x/cancel", { method: "POST", headers: crossPort, body: "{}" })).status).toBe(403);
+    expect((await app.request("/api/graphs", { headers: { ...cookie, host: "127.0.0.1:3000" } })).status).toBe(403);
+    expect((await app.request("/api/graphs", { headers: { ...cookie, origin: "http://localhost:4777" } })).status).toBe(200);
+    const plain = await app.request("/api/runs/x/cancel", { method: "POST", headers: { ...cookie, "content-type": "text/plain" }, body: "{}" });
+    expect(plain.status).toBe(403);
+    expect(await plain.json()).toMatchObject({ code: "forbidden_content_type" });
+    const json = await app.request("/api/runs/x/cancel", { method: "POST", headers: { ...cookie, "content-type": "application/json" }, body: "{}" });
+    expect(json.status).toBe(200);
+  });
+
+  it("accepts a node run's hook token on its own hook routes only", async () => {
+    const token = hookToken(TEST_TOKEN, "nr1");
+    const headers = { ...HOST, authorization: `Bearer ${token}`, "content-type": "application/json" };
+    expect((await app.request("/hooks/nr1/stop", { method: "POST", headers, body: "{}" })).status).toBe(204);
+    expect((await app.request("/hooks/nr2/stop", { method: "POST", headers, body: "{}" })).status).toBe(401);
+    expect((await app.request("/api/graphs", { headers })).status).toBe(401);
+    expect((await app.request("/api/node-runs/nr1/approval", { method: "POST", headers, body: '{"approved":true}' })).status).toBe(401);
   });
 });
 
@@ -172,6 +196,10 @@ describe("run and node-run routes", () => {
     expect(setup.engine.cancelRun).toHaveBeenCalledWith("r1");
     setup.engine.cleanupRun.mockRejectedValueOnce(new EngineError("invalid_state", "still running"));
     expect((await app.request("/api/runs/r1/cleanup", { method: "POST", headers: AUTH })).status).toBe(409);
+    expect(await (await app.request("/api/runs/r1/resume", { method: "POST", headers: AUTH })).json()).toEqual({ ok: true });
+    expect(setup.engine.resumeRun).toHaveBeenCalledWith("r1");
+    expect(await (await app.request("/api/ptys/reopen-1", { method: "DELETE", headers: AUTH })).json()).toEqual({ ok: true });
+    expect(setup.engine.closeReopenedSession).toHaveBeenCalledWith("reopen-1");
     expect(await (await app.request("/api/pending", { headers: AUTH })).json()).toEqual({ nodeRuns: [] });
   });
 

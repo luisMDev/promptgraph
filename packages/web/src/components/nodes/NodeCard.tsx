@@ -3,7 +3,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import { elapsed, formatTokens } from "../../lib/format";
 import { NODE_TYPE_META, configPreview } from "../../lib/node-meta";
-import { NODE_STATUS_STYLE, laneColor } from "../../lib/status-style";
+import { laneColor, nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import type { PgFlowNode } from "./types";
@@ -14,8 +14,7 @@ const handleBase = "!size-2.5 !border-2 !border-zinc-950";
 export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgFlowNode>) {
   const { node, nodeRun, lane, runMode, issues, phase } = data;
   const meta = NODE_TYPE_META[node.type];
-  const status = runMode ? (nodeRun?.status ?? "pending") : null;
-  const style = status ? NODE_STATUS_STYLE[status] : null;
+  const style = runMode ? nodeRunStyle(nodeRun) : null;
   const hasErrors = !runMode && issues.errors.length > 0;
   const hasWarnings = !runMode && !hasErrors && issues.warnings.length > 0;
   const tooltip = [...issues.errors, ...issues.warnings].join("\n") || undefined;
@@ -88,7 +87,7 @@ function PortHandle({ id, top, color, label, runMode }: { id: string; top: strin
 
 function RunFooter({ nodeRun, laneLabel, laneIndex }: { nodeRun: NodeRun | null; laneLabel: string | null; laneIndex: number }) {
   const status = nodeRun?.status ?? "pending";
-  const style = NODE_STATUS_STYLE[status];
+  const style = nodeRunStyle(nodeRun);
   const live = isActiveNodeStatus(status);
   const now = useNow(live);
   const time = nodeRun ? elapsed(nodeRun.startedAt, nodeRun.finishedAt, now) : null;

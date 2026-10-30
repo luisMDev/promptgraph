@@ -7,6 +7,7 @@ import type { GraphInput, NodeRun } from "@promptgraph/shared";
 import { getPaths, hooksSettingsPath, ptyLogPath } from "../src/config/paths.js";
 import { EventBus } from "../src/events/bus.js";
 import { HookRouter } from "../src/hooks/hook-router.js";
+import { hookToken } from "../src/hooks/hook-token.js";
 import { PtyManager } from "../src/pty/pty-manager.js";
 import { ClaudeRunner } from "../src/runners/claude/claude-runner.js";
 import { INTERRUPTED_MESSAGE } from "../src/runners/claude/context.js";
@@ -47,7 +48,7 @@ async function setup(extraEnv: Record<string, string> = {}) {
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
       const m = /^\/hooks\/([^/]+)\/([^/]+)$/.exec(req.url ?? "");
-      if (!m || req.headers.authorization !== `Bearer ${TOKEN}`) {
+      if (!m || req.headers.authorization !== `Bearer ${hookToken(TOKEN, m[1]!)}`) {
         res.writeHead(401).end();
         return;
       }
@@ -112,7 +113,11 @@ describe("ClaudeRunner (fake claude)", () => {
     const sid = inv!.argv[inv!.argv.indexOf("--session-id") + 1];
     expect(sid).toMatch(/^[0-9a-f-]{36}$/);
     expect(inv!.argv).toEqual(expect.arrayContaining(["--name", "pg:g1/Build", "--settings", hooksSettingsPath(s.paths, run.id), "--permission-mode", "acceptEdits", "--model", "sonnet"]));
-    expect(inv!.env).toMatchObject({ PG_NODE_RUN_ID: "nr-n1", PG_TOKEN: TOKEN, TERM: "xterm-256color" });
+    expect(inv!.env).toMatchObject({ PG_NODE_RUN_ID: "nr-n1", TERM: "xterm-256color" });
+    // The session token never reaches Claude: hooks authenticate with a per-node-run header file.
+    expect(inv!.env.PG_TOKEN).toBeUndefined();
+    expect(Object.values(inv!.env)).not.toContain(TOKEN);
+    expect(inv!.env.PG_HOOK_HEADER_FILE).toMatch(/hook-nr-n1\.header$/);
     expect(inv!.env.CLAUDECODE).toBeUndefined();
     expect(inv!.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
     expect(inv!.env.SOME_HERMETIC_FLAG).toBeUndefined();
@@ -168,6 +173,20 @@ describe("ClaudeRunner (fake claude)", () => {
     exec.controls.userInput!();
     expect(ctx.current).toMatchObject({ status: "running", waitingReason: null });
     expect(await exec.result).toMatchObject({ status: "succeeded", output: { text: "Done: risky (answer: y)" } });
+  });
+
+  it("cancel, done or fail while a permission dialog is open never approves the pending tool call", async () => {
+    for (const end of ["cancel", "done", "fail"] as const) {
+      const s = await setup();
+      const marker = path.join(s.dir, `PWNED-${end}`);
+      const { ctx, exec } = start(s, { prompt: `risky [[permit:touch ${marker}]]`, completion: auto0 });
+      await waitFor(() => ctx.current.status === "waiting_input");
+      if (end === "cancel") await exec.controls.cancel();
+      else exec.controls[end]();
+      await exec.result;
+      await new Promise((r) => setTimeout(r, 200));
+      expect(fs.existsSync(marker)).toBe(false);
+    }
   });
 
   it("auto grace is cancelled by user input", async () => {
@@ -233,15 +252,21 @@ describe("ClaudeRunner (fake claude)", () => {
     const second = start(
       s,
       { prompt: "what did you say? [[recall]]", context: "resume", completion: auto0 },
-      { id: "b", predecessors: [{ nodeId: "a", label: "A", type: "prompt", status: "succeeded", output: { text: "ALPHA" }, error: null, sessionId: sid, laneId: "main" }] },
+      { id: "b", predecessors: [{ nodeId: "a", label: "A", type: "prompt", status: "succeeded", output: { text: "ALPHA" }, error: null, sessionId: sid, transcriptPath: null, laneId: "main" }] },
     );
-    expect(await second.exec.result).toMatchObject({ status: "succeeded", output: { text: "ALPHA" } });
+    const secondResult = await second.exec.result;
+    expect(secondResult).toMatchObject({ status: "succeeded", output: { text: "ALPHA" } });
+    // The resumed transcript holds A's message too: B only reports the usage of its own turn.
+    const firstUsage = (await first.exec.result).status === "succeeded" ? first.ctx.current.output?.usage : undefined;
+    expect(secondResult.status === "succeeded" && secondResult.output.usage).toEqual(firstUsage);
     const inv = s.invocations()[1]!;
     expect(inv.argv.slice(0, 3)).toEqual(["what did you say? [[recall]]", "--resume", sid]);
     expect(inv.argv).not.toContain("--session-id");
 
     const retry = start(s, { prompt: "original", completion: auto0 }, { id: "c", previousAttempt: makeNodeRun("old", "c", { status: "interrupted", sessionId: sid }) });
-    expect((await retry.exec.result).status).toBe("succeeded");
+    const retryResult = await retry.exec.result;
+    expect(retryResult.status).toBe("succeeded");
+    expect(retryResult.status === "succeeded" && retryResult.output.usage?.outputTokens).toBe(firstUsage?.outputTokens);
     expect(s.invocations()[2]!.argv.slice(0, 3)).toEqual([INTERRUPTED_MESSAGE, "--resume", sid]);
   });
 
@@ -263,8 +288,12 @@ describe("ClaudeRunner (fake claude)", () => {
     expect(h.isLive).toBe(true);
     await waitFor(() => s.invocations().length === 2);
     expect(s.invocations()[1]!.argv).toEqual(["--resume", ctx.current.sessionId, "--permission-mode", "plan"]);
-    h.write("/exit\r");
+    // A second click returns the live session instead of starting another one on the same transcript.
+    expect(s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir)).toBe(ptyId);
+    expect(s.runner.closeReopened("reopen-unknown")).toBe(false);
+    expect(s.runner.closeReopened(ptyId)).toBe(true);
     await h.exited;
+    expect(s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir)).not.toBe(ptyId);
     expect(fs.existsSync(ptyLogPath(s.paths, run.id, ptyId))).toBe(true);
     expect(() => s.runner.reopen(run, makeNodeRun("z", "n1"), null, s.dir)).toThrow(/no Claude session/);
   });

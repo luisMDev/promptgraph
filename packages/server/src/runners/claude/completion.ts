@@ -7,6 +7,8 @@ export interface CompletionCallbacks {
   idle(): void;
   /** Activity resumed after idle/grace (status running). */
   resume(): void;
+  /** The held turn ended and a new one started: the hold no longer applies (§7.4). */
+  holdReleased(): void;
 }
 
 type Phase = "working" | "grace" | "idle" | "done";
@@ -17,10 +19,13 @@ type Phase = "working" | "grace" | "idle" | "done";
  * - manual: Stop → idle until done().
  * - marker: Stop → last message contains token ? succeed : idle.
  * - hold (any policy): the current turn behaves as manual; clearing hold does not retroactively succeed.
+ *   Once that turn has ended in idle, the next turn (user input / activity) releases the hold.
  */
 export class CompletionController {
   private phase: Phase = "working";
   private hold = false;
+  /** A turn ended in idle because of the hold. */
+  private holdSpent = false;
   private timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -31,7 +36,11 @@ export class CompletionController {
   onStop(lastAssistantMessage: string | null): void {
     if (this.phase === "done") return;
     this.clearTimer();
-    if (this.hold || this.policy.mode === "manual") return this.toIdle();
+    if (this.hold) {
+      this.holdSpent = true;
+      return this.toIdle();
+    }
+    if (this.policy.mode === "manual") return this.toIdle();
     if (this.policy.mode === "marker") {
       return lastAssistantMessage?.includes(this.policy.token) ? this.succeed() : this.toIdle();
     }
@@ -51,8 +60,10 @@ export class CompletionController {
 
   setHold(hold: boolean): void {
     this.hold = hold;
+    this.holdSpent = false;
     if (hold && this.phase === "grace") {
       this.clearTimer();
+      this.holdSpent = true;
       this.toIdle();
     }
   }
@@ -67,6 +78,11 @@ export class CompletionController {
     if (this.phase !== "grace" && this.phase !== "idle") return;
     this.clearTimer();
     this.phase = "working";
+    if (this.holdSpent) {
+      this.hold = false;
+      this.holdSpent = false;
+      this.callbacks.holdReleased();
+    }
     this.callbacks.resume();
   }
 

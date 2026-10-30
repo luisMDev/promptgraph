@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GraphSchema } from "./graph.js";
+import { GraphSchema, NodeTypeSchema } from "./graph.js";
 import { NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
 import { ValidationResultSchema } from "./validation/types.js";
 
@@ -32,6 +32,10 @@ export const RepoInfoResponseSchema = z.object({
   phase: z.union([z.literal(1), z.literal(2)]),
   /** Prerequisite warnings from the CLI checks, e.g. "gh not found: PR nodes will fail". */
   warnings: z.array(z.string()),
+  /** Node types the engine can run; the web validates with ValidateOptions.supportedNodeTypes. */
+  supportedNodeTypes: z.array(NodeTypeSchema),
+  /** A desktop notifier (notify-send / WSL PowerShell) was found (§18 Q2). */
+  notificationsAvailable: z.boolean(),
 });
 export type RepoInfoResponse = z.infer<typeof RepoInfoResponseSchema>;
 
@@ -174,7 +178,10 @@ export const DiffResponseSchema = z.object({
 });
 export type DiffResponse = z.infer<typeof DiffResponseSchema>;
 
-/** POST /api/node-runs/:id/reopen — spawns `claude --resume <session>` (not part of the run). */
+/**
+ * POST /api/node-runs/:id/reopen — spawns `claude --resume <session>` (not part of the run), or returns
+ * the node run's reopened PTY while it is still live. DELETE /api/ptys/:ptyId ends it.
+ */
 export const ReopenResponseSchema = z.object({ ptyId: z.string() });
 export type ReopenResponse = z.infer<typeof ReopenResponseSchema>;
 
@@ -210,12 +217,15 @@ export const API = {
   run: (id: string) => `/api/runs/${encodeURIComponent(id)}`,
   cancelRun: (id: string) => `/api/runs/${encodeURIComponent(id)}/cancel`,
   cleanupRun: (id: string) => `/api/runs/${encodeURIComponent(id)}/cleanup`,
+  resumeRun: (id: string) => `/api/runs/${encodeURIComponent(id)}/resume`,
   pending: "/api/pending",
   nodeRunAction: (id: string, action: "done" | "fail" | "retry" | "skip" | "hold") =>
     `/api/node-runs/${encodeURIComponent(id)}/${action}`,
   approval: (id: string) => `/api/node-runs/${encodeURIComponent(id)}/approval`,
   diff: (id: string) => `/api/node-runs/${encodeURIComponent(id)}/diff`,
   reopen: (id: string) => `/api/node-runs/${encodeURIComponent(id)}/reopen`,
+  /** DELETE: ends a "Reopen session" PTY (the only PTYs not owned by a run). */
+  pty: (id: string) => `/api/ptys/${encodeURIComponent(id)}`,
   commands: "/api/commands",
   hook: (nodeRunId: string, event: string) => `/hooks/${encodeURIComponent(nodeRunId)}/${event}`,
   ws: "/ws",

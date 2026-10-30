@@ -41,7 +41,7 @@ describe("generateMessage", () => {
       cwd: "/",
       kind: "pr",
       diffStat: " a.ts | 2 +-",
-      outputs: [{ nodeId: "n", label: "Fix", type: "shell", status: "succeeded", output: { exitCode: 0, stdoutTail: "ok" }, error: null, sessionId: null, laneId: null }],
+      outputs: [{ nodeId: "n", label: "Fix", type: "shell", status: "succeeded", output: { exitCode: 0, stdoutTail: "ok" }, error: null, sessionId: null, transcriptPath: null, laneId: null }],
     });
     expect(prompt).toContain("pull request");
     expect(prompt).toContain("a.ts | 2 +-");
@@ -56,7 +56,7 @@ describe("generateMessage", () => {
       cwd: dir,
       kind: "pr",
       diffStat: " a | 1 +",
-      outputs: [{ nodeId: "n", label: "Build", type: "prompt", status: "succeeded", output: null, error: null, sessionId: null, laneId: null }],
+      outputs: [{ nodeId: "n", label: "Build", type: "prompt", status: "succeeded", output: null, error: null, sessionId: null, transcriptPath: null, laneId: null }],
       env: { ...e, FAKE_CLAUDE_MODE: "fail" },
     });
     expect(failing).toEqual({ title: "Changes from promptgraph", body: "Steps:\n- Build\n\n```\na | 1 +\n```", usage: null });

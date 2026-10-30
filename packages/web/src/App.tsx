@@ -28,7 +28,7 @@ export function App() {
       await useAppStore.getState().boot();
       const repo = useAppStore.getState().repo;
       if (!repo) return;
-      useEditorStore.getState().setPhase(repo.phase);
+      useEditorStore.getState().setPhase(repo.phase, repo.supportedNodeTypes);
       await openInitialGraph();
     })();
     return stop;

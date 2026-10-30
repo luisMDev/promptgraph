@@ -246,7 +246,7 @@ running it may `ctx.update({status: "running" | "idle" | "waiting_input" | "wait
 - Options: `node.config.X ?? settings.defaults.X` for model, effort, permissionMode, allowedTools, completion.
 - `hooks.json` once per run at `hooksSettingsPath` with commands `'<binDir>/pg-hook' <event>` (§7.2).
 - Spawn: `claudeBin()` with `buildClaudeArgs(spec)`, cwd = lane worktree, 120×40, env
-  `childEnv({PG_PORT, PG_TOKEN, PG_NODE_RUN_ID})`, PTY id = nodeRun.id, `logPath = ptyLogPath(...)`.
+  `childEnv({PG_PORT, PG_HOOK_HEADER_FILE, PG_NODE_RUN_ID})` (header file = `Authorization: Bearer hookToken(token, nodeRunId)`, 0600), PTY id = nodeRun.id, `logPath = ptyLogPath(...)`.
   `spec.name = "pg:<graph-id>/<node-label>"`.
 - Trust (SPIKE A5): `settings.autoTrustWorktrees` → `preTrustDirectory(worktreePath, env)` before spawn.
   Otherwise watch stripped PTY output for `TRUST_DIALOG_PATTERN` → `waiting_input {kind:"trust_dialog"}`.
@@ -255,11 +255,17 @@ running it may `ctx.update({status: "running" | "idle" | "waiting_input" | "wait
   `activity` → `activity = describeToolActivity(p)`, waiting_input/idle → running ·
   `notification` → `waiting_input {kind:"notification", notificationType, message}` ·
   `stop` → text = `last_assistant_message` ?? `waitForLastAssistantText(transcript)`; `output = {text, usage:
-  usageFromTranscript(transcript)}`; `CompletionController.onStop(text)`.
+  usageFromTranscript(transcript, baseline)}` where `baseline` = assistant message ids already in a resumed
+  transcript (`--resume` appends to the same file; that usage belongs to the predecessor / previous attempt);
+  `CompletionController.onStop(text)`.
 - Completion (`CompletionController`, §7.4): auto grace (user input cancels), manual → idle, marker → token
-  check, hold forces manual for the current turn. `done()` from idle → success.
-- Success → `"/exit\r"`, wait 3s, kill; PTY exit before success (and not cancelled) → failed.
-- `reopen()` (M2): `claude --resume <sessionId>` in a new PTY `reopen-<id>` (not part of the run).
+  check, hold forces manual for the current turn (the next turn releases it: `holdReleased` → `hold:false`).
+  `done()` from idle → success. Command nodes in marker mode get the marker instruction after the command.
+- Ending (success/done/fail/cancel) → `"/exit\r"` only when Claude sits at its input prompt (a Stop and no
+  activity/input/dialog since); otherwise SIGTERM directly, since Enter in a permission or trust dialog
+  accepts its default "Yes". Then wait 3s, kill. PTY exit before success (and not cancelled) → failed.
+- `reopen()` (M2): `claude --resume <sessionId>` in a new PTY `reopen-<id>` (not part of the run); while it is
+  live the same ptyId is returned. `closeReopened(ptyId)` (DELETE `/api/ptys/:ptyId`) SIGTERMs it.
 
 **ShellRunner**: `sh -c <run>` in a PTY (id = nodeRun.id); output `{exitCode, stdoutTail, timedOut?}`.
 
@@ -279,13 +285,15 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
 - `resolveClaudeOptions(node, defaults)` and `describePredecessor(p)` are exported (merge/judge reuse).
 - Notification `idle_prompt` is ignored after a Stop (the completion policy already decided); other
   notifications → `waiting_input`. `context:"resume"` with no same-lane Claude predecessor session → failed.
-- Graceful stop writes `/exit`, then `\r` 100 ms later (verified with real Claude Code), waits 3 s, SIGTERM, SIGKILL.
+- Graceful stop (at the input prompt only) writes `/exit`, then `\r` 100 ms later (verified with real Claude
+  Code), waits 3 s, SIGTERM, SIGKILL.
 - Pre-trust also trusts the directory's realpath and writes through a symlinked config; unparsable config → throws
   (node fails) instead of overwriting.
 - `PtyManager`: spawning an id that is still live throws; `get()` also returns exited handles; exit `code` is null
   when killed by a signal. Reopen PTYs log to `ptyLogPath(paths, run.id, "reopen-<id>")` — the composition root's
   `resolveLogPath` must map those after a restart.
-- Commit messages are generated from `ctx.predecessors` (the context has no other node runs).
+- Commit messages are generated from `ctx.laneOutputs`: every ancestor back to (excluding) the previous
+  commit/merge node that ran in this iteration, canvas order (§6.1).
 - Real-claude test: `PG_REAL_CLAUDE=1 pnpm vitest run packages/server/test/claude-runner.real.test.ts`.
 
 **Implementation notes (integration M1+M2):**
@@ -295,6 +303,14 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   against the merge-base, so untracked files show up without touching the lane's index.
 - `LaneManager.cleanup` (§9.6) removes worktrees and deletes unpushed branches **only when they carry no commits
   of their own** (or the lane was merged). A run without a `pr` node keeps its branch (e.g. the commit node's work).
+- `Engine.resumeRun` (POST `/api/runs/:id/resume`) continues a paused run that has no failed/interrupted/
+  cancelled node (e.g. stopped while fork lanes were created); `finalize` waits (bounded) for in-flight lane
+  creations before cleanup. Workspace setup is retried until it succeeds (also after a restart: lanes with no
+  node run whose `laneSetup` is `succeeded`). User skips set `output.skippedByUser`.
+- Only node types with a runner pass validation (`ValidateOptions.supportedNodeTypes`,
+  `RepoInfoResponse.supportedNodeTypes`, error `unsupported_node_type`).
+- `PtyManager.userInput` ignores terminal-generated reports (focus, mouse, query replies; `pty/terminal-reports.ts`)
+  for the user-input signal, and releases the ring buffer once a PTY has exited (attach reads the log).
 - `Engine.shutdown` also waits (bounded by `stopTimeoutMs`) for in-flight node chains (finish → advance →
   finalize/cleanup) so nothing writes to the store after the DB is closed.
 
@@ -318,7 +334,7 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
 | POST `/api/graphs/:id/runs` | `{}` | `RunDetail` |
 | GET `/api/runs?graph=&limit=` | `ListRunsQuery` | `ListRunsResponse` |
 | GET `/api/runs/:id` | — | `RunDetail` |
-| POST `/api/runs/:id/cancel` · `/cleanup` | — | `OkResponse` |
+| POST `/api/runs/:id/cancel` · `/cleanup` · `/resume` | — | `OkResponse` |
 | GET `/api/pending` | — | `PendingResponse` (waiting_approval node runs) |
 | POST `/api/node-runs/:id/done` · `/retry` · `/skip` | — | `NodeRunResponse` |
 | POST `/api/node-runs/:id/fail` | `FailNodeRequest` | `NodeRunResponse` |
@@ -327,6 +343,7 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
 | POST `/api/node-runs/:id/approval` | `ApprovalRequest` | `NodeRunResponse` |
 | GET `/api/node-runs/:id/diff` | — | `DiffResponse` |
 | POST `/api/node-runs/:id/reopen` | — | `ReopenResponse` |
+| DELETE `/api/ptys/:ptyId` | — | `OkResponse` (ends a live reopened session; 404 otherwise) |
 | GET `/api/commands` | — | `ListCommandsResponse` |
 | POST `/hooks/:nodeRunId/:event` | raw hook JSON | 204 (always fast; never blocks Claude) |
 
@@ -337,10 +354,13 @@ then replay as `pty:data` chunks (≤64 KiB each), then live data. `pty:input` �
 PTYs only; else `pty:error`). Most recent attach/resize drives PTY size.
 
 **Implementation notes (server-http, minimal extensions):**
-- `localhostOnly()` takes no argument: the Host (and Origin, if present) **hostname** must be `127.0.0.1`,
-  `localhost` or `[::1]`; the port is not checked, because the vite dev proxy forwards its own Host
-  (`127.0.0.1:5173`). DNS rebinding is still blocked (an attacker's Host is their domain). Shared with the WS
-  upgrade as `isLocalRequest(host, origin)` in `http/auth.ts`.
+- `localhostOnly(() => ctx.port)`: the Host (and Origin, if present) must be `127.0.0.1`, `localhost` or
+  `[::1]` **on the server's port** (cookies are not port-scoped, so another localhost app must not reach the
+  API/WS); the vite dev proxy rewrites Host (`changeOrigin`) and Origin. Shared with the WS upgrade as
+  `isLocalRequest(host, origin, port)`. Cookie-authenticated `/api` writes must send `application/json` (403
+  `forbidden_content_type`), forcing a CORS preflight for cross-origin pages.
+- `/hooks/<nodeRunId>/*` also accepts `hookToken(token, nodeRunId)` (`hooks/hook-token.ts`, HMAC); that token is
+  refused everywhere else. It is the only credential Claude PTYs receive.
 - Cookie name is `TOKEN_COOKIE` (`pg_token`). `isAuthorized` also accepts `Authorization: Bearer`.
 - `AppContext.env` (new): the server's base env (commands discovery, `PG_WEB_DIST`). `resolvePtyLogPath(store,
   paths, ptyId)` in `app/context.ts` maps node PTYs, `setup-`/`shell-<nodeRunId>` and (by scanning run dirs)

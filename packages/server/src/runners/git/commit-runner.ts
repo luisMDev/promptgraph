@@ -85,7 +85,7 @@ export class CommitRunner implements Runner {
         cwd,
         kind: "commit",
         diffStat: await gitOk(cwd, ["diff", "--cached", "--stat"]),
-        outputs: ctx.predecessors,
+        outputs: ctx.laneOutputs,
         model: ctx.run.graphSnapshot.settings.defaults.model,
         signal,
         env: this.deps.env,

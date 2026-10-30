@@ -1,4 +1,4 @@
-import type { NodeStatus, RunStatus } from "@promptgraph/shared";
+import type { NodeRun, NodeStatus, RunStatus } from "@promptgraph/shared";
 
 export interface StatusStyle {
   label: string;
@@ -33,6 +33,20 @@ export const NODE_STATUS_STYLE: Record<NodeStatus, StatusStyle> = {
   cancelled: { label: "Cancelled", card: "border-status-cancelled bg-zinc-800/80", dot: "bg-status-cancelled", text: "text-zinc-400" },
   interrupted: { label: "Interrupted", card: "border-status-interrupted bg-zinc-800/80", dot: "bg-status-interrupted", text: "text-zinc-400" },
 };
+
+/** A node the user skipped counts as success downstream: it is not drawn like a dead path. */
+const USER_SKIPPED_STYLE: StatusStyle = {
+  label: "Skipped by you",
+  card: "border-status-skipped bg-zinc-900",
+  dot: "bg-status-skipped",
+  text: "text-zinc-300",
+};
+
+/** Style of a node run (status, or "skipped by you" for user skips). */
+export function nodeRunStyle(nodeRun: Pick<NodeRun, "status" | "output"> | null): StatusStyle {
+  if (nodeRun?.status === "skipped" && nodeRun.output?.skippedByUser) return USER_SKIPPED_STYLE;
+  return NODE_STATUS_STYLE[nodeRun?.status ?? "pending"];
+}
 
 export const RUN_STATUS_STYLE: Record<RunStatus, { label: string; dot: string; text: string }> = {
   running: { label: "Running", dot: "bg-status-running", text: "text-blue-300" },

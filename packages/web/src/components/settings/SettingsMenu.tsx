@@ -9,6 +9,7 @@ export function SettingsMenu() {
   const open = useUiStore((s) => s.settingsOpen);
   const settings = useAppStore((s) => s.settings);
   const repo = useAppStore((s) => s.repo);
+  const notifyAvailable = repo?.notificationsAvailable ?? true;
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => useUiStore.getState().setSettingsOpen(false));
 
@@ -33,12 +34,13 @@ export function SettingsMenu() {
         <div className="absolute top-10 right-0 z-40 w-72 space-y-3 rounded-lg border border-zinc-800 bg-zinc-900 p-4 shadow-xl">
           <h3 className="text-xs font-semibold tracking-wider text-zinc-500 uppercase">Settings</h3>
           <Checkbox
-            checked={settings?.notifications ?? true}
-            disabled={!settings}
+            checked={notifyAvailable && (settings?.notifications ?? true)}
+            disabled={!settings || !notifyAvailable}
             onChange={toggleNotifications}
-            label="Desktop notifications"
+            label={notifyAvailable ? "Desktop notifications" : "Desktop notifications (unavailable)"}
           />
           <p className="text-[11px] leading-snug text-zinc-500">
+            {!notifyAvailable && "No notifier was found on this system (notify-send, or PowerShell on WSL). "}
             Notify when a node waits for input, approval, or finished a turn (notify-send on Linux, a toast on WSL).
           </p>
           {repo && (

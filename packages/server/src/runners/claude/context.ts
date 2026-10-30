@@ -15,21 +15,23 @@ export function markerInstruction(token: string): string {
 
 /**
  * Initial message for a Claude node:
- * - command node: the slash command line itself (context is not prepended);
+ * - command node: the slash command line itself (context is not prepended); in marker mode the
+ *   instruction follows on its own paragraph and reaches the model as part of the command's arguments;
  * - prompt + "fresh": "Context from previous steps" block (each predecessor's output text, or its
  *   error/exit code/stdout tail for failed ones, truncated to CONTEXT_OUTPUT_LIMIT) + the prompt;
  * - prompt + "clean" / "resume": the prompt only;
- * - completion "marker": markerInstruction appended (prompt nodes only).
+ * - completion "marker": markerInstruction appended.
  */
 export function buildInitialMessage(node: ClaudeNode, predecessors: PredecessorOutput[], completion: CompletionPolicy): string {
-  if (node.type === "command") return node.config.command.trim();
+  const marker = completion.mode === "marker" ? markerInstruction(completion.token) : null;
+  if (node.type === "command") return [node.config.command.trim(), marker].filter((p) => p !== null).join("\n\n");
   const parts: string[] = [];
   if (node.config.context === "fresh" && predecessors.length > 0) {
     const blocks = predecessors.map((p) => `### ${p.label || p.nodeId} (${p.type}, ${p.status})\n${truncate(describePredecessor(p), CONTEXT_OUTPUT_LIMIT)}`);
     parts.push(`Context from previous steps:\n\n${blocks.join("\n\n")}\n\n---`);
   }
   parts.push(node.config.prompt.trim());
-  if (completion.mode === "marker") parts.push(markerInstruction(completion.token));
+  if (marker) parts.push(marker);
   return parts.join("\n\n");
 }
 

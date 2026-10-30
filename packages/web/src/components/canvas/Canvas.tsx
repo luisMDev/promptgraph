@@ -7,6 +7,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   type Connection,
   type EdgeChange,
   type IsValidConnection,
@@ -29,6 +30,9 @@ const GRID: [number, number] = [16, 16];
 const SOURCE_PORTS: readonly string[] = ["out", "true", "false", "error"];
 const FIT_VIEW_OPTIONS = { maxZoom: 1, padding: 0.3 };
 const MINIMAP_STYLE = { width: 160, height: 100 };
+/** Below this canvas width the minimap would cover most of the graph. */
+const MINIMAP_MIN_CANVAS_WIDTH = 600;
+const REFIT_DEBOUNCE_MS = 150;
 
 type Measured = Record<string, { width: number; height: number }>;
 
@@ -66,6 +70,9 @@ function EditCanvas() {
   const readOnly = useEditorStore(isReadOnly);
   const [measured, applyMeasured] = useMeasured();
   const { screenToFlowPosition } = useReactFlow();
+  // Fitting an empty graph would jump the viewport when the first node is dropped, so the next drops
+  // land on top of it: fit on mount only when there is something to fit.
+  const fitOnMount = useRef((graph?.nodes.length ?? 0) > 0).current;
 
   const input = useMemo(
     () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured } : null),
@@ -107,8 +114,8 @@ function EditCanvas() {
 
   const isValidConnection: IsValidConnection<PgFlowEdge> = useCallback(
     (c) => {
-      const g = useEditorStore.getState().graph;
-      return !!g && connectionError(g, toConnectRequest({ source: c.source, target: c.target, sourceHandle: c.sourceHandle ?? null, targetHandle: null })) === null;
+      const { graph: g, phase: p } = useEditorStore.getState();
+      return !!g && connectionError(g, toConnectRequest({ source: c.source, target: c.target, sourceHandle: c.sourceHandle ?? null, targetHandle: null }), p) === null;
     },
     [],
   );
@@ -147,15 +154,18 @@ function EditCanvas() {
         selectionKeyCode="Shift"
         snapToGrid
         snapGrid={GRID}
-        fitView
+        fitView={fitOnMount}
         fitViewOptions={FIT_VIEW_OPTIONS}
         minZoom={0.2}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#27272a" />
         <Controls showInteractive={false} />
-        <RefitOnDrawerToggle />
-        <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => (n.data.issues.errors.length ? "#ef4444" : "#52525b")} nodeStrokeWidth={0} maskColor="rgb(9 9 11 / 0.7)" />
+        <RefitOnResize />
+        <RevealRequestedNode measured={measured} />
+        <WideEnoughForMinimap>
+          <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => (n.data.issues.errors.length ? "#ef4444" : "#52525b")} nodeStrokeWidth={0} maskColor="rgb(9 9 11 / 0.7)" />
+        </WideEnoughForMinimap>
       </ReactFlow>
       {graph.nodes.length === 0 && <EmptyHint readOnly={readOnly} />}
     </div>
@@ -222,32 +232,64 @@ function RunCanvas() {
     >
       <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#27272a" />
       <Controls showInteractive={false} />
-      <RefitOnDrawerToggle />
-      <MiniMap<PgFlowNode>
-        style={MINIMAP_STYLE}
-        pannable
-        zoomable
-        nodeColor={(n) => NODE_STATUS_COLOR_HEX[n.data.nodeRun?.status ?? "pending"]}
-        nodeStrokeWidth={0}
-        maskColor="rgb(9 9 11 / 0.7)"
-      />
+      <RefitOnResize />
+      <WideEnoughForMinimap>
+        <MiniMap<PgFlowNode>
+          style={MINIMAP_STYLE}
+          pannable
+          zoomable
+          nodeColor={(n) => NODE_STATUS_COLOR_HEX[n.data.nodeRun?.status ?? "pending"]}
+          nodeStrokeWidth={0}
+          maskColor="rgb(9 9 11 / 0.7)"
+        />
+      </WideEnoughForMinimap>
     </ReactFlow>
   );
 }
 
-/** Opening or closing the terminal drawer shrinks the canvas; re-fit so nodes are not hidden under it. */
-function RefitOnDrawerToggle() {
-  const drawerOpen = useUiStore((s) => s.drawerOpen);
+/**
+ * The canvas changes size with the window, the terminal drawer and the side panels; re-fit (debounced)
+ * so nodes are not left hidden outside the smaller canvas. The initial size is handled by fitView.
+ */
+function RefitOnResize() {
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  const hasNodes = useStore((s) => s.nodeLookup.size > 0);
   const { fitView } = useReactFlow();
-  const first = useRef(true);
+  const last = useRef<{ width: number; height: number } | null>(null);
   useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    const frame = requestAnimationFrame(() => void fitView({ ...FIT_VIEW_OPTIONS, duration: 200 }));
-    return () => cancelAnimationFrame(frame);
-  }, [drawerOpen, fitView]);
+    const prev = last.current;
+    last.current = { width, height };
+    if (!prev || prev.width === 0 || (prev.width === width && prev.height === height) || !hasNodes) return;
+    const timer = setTimeout(() => void fitView({ ...FIT_VIEW_OPTIONS, duration: 200 }), REFIT_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [width, height, hasNodes, fitView]);
+  return null;
+}
+
+function WideEnoughForMinimap({ children }: { children: ReactNode }) {
+  const wide = useStore((s) => s.width >= MINIMAP_MIN_CANVAS_WIDTH);
+  return wide ? children : null;
+}
+
+/** Pans to a node added by a palette click when it landed outside the visible area. */
+function RevealRequestedNode({ measured }: { measured: Measured }) {
+  const nodeId = useUiStore((s) => s.revealNodeId);
+  const node = useEditorStore((s) => (nodeId ? s.graph?.nodes.find((n) => n.id === nodeId) : undefined));
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  const { getViewport, setCenter } = useReactFlow();
+  useEffect(() => {
+    if (!nodeId) return;
+    useUiStore.getState().revealNode(null);
+    if (!node) return;
+    const size = measured[node.id] ?? { width: 240, height: 80 };
+    const { x, y, zoom } = getViewport();
+    const left = node.position.x * zoom + x;
+    const top = node.position.y * zoom + y;
+    const visible = left >= 0 && top >= 0 && left + size.width * zoom <= width && top + size.height * zoom <= height;
+    if (!visible) void setCenter(node.position.x + size.width / 2, node.position.y + size.height / 2, { zoom, duration: 300 });
+  }, [nodeId, node, measured, width, height, getViewport, setCenter]);
   return null;
 }
 

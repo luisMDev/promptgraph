@@ -2,6 +2,7 @@ import {
   CLAUDE_NODE_TYPES,
   isClaudeNode,
   edgeWhen,
+  type CompletionPolicy,
   type Graph,
   type GraphEdge,
   type GraphNode,
@@ -53,13 +54,25 @@ export function validateGraph(graph: Graph, options: ValidateOptions = {}): Vali
     const labels = cycle.map((id) => labelOf(topo.nodes.get(id)!)).join(" → ");
     out.error({
       code: "cycle",
-      message: `Cycle detected: ${labels}. Mark a back-edge as a loop to repeat steps.`,
+      message:
+        phase === 2
+          ? `Cycle detected: ${labels}. Mark a back-edge as a loop to repeat steps.`
+          : `Cycle detected: ${labels}. Remove one of these edges.`,
       nodeId: cycle[0],
     });
   }
 
+  checkCompletion(graph.settings.defaults.completion, out, null);
   for (const node of graph.nodes) {
+    if (options.supportedNodeTypes && !options.supportedNodeTypes.includes(node.type) && !(phase === 1 && node.type === "condition")) {
+      out.error({
+        code: "unsupported_node_type",
+        message: `${node.type} nodes are not supported by this version yet.`,
+        nodeId: node.id,
+      });
+    }
     checkNodeConfig(graph, node, out, phase);
+    if (isClaudeNode(node) && node.config.completion) checkCompletion(node.config.completion, out, node.id);
     if (!node.label.trim()) out.warn({ code: "empty_label", message: "Node has no label.", nodeId: node.id });
   }
 
@@ -119,6 +132,16 @@ function checkIdsAndEdges(graph: Graph, out: Collector, phase: 1 | 2): void {
       });
     }
   }
+}
+
+/** An empty marker token is contained in every message: the node would succeed on any Stop. */
+function checkCompletion(policy: CompletionPolicy, out: Collector, nodeId: string | null): void {
+  if (policy.mode !== "marker" || policy.token.trim()) return;
+  out.error({
+    code: "invalid_config",
+    message: nodeId ? "Marker token is empty." : "The default completion marker token is empty (graph settings).",
+    ...(nodeId ? { nodeId } : {}),
+  });
 }
 
 function missing(node: GraphNode, out: Collector, message: string): void {

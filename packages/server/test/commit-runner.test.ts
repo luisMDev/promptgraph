@@ -100,7 +100,7 @@ describe("CommitRunner", () => {
     const log = path.join(t.dir, "fake.log");
     const env = { ...process.env, ...fakeClaudeEnv(t.dir), FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_STRUCTURED: JSON.stringify({ title: "feat: add greeting", body: "Adds hello.txt." }) };
     fs.writeFileSync(path.join(dir, "hello.txt"), "hi");
-    const preds: PredecessorOutput[] = [{ nodeId: "p", label: "Implement", type: "prompt", status: "succeeded", output: { text: "I added a greeting." }, error: null, sessionId: null, laneId: "main" }];
+    const preds: PredecessorOutput[] = [{ nodeId: "p", label: "Implement", type: "prompt", status: "succeeded", output: { text: "I added a greeting." }, error: null, sessionId: null, transcriptPath: null, laneId: "main" }];
     const { exec } = runCommit(dir, base, {}, env, preds);
     const result = await exec.result;
     expect(result).toMatchObject({ status: "succeeded", output: { message: "feat: add greeting\n\nAdds hello.txt.", usage: { inputTokens: 12, costUsd: 0.0123 } } });

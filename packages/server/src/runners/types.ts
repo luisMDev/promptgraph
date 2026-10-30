@@ -19,6 +19,7 @@ export interface PredecessorOutput {
   output: NodeRunOutput | null;
   error: string | null;
   sessionId: string | null;
+  transcriptPath: string | null;
   laneId: string | null;
 }
 
@@ -32,6 +33,11 @@ export interface RunnerContext {
   lane: Lane;
   /** Direct predecessors, in canvas order. */
   predecessors: PredecessorOutput[];
+  /**
+   * §6.1: nodes since the last commit/merge on the path to this node (canvas order) that ran; the
+   * input of generated commit messages.
+   */
+  laneOutputs: PredecessorOutput[];
   /** Latest earlier attempt of this node (retry); for Claude nodes interrupted → resume its session. */
   previousAttempt: NodeRun | null;
   /** Aborted when the run or node is cancelled. */

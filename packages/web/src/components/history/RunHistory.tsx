@@ -61,7 +61,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
           size="sm"
           variant="ghost"
           className="mt-1 -ml-2 hidden group-hover:inline-flex"
-          title="Remove this run's worktrees and unpushed branches"
+          title="Remove this run's worktrees and its unpushed branches without commits (branches with commits are kept)"
           onClick={(e) => {
             e.stopPropagation();
             void cleanupRun(run.id);

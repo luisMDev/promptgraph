@@ -2,7 +2,7 @@ import { ListRunsQuerySchema, type ListRunsResponse, type OkResponse, type Pendi
 import type { Hono } from "hono";
 import type { AppContext } from "../../app/context.js";
 
-/** GET /api/runs · GET /api/runs/:id · POST /api/runs/:id/cancel · POST /api/runs/:id/cleanup · GET /api/pending */
+/** GET /api/runs · GET /api/runs/:id · POST /api/runs/:id/cancel · POST /api/runs/:id/resume · POST /api/runs/:id/cleanup · GET /api/pending */
 export function registerRunRoutes(app: Hono, ctx: AppContext): void {
   app.get("/api/runs", (c) => {
     const query = ListRunsQuerySchema.parse(c.req.query());
@@ -14,6 +14,11 @@ export function registerRunRoutes(app: Hono, ctx: AppContext): void {
 
   app.post("/api/runs/:id/cancel", async (c) => {
     await ctx.engine.cancelRun(c.req.param("id"));
+    return c.json<OkResponse>({ ok: true });
+  });
+
+  app.post("/api/runs/:id/resume", async (c) => {
+    await ctx.engine.resumeRun(c.req.param("id"));
     return c.json<OkResponse>({ ok: true });
   });
 

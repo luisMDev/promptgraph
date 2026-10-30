@@ -90,6 +90,8 @@ class FakeRunner implements Runner {
 class FakeLanes {
   readonly calls: string[] = [];
   failCreate: string | null = null;
+  /** createLane of these lane ids waits for this promise (fork-lane creation in flight). */
+  gate: { laneIds: string[]; until: Promise<void> } | null = null;
   private heads = 0;
   constructor(
     private readonly store: Store,
@@ -97,6 +99,7 @@ class FakeLanes {
     private readonly root: string,
   ) {}
   async createLane(run: Run, planned: PlannedLane, fromRef: string): Promise<Lane> {
+    if (this.gate?.laneIds.includes(planned.id)) await this.gate.until;
     this.calls.push(`create:${planned.id}:${fromRef}`);
     if (this.failCreate) throw new Error(this.failCreate);
     const lane = this.store.insertLane({
@@ -227,6 +230,8 @@ describe("Engine.startRun", () => {
     expect(b.lane.id).toBe("main");
     expect(b.previousAttempt).toBeNull();
     expect(s.store.getNodeRun(runner.last("c")!.ctx.nodeRun.id)!.output).toEqual({ text: "out:c" });
+    // §6.1: a commit's message describes every node since the previous commit, not only its direct input.
+    expect(runner.last("c")!.ctx.laneOutputs.map((p) => p.nodeId)).toEqual(["a", "b"]);
     expect(s.lanes.calls.at(-1)).toBe("cleanup:on-failure:false");
     expect(s.store.getRun(detail.run.id)!.finishedAt).not.toBeNull();
     expect(s.store.getKnownGraphHash(s.graphs.repoPath, "flow")).toBe(s.graphs.get("flow").hash);
@@ -291,13 +296,26 @@ describe("Engine.startRun", () => {
     expect(statusOf(s, run.id)).toEqual({ a: "cancelled", b: "cancelled" });
   });
 
-  it("fails nodes whose type has no runner", async () => {
+  it("refuses graphs with node types that have no runner", async () => {
     const s = setup({ prompt: new FakeRunner() });
+    expect(s.engine.supportedNodeTypes()).toEqual(["prompt"]);
     s.graphs.save(makeGraph([{ id: "a" }, { id: "b", type: "shell" }], [["a", "b"]]));
+    const err = await s.engine.startRun("flow").catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "validation_failed", details: { errors: [expect.objectContaining({ code: "unsupported_node_type", nodeId: "b" })] } });
+  });
+
+  it("stops collecting commit-message context at the previous commit node", async () => {
+    const runner = new FakeRunner();
+    const s = setup(allTypes(runner));
+    s.graphs.save(
+      makeGraph(
+        [{ id: "a" }, { id: "c1", type: "commit" }, { id: "b", type: "shell" }, { id: "c2", type: "commit" }],
+        [["a", "c1"], ["c1", "b"], ["b", "c2"]],
+      ),
+    );
     const { run } = await s.engine.startRun("flow");
-    await waitRun(s, run.id, "paused");
-    const b = s.store.listNodeRuns(run.id).find((n) => n.nodeId === "b")!;
-    expect(b).toMatchObject({ status: "failed", error: expect.stringContaining("not supported") });
+    await waitRun(s, run.id, "succeeded");
+    expect(runner.last("c2")!.ctx.laneOutputs.map((p) => p.nodeId)).toEqual(["b"]);
   });
 });
 
@@ -368,6 +386,26 @@ describe("Engine DAG scheduling", () => {
     expect(a).toMatchObject({ status: "failed", laneSetup: "failed", error: expect.stringContaining("exit code 3") });
     expect(vi.mocked(runWorkspaceSetup)).toHaveBeenCalledWith(expect.objectContaining({ command: "pnpm install", nodeRunId: a.id }));
     expect(runner.started).toHaveLength(0);
+
+    // A retry runs the setup again (it never succeeded), then only once per lane.
+    vi.mocked(runWorkspaceSetup).mockResolvedValue({ ok: true, exitCode: 0, ptyId: "setup-y" });
+    await s.engine.retry(a.id);
+    await waitRun(s, run.id, "succeeded");
+    expect(vi.mocked(runWorkspaceSetup)).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-runs a lane's setup after a restart when it never completed", async () => {
+    vi.mocked(runWorkspaceSetup).mockResolvedValueOnce({ ok: false, exitCode: 1, ptyId: "setup-x" });
+    const s = setup(allTypes(new FakeRunner()));
+    s.graphs.save(makeGraph([{ id: "a" }], [], { workspaceSetup: "pnpm install" }));
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "paused");
+    vi.mocked(runWorkspaceSetup).mockResolvedValue({ ok: true, exitCode: 0, ptyId: "setup-y" });
+    const engine = s.makeEngine(allTypes(new FakeRunner()));
+    await engine.recover();
+    await engine.retry(s.store.listNodeRuns(run.id)[0]!.id);
+    await waitRun(s, run.id, "succeeded");
+    expect(vi.mocked(runWorkspaceSetup)).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -428,6 +466,7 @@ describe("Engine failure handling and manual controls", () => {
     await expect(s.engine.skip(a.id)).resolves.toMatchObject({ status: "skipped" });
     await waitRun(s, run.id, "succeeded");
     expect(statusOf(s, run.id)).toEqual({ a: "skipped", b: "succeeded" });
+    expect(s.store.getNodeRun(a.id)!.output).toMatchObject({ skippedByUser: true });
     await expect(s.engine.skip(a.id)).rejects.toMatchObject({ code: "invalid_state" });
   });
 
@@ -603,6 +642,51 @@ describe("Engine crash recovery and shutdown", () => {
     await engine.retry(b.id);
     await waitRun(s, run.id, "succeeded");
     expect(runner.started.map((e) => e.ctx.node.id).sort()).toEqual(["b", "c"]);
+  });
+
+  it("a run stopped while fork lanes were being created can be resumed", async () => {
+    const s = setup(allTypes(new FakeRunner()));
+    s.graphs.save(makeGraph([{ id: "a" }, { id: "b", y: 0 }, { id: "c", y: 100 }], [["a", "b"], ["a", "c"]]));
+    s.lanes.gate = { laneIds: ["l2"], until: new Promise(() => {}) }; // the old process never finishes it
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => s.lanes.calls.some((c) => c.startsWith("checkpoint:main")));
+    await s.engine.shutdown();
+
+    s.lanes.gate = null;
+    const runner = new FakeRunner();
+    const engine = s.makeEngine(allTypes(runner));
+    await engine.recover();
+    expect(runStatus(s, run.id)).toBe("paused");
+    expect(statusOf(s, run.id)).toEqual({ a: "succeeded", b: "pending", c: "pending" });
+    await engine.resumeRun(run.id);
+    await waitRun(s, run.id, "succeeded");
+    expect(runner.started.map((e) => e.ctx.node.id).sort()).toEqual(["b", "c"]);
+    await expect(engine.resumeRun(run.id)).rejects.toMatchObject({ code: "invalid_state" });
+  });
+
+  it("resumeRun refuses a run that is paused on a failed node", async () => {
+    const runner = new FakeRunner((e) => queueMicrotask(() => e.failWith()));
+    const s = setup(allTypes(runner));
+    s.graphs.save(makeGraph([{ id: "a" }], []));
+    const { run } = await s.engine.startRun("flow");
+    await waitRun(s, run.id, "paused");
+    await expect(s.engine.resumeRun(run.id)).rejects.toMatchObject({ code: "invalid_state", message: expect.stringContaining("retry or skip") });
+  });
+
+  it("cancel during fork-lane creation waits for it, so cleanup removes the new lane too", async () => {
+    let release!: () => void;
+    const s = setup(allTypes(new FakeRunner()));
+    s.graphs.save(makeGraph([{ id: "a" }, { id: "b", y: 0 }, { id: "c", y: 100 }], [["a", "b"], ["a", "c"]], { keepWorktrees: "never" }));
+    s.lanes.gate = { laneIds: ["l2"], until: new Promise((r) => (release = r)) };
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => s.lanes.calls.some((c) => c.startsWith("checkpoint:main")));
+    const cancelling = s.engine.cancelRun(run.id);
+    setTimeout(release, 50);
+    await cancelling;
+    const created = s.lanes.calls.findIndex((c) => c.startsWith("create:l2"));
+    const cleaned = s.lanes.calls.findIndex((c) => c.startsWith("cleanup"));
+    expect(created).toBeGreaterThanOrEqual(0);
+    expect(created).toBeLessThan(cleaned);
   });
 
   it("shutdown() stops executions, interrupts node runs and pauses runs", async () => {

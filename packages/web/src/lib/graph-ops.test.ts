@@ -18,6 +18,9 @@ describe("graph-ops", () => {
     const g = linearGraph();
     expect(connectionError(g, { source: "a", sourcePort: "out", target: "a" })).toMatch(/itself/);
     expect(connectionError(g, { source: "a", sourcePort: "out", target: "b" })).toMatch(/already/);
+    // Phase 1 has no loop edges: closing a cycle is refused while dragging; phase 2 allows marking a loop.
+    expect(connectionError(g, { source: "b", sourcePort: "out", target: "a" }, 1)).toMatch(/cycle/);
+    expect(connectionError(g, { source: "b", sourcePort: "out", target: "a" }, 2)).toBeNull();
     expect(connect(g, { source: "a", sourcePort: "out", target: "b" })).toBe(g);
   });
 

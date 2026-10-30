@@ -1,7 +1,7 @@
 import { formatCostUsd, isActiveNodeStatus, isClaudeNode, isFinalRunStatus, type GraphNode, type Lane, type NodeRun, type RunStatus } from "@promptgraph/shared";
 import { elapsed, formatTime, formatTokens } from "../../lib/format";
 import { NODE_TYPE_META } from "../../lib/node-meta";
-import { NODE_STATUS_STYLE, laneColor } from "../../lib/status-style";
+import { laneColor, nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { nodeControl, openNodeTerminal, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
@@ -39,7 +39,7 @@ export function NodeRunDetails({ node, nodeRun, lane, runStatus }: { node: Graph
 }
 
 function StatusSection({ nodeRun, lane, attempts }: { nodeRun: NodeRun; lane: Lane | null; attempts: number }) {
-  const style = NODE_STATUS_STYLE[nodeRun.status];
+  const style = nodeRunStyle(nodeRun);
   const now = useNow(isActiveNodeStatus(nodeRun.status));
   return (
     <Section title="Status">
@@ -84,6 +84,8 @@ function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun
   const canDone = s === "idle" || s === "waiting_input" || (s === "running" && isClaudeNode(node));
   const canHold = isClaudeNode(node) && !runFinal && (active || s === "pending" || s === "ready");
   const canReopen = isClaudeNode(node) && !!nodeRun.sessionId && !active;
+  const canReview = s === "waiting_approval";
+  if (!(canDone || active || canHold || canRetry || canSkip || canReview || nodeRun.ptyId || canReopen)) return null;
   const id = nodeRun.id;
   return (
     <Section title="Controls">
@@ -113,7 +115,7 @@ function Controls({ node, nodeRun, label, runFinal }: { node: GraphNode; nodeRun
             Skip
           </Button>
         )}
-        {s === "waiting_approval" && (
+        {canReview && (
           <Button size="sm" variant="primary" onClick={() => useUiStore.getState().openApproval(id)}>
             Review…
           </Button>

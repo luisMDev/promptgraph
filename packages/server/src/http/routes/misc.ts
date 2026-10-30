@@ -16,7 +16,11 @@ import { readJson } from "../errors.js";
 /** GET /api/repo · GET/PUT /api/settings · GET /api/commands */
 export function registerMiscRoutes(app: Hono, ctx: AppContext): void {
   app.get("/api/repo", async (c) => {
-    const [branch, branches] = await Promise.all([currentBranch(ctx.repo.path), listBranches(ctx.repo.path)]);
+    const [branch, branches, notifyPlatform] = await Promise.all([
+      currentBranch(ctx.repo.path),
+      listBranches(ctx.repo.path),
+      ctx.notifier.detectPlatform(),
+    ]);
     return c.json<RepoInfoResponse>({
       path: ctx.repo.path,
       name: ctx.repo.name || path.basename(ctx.repo.path),
@@ -25,6 +29,8 @@ export function registerMiscRoutes(app: Hono, ctx: AppContext): void {
       version: VERSION,
       phase: SUPPORTED_PHASE,
       warnings: ctx.warnings,
+      supportedNodeTypes: ctx.engine.supportedNodeTypes(),
+      notificationsAvailable: notifyPlatform !== "none",
     });
   });
 

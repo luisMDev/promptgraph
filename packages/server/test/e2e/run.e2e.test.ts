@@ -136,6 +136,26 @@ describe("e2e: real server, fake claude", () => {
     expect(message).toContain("### first (prompt, succeeded)\nALPHA-123");
   });
 
+  it("a context=resume chain reports each node's own usage and a run total without double counting", { timeout: 40_000 }, async () => {
+    const w = world();
+    const s = await server(w);
+    await s.saveGraph(
+      chainGraph("resume", [
+        { id: "a", type: "prompt", config: { prompt: "[[reply:ALPHA]] remember" } },
+        { id: "b", type: "prompt", config: { prompt: "[[recall]] what was it?", context: "resume" } },
+      ]),
+    );
+    const { run } = await s.startRun("resume");
+    const done = await s.waitForRun(run.id, ["succeeded", "failed", "paused"]);
+    expect(done.run.status).toBe("succeeded");
+    const byNode = new Map(done.nodeRuns.map((nr) => [nr.nodeId, nr]));
+    expect(byNode.get("b")!.sessionId).toBe(byNode.get("a")!.sessionId);
+    expect(byNode.get("b")!.output?.text).toBe("ALPHA");
+    expect(byNode.get("a")!.output?.usage?.outputTokens).toBe(34);
+    expect(byNode.get("b")!.output?.usage?.outputTokens).toBe(34);
+    expect(done.run.usage.outputTokens).toBe(68);
+  });
+
   it("marker mode completes only when the reply ends with the token", { timeout: 40_000 }, async () => {
     const w = world();
     const s = await server(w);

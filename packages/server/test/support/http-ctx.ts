@@ -28,6 +28,9 @@ const ENGINE_METHODS = [
   "getApprovalInfo",
   "getDiff",
   "reopenSession",
+  "closeReopenedSession",
+  "resumeRun",
+  "supportedNodeTypes",
 ] as const;
 
 type AnyFn = (...args: any[]) => any;
@@ -39,6 +42,8 @@ export function mockEngine(): EngineMock {
   engine.activeRunForGraph.mockReturnValue(null);
   engine.cancelRun.mockResolvedValue(undefined);
   engine.cleanupRun.mockResolvedValue(undefined);
+  engine.resumeRun.mockResolvedValue(undefined);
+  engine.supportedNodeTypes.mockReturnValue(["prompt", "command", "shell", "commit"]);
   return engine;
 }
 
@@ -63,6 +68,7 @@ export function createTestContext(repo: string, root: string, env: NodeJS.Proces
     settings: new AppSettingsStore(paths.settingsFile),
     ptys: new PtyManager(bus, () => null),
     hooks: new HookRouter(),
+    notifier: { detectPlatform: async () => "none" },
     engine: engine as unknown as Engine,
     port: 0,
     env: fullEnv,

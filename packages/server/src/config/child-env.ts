@@ -21,7 +21,8 @@ const STRIPPED_PATTERN = /HERMETIC/;
 /** promptgraph's own variables passed to hooks (§7.1). */
 export interface PgHookEnv {
   PG_PORT: string;
-  PG_TOKEN: string;
+  /** File with the `Authorization` header carrying the node run's hook token (never the session token). */
+  PG_HOOK_HEADER_FILE: string;
   PG_NODE_RUN_ID: string;
 }
 

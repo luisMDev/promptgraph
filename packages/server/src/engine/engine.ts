@@ -5,6 +5,7 @@ import {
   edgeMatches,
   isFinalNodeStatus,
   isFinalRunStatus,
+  NODE_TYPES,
   validateGraph,
   type ApprovalInfoResponse,
   type ApprovalRequest,
@@ -16,6 +17,7 @@ import {
   type NodeOutcome,
   type NodeRun,
   type NodeStatus,
+  type NodeType,
   type PlannedLane,
   type ReopenResponse,
   type Run,
@@ -169,7 +171,7 @@ export class Engine {
       throw err;
     }
     const graph = loaded.graph;
-    const validation = validateGraph(graph, { phase: this.deps.phase });
+    const validation = validateGraph(graph, { phase: this.deps.phase, supportedNodeTypes: this.supportedNodeTypes() });
     if (validation.errors.length > 0) {
       throw new EngineError("validation_failed", `Graph "${graphId}" has validation errors`, validation);
     }
@@ -202,6 +204,11 @@ export class Engine {
     return this.getRun(runId);
   }
 
+  /** Node types with a registered runner (the others fail validation until their milestone lands). */
+  supportedNodeTypes(): NodeType[] {
+    return NODE_TYPES.filter((t) => this.deps.runners[t] !== undefined);
+  }
+
   getRun(runId: string): RunDetail {
     const { store } = this.deps;
     const run = store.getRun(runId);
@@ -215,6 +222,25 @@ export class Engine {
     if (isFinalRunStatus(run.status)) throw new EngineError("invalid_state", `Run ${runId} is already ${run.status}`);
     this.deps.store.appendEvent(runId, null, "run.action", { action: "cancel" });
     await this.terminate(this.ensureLive(run), "cancelled", null);
+  }
+
+  /**
+   * Resumes a paused run that has no failed/interrupted/cancelled node to retry or skip, e.g. one
+   * stopped while successors were being made ready (fork-lane creation). Otherwise invalid_state.
+   */
+  async resumeRun(runId: string): Promise<void> {
+    const run = this.requireRun(runId);
+    if (run.status !== "paused") throw new EngineError("invalid_state", `Run ${runId} is ${run.status}, not paused`);
+    const live = this.ensureLive(run);
+    const blocking = this.blockingNodeRuns(live);
+    if (blocking.length > 0) {
+      const label = labelOf(live.nodes.get(blocking[0]!.nodeId)!);
+      throw new EngineError("invalid_state", `Node "${label}" is ${blocking[0]!.status}: retry or skip it to continue`);
+    }
+    this.deps.store.appendEvent(runId, null, "run.action", { action: "resume" });
+    this.resumeIfPaused(run);
+    this.resumeReady(live);
+    await this.checkProgress(live);
   }
 
   /** Manual "Clean up" (§9.6): force cleanup of worktrees/unpushed branches of a finished run. */
@@ -282,7 +308,7 @@ export class Engine {
     const live = this.ensureLive(run);
     if (nr.status === "ready") live.scheduler.remove(nr.id);
     this.deps.store.appendEvent(nr.runId, nr.id, USER_SKIP_EVENT, null);
-    this.patchNodeRun(nr.id, { status: "skipped", finishedAt: this.now() });
+    this.patchNodeRun(nr.id, { status: "skipped", output: { ...nr.output, skippedByUser: true }, finishedAt: this.now() });
     this.resumeIfPaused(run);
     live.inflight++;
     try {
@@ -363,6 +389,11 @@ export class Engine {
     return { ptyId };
   }
 
+  /** Ends a "Reopen session" PTY (its terminal tab was closed). not_found unless one is live. */
+  closeReopenedSession(ptyId: string): void {
+    if (!this.deps.claude.closeReopened(ptyId)) throw new EngineError("not_found", `No reopened session ${ptyId} is running`);
+  }
+
   /** Wired to PtyManager.onUserInput: forwards to the owning execution's controls.userInput(). */
   handleUserInput(ptyId: string): void {
     const exec = this.findExecution(ptyId) ?? this.findExecution(this.deps.store.findNodeRunByPtyId(ptyId)?.id ?? "");
@@ -431,7 +462,13 @@ export class Engine {
       else if (nr.status === "skipped") finished.push({ nodeId: nr.nodeId, outcome: userSkipped.has(nr.id) ? { kind: "success" } : "skipped" });
       else if (nr.status === "failed" && this.hasFailureRoute(topo, nr.nodeId)) finished.push({ nodeId: nr.nodeId, outcome: { kind: "failure" } });
     }
-    return this.createLive(run, computeLanePlan(graph), ActivationTracker.restore(graph, finished));
+    const live = this.createLive(run, computeLanePlan(graph), ActivationTracker.restore(graph, finished));
+    if (graph.settings.workspaceSetup) {
+      // A lane is set up once one of its node runs completed the setup; otherwise the next node retries it.
+      const setUp = new Set(store.listNodeRuns(run.id).filter((nr) => nr.laneSetup === "succeeded").map((nr) => nr.laneId));
+      for (const lane of store.listLanes(run.id)) if (!setUp.has(lane.id)) live.needsSetup.add(lane.id);
+    }
+    return live;
   }
 
   /** Re-enqueues pending nodes whose inputs are resolved (after restore, or when a paused run resumes). */
@@ -498,6 +535,7 @@ export class Engine {
         signal,
       });
       this.patchNodeRun(nodeRun.id, { laneSetup: res.ok ? "succeeded" : "failed" });
+      if (!res.ok || signal.aborted) live.needsSetup.add(lane.id);
       if (signal.aborted) return { status: "cancelled" };
       if (!res.ok) return { status: "failed", error: `Workspace setup failed (exit code ${res.exitCode ?? "none"})` };
     }
@@ -520,6 +558,7 @@ export class Engine {
       nodeRun: this.requireNodeRun(nodeRun.id),
       lane,
       predecessors,
+      laneOutputs: this.laneOutputsOf(live, node.id),
       previousAttempt,
       signal,
       update: (patch) => this.runnerUpdate(live, nodeRun.id, patch),
@@ -591,12 +630,7 @@ export class Engine {
     const run = this.requireRun(live.runId);
     if (isFinalRunStatus(run.status)) return;
     const current = [...this.currentNodeRuns(live.runId).values()];
-    const blocking = current.filter(
-      (nr) =>
-        nr.status === "interrupted" ||
-        nr.status === "cancelled" ||
-        (nr.status === "failed" && !this.hasFailureRoute(live.topo, nr.nodeId)),
-    );
+    const blocking = this.blockingNodeRuns(live);
     if (blocking.length > 0) {
       if (run.status === "running") {
         const first = blocking[0]!;
@@ -608,6 +642,16 @@ export class Engine {
     const allDone = current.every((nr) => nr.status === "succeeded" || nr.status === "skipped" || nr.status === "failed");
     if (allDone) await this.finalize(live, "succeeded", null);
     else await this.terminate(live, "failed", "No node can make progress");
+  }
+
+  /** Current node runs that keep the run paused until the user retries or skips them. */
+  private blockingNodeRuns(live: LiveRun): NodeRun[] {
+    return [...this.currentNodeRuns(live.runId).values()].filter(
+      (nr) =>
+        nr.status === "interrupted" ||
+        nr.status === "cancelled" ||
+        (nr.status === "failed" && !this.hasFailureRoute(live.topo, nr.nodeId)),
+    );
   }
 
   /** Stops everything still live, cancels unfinished node runs and ends the run (cancel, fail-run). */
@@ -628,6 +672,8 @@ export class Engine {
   private async finalize(live: LiveRun, status: "succeeded" | "failed" | "cancelled", error: string | null): Promise<void> {
     this.live.delete(live.runId);
     this.setRunStatus(live.runId, status, { finishedAt: this.now(), error });
+    // A lane still being created would otherwise be inserted after cleanup and leak its worktree/branch.
+    await withTimeout(Promise.allSettled(live.laneCreation.values()), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
     try {
       await this.deps.lanes.cleanup(live.runId, { keep: live.graph.settings.keepWorktrees, failed: status !== "succeeded" });
     } catch (err) {
@@ -761,9 +807,30 @@ export class Engine {
 
   /** Direct predecessors (forward edges), canvas order, with their current node runs. */
   private predecessorsOf(topo: Topology, runId: string, nodeId: string): PredecessorOutput[] {
+    return this.outputsOf(topo, runId, [...new Set((topo.incoming.get(nodeId) ?? []).map((e) => e.source))]);
+  }
+
+  /**
+   * §6.1: ancestors back to (excluding) the previous commit/merge node, in canvas order, that ran in
+   * this iteration (succeeded or failed): the work a generated commit message describes.
+   */
+  private laneOutputsOf(live: LiveRun, nodeId: string): PredecessorOutput[] {
+    const seen = new Set<string>();
+    const stack = (live.topo.incoming.get(nodeId) ?? []).map((e) => e.source);
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      const type = live.nodes.get(id)!.type;
+      if (seen.has(id) || type === "commit" || type === "merge") continue;
+      seen.add(id);
+      for (const e of live.topo.incoming.get(id) ?? []) stack.push(e.source);
+    }
+    const ids = live.graph.nodes.map((n) => n.id).filter((id) => seen.has(id));
+    return this.outputsOf(live.topo, live.runId, ids).filter((p) => p.status === "succeeded" || p.status === "failed");
+  }
+
+  private outputsOf(topo: Topology, runId: string, nodeIds: readonly string[]): PredecessorOutput[] {
     const current = this.currentNodeRuns(runId);
-    const sources = [...new Set((topo.incoming.get(nodeId) ?? []).map((e) => e.source))];
-    return sources.map((id) => {
+    return nodeIds.map((id) => {
       const node = topo.nodes.get(id)!;
       const nr = current.get(id);
       return {
@@ -774,6 +841,7 @@ export class Engine {
         output: nr?.output ?? null,
         error: nr?.error ?? null,
         sessionId: nr?.sessionId ?? null,
+        transcriptPath: nr?.transcriptPath ?? null,
         laneId: nr?.laneId ?? null,
       };
     });

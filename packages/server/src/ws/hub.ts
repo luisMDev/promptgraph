@@ -72,7 +72,7 @@ export class WsHub {
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     if (pathname !== "/ws") return void rejectUpgrade(socket, 404, "Not Found");
-    if (!isLocalRequest(req.headers.host, req.headers.origin)) return void rejectUpgrade(socket, 403, "Forbidden");
+    if (!isLocalRequest(req.headers.host, req.headers.origin, this.ctx.port)) return void rejectUpgrade(socket, 403, "Forbidden");
     if (!isAuthorized(this.ctx.token, req)) return void rejectUpgrade(socket, 401, "Unauthorized");
     this.wss.handleUpgrade(req, socket, head, (ws) => this.connect(ws));
   }

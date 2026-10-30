@@ -8,7 +8,7 @@ import { CompletionController } from "../src/runners/claude/completion.js";
 import { buildInitialMessage, CONTEXT_OUTPUT_LIMIT, markerInstruction } from "../src/runners/claude/context.js";
 import { buildHooksSettings, writeHooksSettings } from "../src/runners/claude/hooks-settings.js";
 import { installPgHook } from "../src/runners/claude/pg-hook.js";
-import { lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "../src/runners/claude/transcript.js";
+import { assistantMessageIds, lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "../src/runners/claude/transcript.js";
 import { preTrustDirectory, TRUST_DIALOG_PATTERN } from "../src/runners/claude/trust.js";
 import type { PredecessorOutput } from "../src/runners/types.js";
 import { stripAnsi } from "../src/util/text.js";
@@ -38,6 +38,7 @@ const pred = (p: Partial<PredecessorOutput>): PredecessorOutput => ({
   output: null,
   error: null,
   sessionId: null,
+  transcriptPath: null,
   laneId: "main",
   ...p,
 });
@@ -75,9 +76,11 @@ describe("buildClaudeArgs", () => {
 });
 
 describe("buildInitialMessage", () => {
-  it("command nodes send the slash command only", () => {
+  it("command nodes send the slash command without context; marker mode appends the instruction", () => {
     const node = claudeNode({ type: "command", config: { command: " /code-review high " } });
-    expect(buildInitialMessage(node, [pred({ output: { text: "x" } })], { mode: "marker", token: "T" })).toBe("/code-review high");
+    const preds = [pred({ output: { text: "x" } })];
+    expect(buildInitialMessage(node, preds, { mode: "auto", graceSec: 5 })).toBe("/code-review high");
+    expect(buildInitialMessage(node, preds, { mode: "marker", token: "T" })).toBe(`/code-review high\n\n${markerInstruction("T")}`);
   });
 
   it("fresh prompts get a truncated context block and marker instruction", () => {
@@ -189,6 +192,16 @@ describe("transcript", () => {
     expect(u.costUsd).toBeCloseTo(2 * costFromUsage("claude-opus-5-5", usage), 10);
   });
 
+  it("excludes messages already in a resumed transcript", () => {
+    const line = (id: string) => ({ type: "assistant", message: { id, model: "claude-opus-5-5", content: [{ type: "text", text: id }], usage } });
+    const file = write([line("m1"), line("m2")]);
+    const baseline = assistantMessageIds(file);
+    expect([...baseline]).toEqual(["m1", "m2"]);
+    fs.appendFileSync(file, JSON.stringify(line("m3")) + "\n");
+    expect(usageFromTranscript(file, baseline)).toMatchObject({ inputTokens: 10, outputTokens: 20 });
+    expect(usageFromTranscript(file)).toMatchObject({ inputTokens: 30 });
+  });
+
   it("handles missing files and waits for the assistant line", async () => {
     expect(lastAssistantText("/nope.jsonl")).toBeNull();
     expect(usageFromTranscript("/nope.jsonl").costUsd).toBe(0);
@@ -206,6 +219,7 @@ describe("CompletionController", () => {
       succeed: () => calls.push("succeed"),
       idle: () => calls.push("idle"),
       resume: () => calls.push("resume"),
+      holdReleased: () => calls.push("holdReleased"),
     });
     return { c, calls };
   }
@@ -263,5 +277,14 @@ describe("CompletionController", () => {
     c.dispose();
     c.onUserInput();
     expect(calls).toHaveLength(3);
+  });
+
+  it("hold applies to the current turn only: the next turn is released back to the policy", () => {
+    const { c, calls } = make({ mode: "auto", graceSec: 0 });
+    c.setHold(true);
+    c.onStop("held turn");
+    c.onUserInput();
+    c.onStop("next turn");
+    expect(calls).toEqual(["idle", "holdReleased", "resume", "succeed"]);
   });
 });

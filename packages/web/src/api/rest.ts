@@ -36,7 +36,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = { Accept: "application/json" };
   const token = devToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  // The server requires JSON on cookie-authenticated writes (cross-origin requests then need a preflight).
+  if (method !== "GET") headers["Content-Type"] = "application/json";
   const res = await fetch(path, {
     method,
     headers,
@@ -115,6 +116,9 @@ export const api = {
   async cleanupRun(runId: string): Promise<void> {
     await request("POST", API.cleanupRun(runId), {});
   },
+  async resumeRun(runId: string): Promise<void> {
+    await request("POST", API.resumeRun(runId), {});
+  },
   pending(): Promise<PendingResponse> {
     return request("GET", API.pending);
   },
@@ -138,6 +142,9 @@ export const api = {
   },
   reopen(nodeRunId: string): Promise<ReopenResponse> {
     return request("POST", API.reopen(nodeRunId), {});
+  },
+  async closePty(ptyId: string): Promise<void> {
+    await request("DELETE", API.pty(ptyId));
   },
   commands(): Promise<ListCommandsResponse> {
     return request("GET", API.commands);

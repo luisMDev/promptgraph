@@ -89,6 +89,29 @@ describe("validateGraph", () => {
     expect(loop.errors).toEqual([]);
   });
 
+  it("phrases the cycle fix for the phase: loops exist only in phase 2", () => {
+    const nodes: N[] = [{ id: "a", type: "prompt" }, { id: "b", type: "shell" }];
+    const edges = [{ source: "a", target: "b" }, { source: "b", target: "a" }];
+    const cycle = (phase: 1 | 2) => validateGraph(g(nodes, edges), { phase }).errors.find((e) => e.code === "cycle")!.message;
+    expect(cycle(2)).toContain("Mark a back-edge as a loop");
+    expect(cycle(1)).toContain("Remove one of these edges");
+  });
+
+  it("rejects node types the engine does not support yet", () => {
+    const graph = g([{ id: "a", type: "prompt" }, { id: "p", type: "approval" }], [{ source: "a", target: "p" }]);
+    expect(validateGraph(graph).errors).toEqual([]);
+    const r = validateGraph(graph, { supportedNodeTypes: ["prompt", "command", "shell", "commit"] });
+    expect(r.errors).toEqual([expect.objectContaining({ code: "unsupported_node_type", nodeId: "p" })]);
+  });
+
+  it("rejects an empty marker token on nodes and in the graph defaults", () => {
+    const marker = { mode: "marker", token: " " };
+    const node = validateGraph(g([{ id: "a", type: "prompt", config: { prompt: "x", completion: marker } }]));
+    expect(node.errors).toEqual([expect.objectContaining({ code: "invalid_config", nodeId: "a" })]);
+    const defaults = validateGraph(g([{ id: "a", type: "command", config: { command: "/x" } }], [], { defaults: { completion: marker } }));
+    expect(codes(defaults.errors)).toEqual(["invalid_config"]);
+  });
+
   it("rejects loop edges that do not point to an ancestor", () => {
     const r = validateGraph(
       g([{ id: "a", type: "prompt" }, { id: "b", type: "shell" }, { id: "c", type: "shell" }], [
