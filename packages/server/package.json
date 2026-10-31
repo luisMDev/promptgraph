@@ -1,0 +1,34 @@
+{
+  "name": "@promptgraph/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "promptgraph": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli/index.js",
+    "dev": "tsx watch --conditions=source src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. --passWithNoTests packages/server/"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@promptgraph/shared": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "hono": "^4.13.14",
+    "nanoid": "^6.0.2",
+    "node-pty": "^1.1.0",
+    "open": "^11.0.4",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "7.0.2"
+  }
+}

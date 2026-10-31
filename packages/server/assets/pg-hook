@@ -1,0 +1,8 @@
+#!/bin/sh
+# Forwards a Claude Code hook payload (stdin JSON) to the promptgraph server. Never blocks Claude.
+# Usage (from hooks.json): pg-hook <session-start|activity|notification|stop>
+# The Authorization header is read from $PG_HOOK_HEADER_FILE (0600) so the token never appears in argv.
+curl -s -m 2 -X POST \
+  -H @"$PG_HOOK_HEADER_FILE" -H "Content-Type: application/json" \
+  --data-binary @- "http://127.0.0.1:$PG_PORT/hooks/$PG_NODE_RUN_ID/$1" >/dev/null 2>&1
+exit 0
