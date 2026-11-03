@@ -196,7 +196,9 @@ Errors are `EngineError(code)`: `not_found`→404, `validation_failed`→422 (de
 (§9.3), `createLane(run, planned, parentHead)`; if the lane is new and `settings.workspaceSetup` is set, run
 `runWorkspaceSetup` (`laneSetup` running → succeeded/failed; failure fails the node). Then status `running`,
 `startedAt`, build `RunnerContext` (predecessors = current node runs of direct predecessors, canvas order;
-`previousAttempt`), `runners[node.type].start(ctx)`; missing runner → node failed "Node type not supported yet".
+`previousAttempt`), snapshot the worktree (§9.7, `snapshotStart`), `runners[node.type].start(ctx)`; missing runner
+→ node failed "Node type not supported yet". When the runner settles, the end snapshot (`snapshotEnd`) is taken
+before the scheduler releases the slot, so the next node of the lane cannot change the worktree first.
 Before `pr` and `merge` nodes the engine checkpoints dirty lanes (§18 Q1; merge does it via LaneManager.merge).
 
 **Finishing a node** (execution `result` settles):
@@ -399,6 +401,8 @@ running it may `ctx.update({status: "running" | "idle" | "waiting_input" | "wait
   `CompletionController.onStop(text)`.
 - Completion (`CompletionController`, §7.4): auto grace (user input cancels), manual → idle, marker → token
   check, hold forces manual for the current turn (the next turn releases it: `holdReleased` → `hold:false`).
+  `grace(ms | null)` reports the auto countdown starting / stopping → `graceUntil` (epoch ms, null when stopped);
+  the engine also clears `graceUntil` when the node leaves `running`.
   `done()` from idle → success. Command nodes in marker mode get the marker instruction after the command.
 - Ending (success/done/fail/cancel) → `"/exit\r"` only when Claude sits at its input prompt (a Stop and no
   activity/input/dialog since); otherwise SIGTERM directly, since Enter in a permission or trust dialog
@@ -592,6 +596,8 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
 | POST `/api/graphs/:id/runs` | `{}` | `RunDetail` |
 | GET `/api/runs?graph=&limit=` | `ListRunsQuery` | `ListRunsResponse` |
 | GET `/api/runs/:id` | — | `RunDetail` |
+| GET `/api/runs/:id/report` | — | `RunReportResponse` (§13.1) |
+| GET `/api/runs/:id/lanes/:laneId/diff` | — | `DiffResponse` (lane vs base; after cleanup from its last snapshot) |
 | POST `/api/runs/:id/cancel` · `/cleanup` · `/resume` | — | `OkResponse` |
 | GET `/api/pending` | — | `PendingResponse` (waiting_approval node runs) |
 | POST `/api/node-runs/:id/done` · `/retry` · `/skip` | — | `NodeRunResponse` |
@@ -599,7 +605,7 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
 | POST `/api/node-runs/:id/hold` | `HoldNodeRequest` | `NodeRunResponse` |
 | GET `/api/node-runs/:id/approval` | — | `ApprovalInfoResponse` |
 | POST `/api/node-runs/:id/approval` | `ApprovalRequest` | `NodeRunResponse` |
-| GET `/api/node-runs/:id/diff` | — | `DiffResponse` |
+| GET `/api/node-runs/:id/diff?scope=lane\|node` | `DiffQuery` | `DiffResponse`; `node`: 409 without a snapshot |
 | POST `/api/node-runs/:id/reopen` | — | `ReopenResponse` |
 | DELETE `/api/ptys/:ptyId` | — | `OkResponse` (ends a live reopened session; 404 otherwise) |
 | GET `/api/commands` | — | `ListCommandsResponse` |

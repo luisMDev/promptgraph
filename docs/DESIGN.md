@@ -270,6 +270,8 @@ type CompletionPolicy =
 
 A node in the canvas can be toggled to **Hold** at any time while running: it behaves as `manual` for the current turn.
 
+The auto grace period is visible (risk R3): while it runs, the node run carries `graceUntil` (epoch ms when it succeeds) and the UI shows *"Auto-continuing in 5s… [Hold]"* on the node card, in the inspector and in the terminal drawer's tab bar. Hold during the countdown cancels it and the node goes `idle`. `graceUntil` is cleared when the countdown stops (typing, new activity, Hold) and whenever the node leaves `running`.
+
 On success the server sends `/exit` to the PTY, waits 3s, then kills it. The session stays on disk. `/exit` is only typed while Claude sits at its input prompt; when it may be showing a permission or trust dialog (where Enter accepts the default "Yes"), the process gets SIGTERM instead.
 
 ### 7.5 Context between nodes
@@ -405,6 +407,23 @@ git merge --no-ff <other-lane-branch>        # for each other input, in canvas o
 
 At run end, per `keepWorktrees`: `git worktree remove --force` + delete local branches that were not pushed and hold no commits of their own (or were merged). Pushed branches, and unpushed branches carrying commits (e.g. from a commit node), are kept so no committed work is lost. A **"Clean up"** action in run history does the same on demand. `git worktree prune` runs at server start.
 
+### 9.7 Per-node snapshots
+
+To show what each node changed (not only the lane against the base branch), the engine snapshots the lane's worktree right before a node's runner starts (after lane creation, workspace setup and the pr/merge checkpoints) and right after it finishes (before the next node of the lane can start):
+
+```
+cp <worktree index> $TMP/index                    # keeps the stat cache: only changed files are hashed
+GIT_INDEX_FILE=$TMP/index git add -A && git write-tree
+git commit-tree <tree> -p HEAD -m "pg: snapshot <start|end> of <label>"   # fixed identity "promptgraph"
+git update-ref refs/promptgraph/<run-id>/<node-run-id>/<start|end> <sha>
+```
+
+- HEAD, the lane's index and its branch never change; the snapshots are not checkpoints and never appear in a lane's history. The shas are stored on the node run (`snapshotStart`, `snapshotEnd`).
+- The node's diff is `snapshotStart..snapshotEnd` (while it runs: `snapshotStart` → the live worktree). It is computed in the main checkout, so it still works after cleanup.
+- A snapshot's parent is the lane's HEAD, so the hidden refs also keep the lane's commits reachable after cleanup deletes the branch: the run report (§13.1) shows a lane's changes and commits from its last end snapshot.
+- Snapshots are best effort: a failure is logged (`snapshot.failed`) and only loses that node's diff.
+- At server start, the refs of runs that finished more than 30 days ago (or are unknown) are deleted. They live under `refs/promptgraph/`, so `git branch` does not list them and a normal `git push` does not send them.
+
 ---
 
 ## 10. Approval gates
@@ -467,7 +486,9 @@ Terminal logs: `~/.promptgraph/runs/<run-id>/<node-run-id>.log`.
 | POST | `/api/runs/:id/cancel` | Cancel |
 | POST | `/api/node-runs/:id/{done,fail,retry,skip,hold}` | Manual controls |
 | POST | `/api/node-runs/:id/approval` | `{ approved, comment, title?, body? }` |
-| GET | `/api/node-runs/:id/diff` | Lane diff vs base |
+| GET | `/api/node-runs/:id/diff?scope=lane\|node` | Lane diff vs base (default), or what the node changed (§9.7) |
+| GET | `/api/runs/:id/report` | Run report (§13.1) |
+| GET | `/api/runs/:id/lanes/:laneId/diff` | Lane diff vs base, also after cleanup (from snapshots) |
 | POST | `/api/node-runs/:id/reopen` | Spawn `claude --resume` PTY for a finished node |
 | GET | `/api/commands` | Available slash commands/skills (for the `command` picker) |
 | POST | `/hooks/:nodeRunId/:event` | Hook receiver (token-protected) |
@@ -498,7 +519,17 @@ All routes require the token (`Authorization: Bearer` or the `t` cookie set from
 - **Inspector** (right): config of the selected node; in run mode, its NodeRun details (output, session id, branch, timings, error) and controls (Done, Fail, Hold, Retry, Skip).
 - **Terminal drawer** (bottom, resizable): opens on node click. Tabs, one per open terminal. Live PTY for running nodes, replayed log for finished ones with "Reopen session".
 - **Approval dialog**: diff viewer + approve/reject.
+- **Diff dialog**: what a node changed (§9.7), with a switch to its whole lane; opened from the inspector and the report.
 - **Validation**: invalid nodes/edges are outlined red with a tooltip; Run is disabled while there are errors.
+
+### 13.1 Run report
+
+A page that answers "what happened while I was away". It replaces the editor view until closed; it opens from the header (**Report**), from each run in the history, and by itself when the run shown on the canvas finishes. It follows the run live.
+
+- **Summary**: result, duration, total time spent waiting for the user, estimated cost, step counts, the run error.
+- **Where it stopped or waited**: unhandled failures, interruptions, cancellations and steps waiting for the user now; then waits of at least a minute, longest first. Waiting time is the time a node run spent in `idle`, `waiting_input` or `waiting_approval`, from the `node.status` events.
+- **Steps**: one row per (node, iteration), latest attempt: result, attempts, duration, waited, what it changed (opens its diff), cost, and its output (commit, PR, approval, branch taken, error).
+- **Pull requests** and **lanes**: per lane its branch, state, changes and commits since the base branch (checkpoints marked), and its diff.
 
 ---
 
@@ -603,7 +634,7 @@ In the test-fix loop the `shell → condition` edge is `always` (the editor's de
 | A6 | `--session-id` with a pre-generated UUID works in interactive mode and `--resume <id>` works afterwards | Spike |
 | R1 | Usage limits with several parallel sessions | `maxParallelClaude` default 3; visible in terminal |
 | R2 | `node_modules` & build caches per worktree are slow/large | `workspaceSetup` with pnpm (content-addressed store); keep lane count low |
-| R3 | Auto-completion advances when Claude actually asked a question | Default `graceSec` + typing cancels; `marker` mode for critical nodes; Hold toggle |
+| R3 | Auto-completion advances when Claude actually asked a question | Default `graceSec` + typing cancels; visible countdown with Hold (§7.4); `marker` mode for critical nodes; Hold toggle |
 | R4 | Claude Code TUI changes between versions | We depend only on CLI flags and hook payloads, never on parsing the TUI |
 | R5 | Alternative process backends | Keep `ClaudeRunner` behind an interface; candidates: tmux sessions (survive server restarts, `tmux attach` from a real terminal) or Claude Code's background sessions (`claude --bg` + `claude attach`, present in 2.1.x) |
 

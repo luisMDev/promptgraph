@@ -116,8 +116,9 @@ Each Claude step has a **context** mode:
 
 Claude Code reports the end of each turn. The **completion policy** decides what that means:
 
-- **auto** (default, 5 s grace): the step succeeds a few seconds after Claude's turn ends. If you type
-  in the terminal during that time, it does not: you are steering.
+- **auto** (default, 5 s grace): the step succeeds a few seconds after Claude's turn ends. A countdown
+  ("Auto-continuing in 5s… **Hold**") shows on the step, in the inspector and above its terminal. If you
+  type in the terminal or click **Hold** during that time, it does not: you are steering.
 - **manual**: the step turns blue ("Idle — awaiting Done") until you click **Done** or **Fail**.
 - **marker**: the step succeeds only when Claude's last message ends with a token (`<<PG_DONE>>`).
 
@@ -163,6 +164,18 @@ to an earlier step with a maximum number of iterations, and either fails or cont
 is reached. The canvas shows each loop's counter and lets you look at every iteration of a step.
 
 ![A test-fix loop on the canvas](docs/screenshots/m6-run-loop.png)
+
+### Run report and per-step diffs
+
+**Report** (in the header and in each run of the history) opens a summary of the run: the result of each
+step, how long it took and how long it waited for you, what it changed, its cost and output, the commits
+and changes of each lane, the PR links, and where the run stopped or waited. It opens by itself when the
+run you are watching finishes.
+
+Each step's changes are recorded separately: promptgraph snapshots the worktree when a step starts and
+when it finishes (hidden refs under `refs/promptgraph/`, never on your branches; kept 30 days). **View
+diff** in the inspector or the report shows what that step changed, with a switch to the whole lane.
+Both keep working after the worktrees are cleaned up.
 
 ### Failures and recovery
 
