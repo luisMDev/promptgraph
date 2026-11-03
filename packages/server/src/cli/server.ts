@@ -5,6 +5,8 @@ import { createAdaptorServer } from "@hono/node-server";
 import { createAppContext, type AppContext } from "../app/context.js";
 import { InstanceLock } from "../config/instance-lock.js";
 import { getPaths } from "../config/paths.js";
+import { removeServerInfo, writeServerInfo } from "../config/server-info.js";
+import { VERSION } from "../config/version.js";
 import { createHttpApp } from "../http/app.js";
 import { WsHub } from "../ws/hub.js";
 
@@ -32,12 +34,13 @@ const HOST = "127.0.0.1";
 /**
  * InstanceLock (one server per repository) → createAppContext → GraphStore.ensureDir → Hono app on
  * @hono/node-server bound to 127.0.0.1:<port> (port 0 = random, for tests) → Engine.recover →
- * Notifier.start → WsHub.attach. The port is bound before recovery so a start that fails on the port
+ * Notifier.start → WsHub.attach → server-info record (§19.1). The port is bound before recovery so a start that fails on the port
  * never touches the state DB.
  */
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
   const token = opts.token ?? randomBytes(24).toString("base64url");
-  const lock = InstanceLock.acquire(getPaths(opts.env ?? process.env), opts.repoPath);
+  const paths = getPaths(opts.env ?? process.env);
+  const lock = InstanceLock.acquire(paths, opts.repoPath);
   let ctx: AppContext;
   try {
     ctx = await createAppContext({ repoPath: opts.repoPath, token, warnings: opts.warnings, env: opts.env });
@@ -70,9 +73,20 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const stopWatch = ctx.graphs.watch();
   const hub = new WsHub(ctx);
   hub.attach(server);
+  // §19.1: lets local clients (promptgraph mcp) find this server and its token.
+  writeServerInfo(paths, {
+    version: 1,
+    pid: process.pid,
+    repoPath: opts.repoPath,
+    port: ctx.port,
+    token,
+    serverVersion: VERSION,
+    startedAt: Date.now(),
+  });
 
   let closing: Promise<void> | null = null;
   const close = async () => {
+    removeServerInfo(paths, opts.repoPath);
     await ctx.engine.shutdown();
     stopWatch();
     stopNotifier();

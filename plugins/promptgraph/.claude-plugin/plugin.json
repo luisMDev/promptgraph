@@ -1,0 +1,7 @@
+{
+  "name": "promptgraph",
+  "version": "0.1.0",
+  "description": "Design, run and supervise promptgraph graphs (Claude Code prompts, slash commands, shell, commit, PR, approval, merge and condition steps) from Claude Code.",
+  "author": { "name": "LuismDev" },
+  "keywords": ["promptgraph", "workflow", "orchestration", "worktrees", "mcp"]
+}

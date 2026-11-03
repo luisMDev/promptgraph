@@ -15,6 +15,8 @@ vitest.config.ts        one root config; tests in packages/*/test/**/*.test.ts(x
 packages/shared         @promptgraph/shared — zod schemas, types, validator, topology, pricing, WS protocol
 packages/server         @promptgraph/server — bin `promptgraph` (dist/cli/index.js), assets/pg-hook
 packages/web            @promptgraph/web — React 19 + Vite + Tailwind v4 (built to packages/web/dist)
+plugins/promptgraph     Claude Code plugin: .mcp.json (runs `promptgraph mcp`) + skills (DESIGN §19.4)
+.claude-plugin          marketplace.json listing plugins/promptgraph
 ```
 
 All dependencies for M1–M6 are installed. **Do not run `pnpm add`**; if something is truly missing, say so.
@@ -22,7 +24,7 @@ All dependencies for M1–M6 are installed. **Do not run `pnpm add`**; if someth
 | Package | Runtime deps | Dev deps |
 |---|---|---|
 | shared | zod 4 | typescript 7, @types/node |
-| server | hono, @hono/node-server, ws, node-pty, better-sqlite3, zod, nanoid, open | tsx, @types/ws, @types/better-sqlite3, @types/node |
+| server | hono, @hono/node-server, ws, node-pty, better-sqlite3, zod, nanoid, open, @modelcontextprotocol/sdk (`promptgraph mcp`, §19) | tsx, @types/ws, @types/better-sqlite3, @types/node |
 | web | react 19, react-dom, @xyflow/react, @xterm/xterm, @xterm/addon-fit, @xterm/addon-web-links, zustand, diff2html | vite 8, @vitejs/plugin-react, tailwindcss 4, @tailwindcss/vite, jsdom, @testing-library/react |
 | root | — | vitest 5, typescript 7 |
 
@@ -47,6 +49,7 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 | `condition.ts` | `regexError(pattern, flags)` → message or null (validator + ConditionRunner) |
 | `api.ts` | REST request/response schemas (§7 below), `AppSettingsSchema`, `API` path builders, `TOKEN_COOKIE` |
 | `ws.ts` | `ServerMessageSchema`, `ClientMessageSchema` (discriminated unions), `encodeBase64`/`decodeBase64` |
+| `server-info.ts` | `ServerInfoSchema` → `ServerInfo` (discovery record of a running server, DESIGN §19.1) |
 | `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
@@ -141,7 +144,10 @@ Semantics fixed here (do not re-implement elsewhere):
 | `engine/activation.ts` | `ActivationTracker`, `ActivationDelta`, `LoopIteration` |
 | `engine/scheduler.ts` | `Scheduler`, `SchedulerItem` |
 | `engine/recovery.ts` | `markInterrupted(store, scope: InterruptScope, now?)`, `InterruptScope {repoPath, runIds?}`, `INTERRUPTED_RUN_ERROR`, `INTERRUPTED_NODE_ERROR` |
-| `config/instance-lock.ts` | `InstanceLock {acquire(paths, repoPath), release}`: one live server per repository (`<PG_HOME>/locks/<hash>.pid`) |
+| `config/instance-lock.ts` | `InstanceLock {acquire(paths, repoPath), release}`: one live server per repository (`<PG_HOME>/locks/<repoKey>.pid`) |
+| `config/repo-key.ts` | `repoKey(repoPath)`: per-repository file key (lock, server-info record, background log) |
+| `util/process.ts` | `isProcessAlive(pid)` |
+| `config/server-info.ts` | `serverInfoPath`, `writeServerInfo`, `removeServerInfo(paths, repoPath)` (only this process's record), `readServerInfo` (null when missing or the pid is dead), `backgroundServerLogPath`: the discovery record `<PG_HOME>/servers/<repoKey>.json` (`ServerInfo`, DESIGN §19.1) |
 | `engine/engine.ts` | `Engine`, `EngineDeps`, `EngineError` |
 | `notify/notifier.ts` | `Notifier`, `detectNotifyPlatform`, `sendDesktopNotification` |
 | `commands/discover.ts` | `listSlashCommands` |
@@ -151,10 +157,17 @@ Semantics fixed here (do not re-implement elsewhere):
 | `http/routes/{graphs,runs,node-runs,misc,hooks}.ts` | `register*Routes(app, ctx)` |
 | `http/static.ts` | `registerStatic` |
 | `ws/hub.ts` | `WsHub {attach, close}` |
-| `cli/args.ts` | `parseCliArgs`, `CliOptions`, `USAGE` |
+| `cli/args.ts` | `parseCliArgs`, `CliOptions` (`command: "serve" \| "mcp"`), `USAGE` |
 | `cli/prereqs.ts` | `checkPrereqs` (git, `claudeBin`, `ghBin`, curl `--version`) |
 | `cli/server.ts` | `startServer` → `RunningServer {ctx, url, port, token, close}` |
-| `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it) |
+| `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it); `command: "mcp"` lazily imports `mcp/server.ts` |
+| `mcp/client.ts` | `PromptgraphClient {baseUrl, get, post, put, delete}` (Bearer token), `ApiRequestError` |
+| `mcp/connection.ts` | `McpEnvironment`, `Connection {info, client}`, `resolveRepo` (cached per directory), `findServer` (re-reads the record), `connect` (throws when no server runs), `startBackgroundServer` (detached `promptgraph <repo> --no-open --port 0`) |
+| `mcp/draft.ts` | `normalizeGraphDraft(input, {layout})` (edge ids, GraphSchema, layered auto layout over `buildTopology`/`topologicalOrder`), `GraphDraftError`, `LAYOUT_DX` |
+| `mcp/format.ts` | compact views for tools: `compactRunDetail` (`attention` = nodeRunIds), `compactRunSummary`, `compactNodeRun`, `compactReport`, `compactDiff`, `latestAttempts`, `needsAttention` |
+| `mcp/reference.ts` | `GRAPH_REFERENCE` (markdown), `graphJsonSchema()` |
+| `mcp/tools.ts` | `registerTools(server, {mcpEnv, openUrl, pollMs?})` (tool list in DESIGN §19.3) |
+| `mcp/server.ts` | `createMcpServer(deps)`, `runMcpStdio()` |
 
 
 ## 5. Event bus (`events/bus.ts`)

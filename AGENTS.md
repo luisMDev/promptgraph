@@ -25,6 +25,9 @@ packages/
   shared/   # zod schemas, TS types, WebSocket protocol — imported by server and web
   server/   # CLI entry (bin: promptgraph), engine, runners, workspaces, store, HTTP/WS
   web/      # React app; built assets are served by the server
+plugins/
+  promptgraph/  # Claude Code plugin: .mcp.json (runs `promptgraph mcp`, packages/server/src/mcp) + skills
+.claude-plugin/marketplace.json
 docs/
   DESIGN.md
 ```

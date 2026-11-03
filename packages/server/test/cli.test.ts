@@ -11,12 +11,14 @@ import { createTempRepo, FAKE_CLAUDE, FAKE_GH, fakeClaudeEnv, tempDir } from "./
 
 describe("parseCliArgs", () => {
   it("applies defaults", () => {
-    expect(parseCliArgs([], "/work")).toEqual({ repoDir: "/work", port: 4777, open: true, help: false, version: false });
+    expect(parseCliArgs([], "/work")).toEqual({ command: "serve", repoDir: "/work", port: 4777, open: true, help: false, version: false });
   });
 
   it("parses repo dir, port and flags", () => {
     expect(parseCliArgs(["../repo", "--port", "5000", "--no-open"], "/work/x")).toMatchObject({ repoDir: "/work/repo", port: 5000, open: false });
     expect(parseCliArgs(["--port=0", "-h", "--version"], "/w")).toMatchObject({ port: 0, help: true, version: true });
+    expect(parseCliArgs(["mcp", "--help"], "/w")).toMatchObject({ command: "mcp", help: true });
+    expect(parseCliArgs(["./mcp"], "/w")).toMatchObject({ command: "serve", repoDir: "/w/mcp" });
   });
 
   it("rejects bad input", () => {
@@ -24,6 +26,7 @@ describe("parseCliArgs", () => {
     expect(() => parseCliArgs(["--port", "99999"], "/w")).toThrow("Invalid port");
     expect(() => parseCliArgs(["--bogus"], "/w")).toThrow("Unknown option");
     expect(() => parseCliArgs(["a", "b"], "/w")).toThrow("Unexpected argument");
+    expect(() => parseCliArgs(["mcp", "x"], "/w")).toThrow("Unexpected argument");
   });
 });
 

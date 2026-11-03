@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "promptgraph": {
+      "command": "${PROMPTGRAPH_BIN:-promptgraph}",
+      "args": ["mcp"]
+    }
+  }
+}
