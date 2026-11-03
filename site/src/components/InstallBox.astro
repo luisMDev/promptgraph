@@ -1,0 +1,136 @@
+---
+// Tabbed command box with a copy button. Each tab is a ready-to-paste shell snippet.
+interface Props {
+  tabs: { label: string; command: string }[];
+}
+
+const { tabs } = Astro.props;
+---
+
+<div class="install" data-install>
+  <div class="tabs" role="tablist" aria-label="Install commands">
+    {
+      tabs.map((t, i) => (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={i === 0 ? 'true' : 'false'}
+          data-tab={i}
+        >
+          {t.label}
+        </button>
+      ))
+    }
+  </div>
+  <div class="box">
+    {
+      tabs.map((t, i) => (
+        <pre data-panel={i} hidden={i !== 0}><code>{t.command.split('\n').map((line) => (
+          <span class="line"><span class="prompt" aria-hidden="true">$</span>{line}</span>
+        ))}</code></pre>
+      ))
+    }
+    <button type="button" class="copy" data-copy>Copy</button>
+  </div>
+</div>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('[data-install]')) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-tab]')];
+    const panels = [...root.querySelectorAll<HTMLElement>('[data-panel]')];
+    const copy = root.querySelector<HTMLButtonElement>('[data-copy]')!;
+
+    for (const tab of tabs) {
+      tab.addEventListener('click', () => {
+        for (const t of tabs) t.setAttribute('aria-selected', String(t === tab));
+        for (const p of panels) p.hidden = p.dataset.panel !== tab.dataset.tab;
+      });
+    }
+
+    copy.addEventListener('click', async () => {
+      const panel = panels.find((p) => !p.hidden);
+      const text = [...(panel?.querySelectorAll('.line') ?? [])]
+        .map((l) => l.textContent?.replace(/^\$/, '') ?? '')
+        .join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        copy.textContent = 'Copied';
+      } catch {
+        copy.textContent = 'Press Ctrl+C';
+      }
+      setTimeout(() => (copy.textContent = 'Copy'), 1600);
+    });
+  }
+</script>
+
+<style>
+  .install {
+    max-width: 600px;
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .tabs button {
+    font: inherit;
+    font-size: 13px;
+    color: var(--muted);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 3px 10px;
+    cursor: pointer;
+  }
+  .tabs button[aria-selected='true'] {
+    color: var(--ink);
+    background: var(--surface-2);
+    border-color: var(--line-2);
+  }
+  .box {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: rgb(20 20 22 / 0.85);
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    backdrop-filter: blur(6px);
+  }
+  pre {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--ink);
+  }
+  pre[hidden] {
+    display: none;
+  }
+  .line {
+    display: block;
+    white-space: pre;
+  }
+  .prompt {
+    color: var(--muted);
+    margin-right: 10px;
+    user-select: none;
+  }
+  .copy {
+    align-self: flex-start;
+    margin: 9px 9px 9px 0;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .copy:hover {
+    border-color: #4a4a50;
+  }
+</style>

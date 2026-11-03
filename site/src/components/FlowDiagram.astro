@@ -2,9 +2,9 @@
 // Decorative SVG of a fan-out run: one planning step, three parallel lanes, a merge,
 // an approval and a pull request. Node colours cycle through run states with CSS.
 const lanes = [
-  { y: 40, label: 'Implement API', lane: 'main', color: '#2563eb', delay: 0 },
-  { y: 130, label: 'Write tests', lane: 'l2', color: '#db2777', delay: 0.4 },
-  { y: 220, label: 'Update docs', lane: 'l3', color: '#16a34a', delay: 0.8 },
+  { y: 40, label: 'Implement API', lane: 'main', color: '#60a5fa', delay: 0 },
+  { y: 130, label: 'Write tests', lane: 'l2', color: '#f472b6', delay: 0.4 },
+  { y: 220, label: 'Update docs', lane: 'l3', color: '#4ade80', delay: 0.8 },
 ];
 ---
 
@@ -60,14 +60,14 @@ const lanes = [
       <text x="394" y="162" class="s">3 lanes</text>
     </g>
 
-    <path d="M460 150 L480 150" stroke="#b9b0a5" stroke-width="1.6" stroke-dasharray="3 3" />
+    <path d="M460 150 L480 150" stroke="#4a4a52" stroke-width="1.6" stroke-dasharray="3 3" />
 
     <g class="node gate">
       <rect x="480" y="106" width="72" height="36" rx="9" />
       <text x="492" y="128" class="t">Approve</text>
       <rect x="480" y="160" width="72" height="36" rx="9" />
       <text x="492" y="182" class="t">Open PR</text>
-      <path d="M516 142 L516 160" stroke="#b9b0a5" stroke-width="1.6" />
+      <path d="M516 142 L516 160" stroke="#4a4a52" stroke-width="1.6" />
     </g>
   </svg>
   <figcaption>Independent steps run at once, each in its own worktree.</figcaption>
@@ -76,11 +76,12 @@ const lanes = [
 <style>
   .flow {
     margin: 0;
-    padding: 24px;
-    background: var(--surface);
+    padding: 28px 24px 20px;
+    background:
+      radial-gradient(60% 80% at 50% 0%, rgb(255 255 255 / 0.04), transparent 70%),
+      var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    box-shadow: 0 20px 50px -24px rgb(60 40 20 / 0.25);
   }
   svg {
     width: 100%;
@@ -89,34 +90,34 @@ const lanes = [
     font-family: var(--font);
   }
   figcaption {
-    margin-top: 12px;
-    font-size: 14px;
+    margin-top: 14px;
+    font-family: var(--mono);
+    font-size: 12px;
     color: var(--muted);
     text-align: center;
   }
   .node rect {
-    fill: #fff;
-    stroke: #d9d1c7;
+    fill: #17171a;
+    stroke: #34343a;
     stroke-width: 1.2;
   }
   .t {
     font-size: 12px;
-    font-weight: 650;
-    fill: #0a0a0a;
+    font-weight: 550;
+    fill: #f4f4f5;
   }
   .s {
     font-size: 9.5px;
-    fill: #6b665f;
+    fill: #8b8b94;
+    font-family: var(--mono);
   }
   .done rect {
-    stroke: #16a34a;
-    stroke-width: 1.8;
-    fill: #f0fdf4;
+    stroke: #4ade80;
+    fill: rgb(74 222 128 / 0.08);
   }
   .running rect {
     stroke: var(--c);
-    stroke-width: 1.8;
-    fill: color-mix(in srgb, var(--c) 6%, #fff);
+    fill: color-mix(in srgb, var(--c) 10%, #141416);
   }
   .running .status {
     fill: var(--c);
