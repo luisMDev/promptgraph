@@ -317,6 +317,8 @@ export const API = {
   /** DELETE: ends a "Reopen session" PTY (the only PTYs not owned by a run). */
   pty: (id: string) => `/api/ptys/${encodeURIComponent(id)}`,
   commands: "/api/commands",
+  claudeSetup: "/api/claude-setup",
+  claudeCheck: "/api/claude-setup/check",
   hook: (nodeRunId: string, event: string) => `/hooks/${encodeURIComponent(nodeRunId)}/${event}`,
   ws: "/ws",
 } as const;

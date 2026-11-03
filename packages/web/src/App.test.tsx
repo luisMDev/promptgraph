@@ -112,4 +112,55 @@ describe("App (smoke)", () => {
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");
     expect(panel?.hasAttribute("inert")).toBe(false);
   });
+  it("collapses the inspector from its edge rail and brings it back from the canvas", async () => {
+    const { useUiStore } = await import("./store/ui-store");
+    act(() => useUiStore.getState().setInspectorOpen(true));
+    const user = userEvent.setup();
+    const { App } = await import("./App");
+    const { container } = render(<App />);
+    await screen.findByText("Implement");
+
+    const inspector = container.querySelector('[data-slot="sidebar"][data-side="right"]');
+    expect(inspector?.getAttribute("data-state")).toBe("expanded");
+    expect(screen.queryByRole("button", { name: "Expand inspector" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Collapse or resize inspector" }));
+    expect(inspector?.getAttribute("data-state")).toBe("collapsed");
+    // The left sidebar is independent of the inspector.
+    expect(container.querySelector('[data-slot="sidebar"][data-side="left"]')?.getAttribute("data-state")).toBe("expanded");
+
+    await user.click(screen.getByRole("button", { name: "Expand inspector" }));
+    expect(inspector?.getAttribute("data-state")).toBe("expanded");
+  });
+
+  it("resizes a sidebar by dragging its rail without collapsing it", async () => {
+    const { useUiStore, SIDEBAR_WIDTH } = await import("./store/ui-store");
+    act(() => {
+      useUiStore.getState().setSidebarOpen(true);
+      useUiStore.getState().setSidebarWidth(SIDEBAR_WIDTH.default);
+    });
+    const { App } = await import("./App");
+    const { container } = render(<App />);
+    await screen.findByText("Implement");
+
+    const rail = screen.getByRole("button", { name: "Collapse or resize sidebar" });
+    const panel = rail.closest<HTMLElement>('[data-slot="sidebar-container"]')!;
+    panel.getBoundingClientRect = () => ({ width: SIDEBAR_WIDTH.default }) as DOMRect;
+    // jsdom has no pointer capture.
+    rail.setPointerCapture = () => {};
+    rail.hasPointerCapture = () => false;
+
+    fireEvent.pointerDown(rail, { button: 0, clientX: 240, pointerId: 1 });
+    fireEvent.pointerMove(rail, { clientX: 300, pointerId: 1 });
+    expect(document.documentElement.hasAttribute("data-sidebar-resizing")).toBe(true);
+    fireEvent.pointerMove(rail, { clientX: 2000, pointerId: 1 });
+    fireEvent.pointerUp(rail, { clientX: 2000, pointerId: 1 });
+    fireEvent.click(rail);
+
+    expect(useUiStore.getState().sidebarWidth).toBe(SIDEBAR_WIDTH.max);
+    expect(localStorage.getItem("promptgraph.sidebarWidth")).toBe(String(SIDEBAR_WIDTH.max));
+    expect(document.documentElement.hasAttribute("data-sidebar-resizing")).toBe(false);
+    // The click that ends a drag does not toggle the sidebar.
+    expect(container.querySelector('[data-slot="sidebar"][data-side="left"]')?.getAttribute("data-state")).toBe("expanded");
+  });
 });

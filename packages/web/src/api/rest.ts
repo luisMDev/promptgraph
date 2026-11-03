@@ -1,4 +1,6 @@
 import {
+  type ClaudeCheckResponse,
+  type ClaudeSetupResponse,
   API,
   type ApiError,
   type AppSettings,
@@ -178,5 +180,11 @@ export const api = {
   },
   commands(): Promise<ListCommandsResponse> {
     return request("GET", API.commands);
+  },
+  claudeSetup(): Promise<ClaudeSetupResponse> {
+    return request("GET", API.claudeSetup);
+  },
+  checkClaudeSetup(): Promise<ClaudeCheckResponse> {
+    return request("POST", API.claudeCheck, {});
   },
 };

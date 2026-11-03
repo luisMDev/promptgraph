@@ -5,10 +5,13 @@ import { PromptDialog } from "./components/common/PromptDialog";
 import { Toasts } from "./components/common/Toasts";
 import { Icons } from "./components/common/icons";
 import { Button } from "./components/common/ui";
-import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider, SidebarTrigger, useSidebar } from "./components/ui/sidebar";
+import { Button as IconButton } from "./components/ui/button";
+import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider, SidebarRail } from "./components/ui/sidebar";
+import { PanelLeftIcon, PanelRightIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Header } from "./components/header/Header";
+import { RunControls, SaveIndicator } from "./components/header/RunControls";
 import { RunHistory } from "./components/history/RunHistory";
 import { Inspector } from "./components/inspector/Inspector";
 import { Palette } from "./components/palette/Palette";
@@ -30,6 +33,9 @@ export function App() {
   const booted = useAppStore((s) => s.repo !== null);
   const reportRunId = useUiStore((s) => s.reportRunId);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
+  const sidebarWidth = useUiStore((s) => s.sidebarWidth);
+  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const inspectorWidth = useUiStore((s) => s.inspectorWidth);
   useAutoOpenReport();
 
   useEffect(() => {
@@ -47,13 +53,15 @@ export function App() {
   if (bootError) return <FullScreenMessage title="Cannot reach the promptgraph server" detail={bootError} />;
   if (!booted) return <FullScreenMessage title="Loading…" />;
 
-  // The sidebar provider wraps the whole shell: the sidebar collapses itself, and the canvas shows the expand button.
+  // Two shadcn sidebar providers, one per side (a provider drives a single sidebar): the outer one wraps the whole
+  // shell for the left sidebar (palette / runs), the inner one wraps the canvas and the right sidebar (inspector).
+  // Each collapses from its edge rail, which also resizes it when dragged; the canvas shows the expand buttons.
   return (
     <SidebarProvider
       open={sidebarOpen}
       onOpenChange={(open) => useUiStore.getState().setSidebarOpen(open)}
       className="h-full min-h-0 flex-col bg-background text-foreground"
-      style={{ "--sidebar-width": "15rem" } as CSSProperties}
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Header />
       <Banners />
@@ -62,17 +70,21 @@ export function App() {
           always sits below the header and any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
-        <main className="relative flex min-w-0 flex-1 flex-col">
-          <SidebarExpandButton />
-          <div className="min-h-0 flex-1">
-            <CanvasArea />
-          </div>
-          <TerminalDrawer />
-        </main>
-        {/* nokey: Backspace/Delete on the inspector's buttons, checkboxes and tabs must not delete canvas items. */}
-        <aside className="nokey w-80 shrink-0 border-l bg-card/60">
-          <Inspector />
-        </aside>
+        <SidebarProvider
+          open={inspectorOpen}
+          onOpenChange={(open) => useUiStore.getState().setInspectorOpen(open)}
+          className="relative min-h-0 min-w-0 flex-1"
+          style={{ "--sidebar-width": `${inspectorWidth}px` } as CSSProperties}
+        >
+          <main className="relative flex min-w-0 flex-1 flex-col">
+            <CanvasOverlay />
+            <div className="min-h-0 flex-1">
+              <CanvasArea />
+            </div>
+            <TerminalDrawer />
+          </main>
+          <RightSidebar />
+        </SidebarProvider>
       </div>
       <ApprovalGate />
       <DiffGate />
@@ -101,23 +113,64 @@ function DiffGate() {
   );
 }
 
-/** The sidebar trigger with a tooltip; aria-label names the action (collapse inside the sidebar, expand outside). */
-function SidebarToggle({ label, className }: { label: string; className?: string }) {
+/**
+ * A sidebar toggle with a tooltip; aria-label names the action (collapse inside the sidebar, expand outside).
+ * It reads the UI store rather than useSidebar(): the canvas sits inside the inspector's provider, so the nearest
+ * sidebar context there is the right one even for the left sidebar's expand button.
+ */
+function SidebarToggle({ side, label, className }: { side: "left" | "right"; label: string; className?: string }) {
+  const open = useUiStore((s) => (side === "left" ? s.sidebarOpen : s.inspectorOpen));
+  const toggle = () => {
+    const ui = useUiStore.getState();
+    if (side === "left") ui.setSidebarOpen(!open);
+    else ui.setInspectorOpen(!open);
+  };
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <SidebarTrigger aria-label={label} className={className} />
+        <IconButton variant="ghost" size="icon-sm" aria-label={label} aria-expanded={open} className={className} onClick={toggle}>
+          {side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
+        </IconButton>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
 }
 
-/** While the sidebar is collapsed off-canvas, a small button at the top-left of the canvas brings it back. */
-function SidebarExpandButton() {
-  const { open } = useSidebar();
-  if (open) return null;
-  return <SidebarToggle label="Expand sidebar" className="absolute top-2 left-2 z-10 bg-card shadow-soft ring-1 ring-border" />;
+const FLOATING = "bg-card shadow-soft ring-1 ring-border";
+
+/**
+ * Controls floating over the top corners of the canvas: the left sidebar's expand button while it is collapsed, and
+ * at the top right the autosave indicator, the run controls (problems, Run / Cancel, …) and the inspector's expand
+ * button. The save indicator sits left of Run so that appearing and disappearing never shifts the Run button.
+ * The row itself lets pointer events through, so only its buttons cover the canvas.
+ */
+function CanvasOverlay() {
+  const sidebarOpen = useUiStore((s) => s.sidebarOpen);
+  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  return (
+    <>
+      {!sidebarOpen && <SidebarToggle side="left" label="Expand sidebar" className={`absolute top-2 left-2 z-10 ${FLOATING}`} />}
+      <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-2 *:pointer-events-auto">
+        <SaveIndicator />
+        <RunControls />
+        {!inspectorOpen && <SidebarToggle side="right" label="Expand inspector" className={FLOATING} />}
+      </div>
+    </>
+  );
+}
+
+function RightSidebar() {
+  return (
+    // Re-anchored to its provider's (relative) wrapper like the left sidebar. nokey: Backspace/Delete on the
+    // inspector's buttons, checkboxes and tabs must not delete canvas items.
+    <Sidebar side="right" collapsible="offcanvas" className="nokey absolute h-full">
+      <div className="min-h-0 flex-1">
+        <Inspector />
+      </div>
+      <SidebarRail aria-label="Collapse or resize inspector" title="Click to collapse, drag to resize" onResize={(px) => useUiStore.getState().setInspectorWidth(px)} />
+    </Sidebar>
+  );
 }
 
 function LeftSidebar() {
@@ -146,7 +199,7 @@ function LeftSidebar() {
               {`Runs${runs ? ` (${runs})` : ""}`}
             </TabsTrigger>
           </TabsList>
-          <SidebarToggle label="Collapse sidebar" />
+          <SidebarToggle side="left" label="Collapse sidebar" />
         </SidebarHeader>
         <SidebarContent>
           <TabsContent value="palette" className="min-h-0">
@@ -157,6 +210,7 @@ function LeftSidebar() {
           </TabsContent>
         </SidebarContent>
       </Tabs>
+      <SidebarRail aria-label="Collapse or resize sidebar" title="Click to collapse, drag to resize" onResize={(px) => useUiStore.getState().setSidebarWidth(px)} />
     </Sidebar>
   );
 }

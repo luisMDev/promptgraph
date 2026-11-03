@@ -161,6 +161,44 @@ export const Icons = {
       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
     </Svg>
   ),
+  check: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M20 6 9 17l-5-5" />
+    </Svg>
+  ),
+  copy: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </Svg>
+  ),
+  refresh: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M21 12a9 9 0 1 1-2.6-6.3L21 8" />
+      <path d="M21 3v5h-5" />
+    </Svg>
+  ),
+  search: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </Svg>
+  ),
+  sparkles: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6" />
+    </Svg>
+  ),
+  plug: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4" />
+    </Svg>
+  ),
+  arrowRight: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </Svg>
+  ),
   fit: (p: IconProps) => (
     <Svg {...p}>
       <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />

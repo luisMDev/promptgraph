@@ -1,12 +1,11 @@
 import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
-import { useRunStore } from "../../store/run-store";
 import { Separator } from "../ui/separator";
+import { ClaudeSetupButton } from "../claude/ClaudeSetupWizard";
 import { SettingsMenu } from "../settings/SettingsMenu";
 import { GraphSelector } from "./GraphSelector";
-import { PendingApprovals, RunControls, RunSelector } from "./RunControls";
+import { PendingApprovals, RunSelector } from "./RunControls";
 
-/** Top bar (§13): logo, graph selector, run selector, save state, Run/Cancel, pending approvals, settings. */
+/** Top bar (§13): logo, graph selector, run selector, pending approvals, settings. Run/Cancel and the save state float over the canvas. */
 export function Header() {
   const repo = useAppStore((s) => s.repo);
   const connected = useAppStore((s) => s.connected);
@@ -21,7 +20,6 @@ export function Header() {
       <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
       <GraphSelector />
       <RunSelector />
-      <SaveState />
       <div className="ml-auto flex items-center gap-2">
         {sessionExpired ? (
           <span role="alert" className="rounded bg-red-500/10 px-2 py-1 text-xs text-red-700">
@@ -30,23 +28,12 @@ export function Header() {
         ) : (
           !connected && <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-700">Reconnecting…</span>
         )}
-        <RunControls />
         <PendingApprovals />
+        <ClaudeSetupButton />
         <SettingsMenu />
       </div>
     </header>
   );
-}
-
-function SaveState() {
-  const dirty = useEditorStore((s) => s.dirty);
-  const saving = useEditorStore((s) => s.saving);
-  const saveError = useEditorStore((s) => s.saveError);
-  const hasGraph = useEditorStore((s) => s.graph !== null);
-  const runMode = useRunStore((s) => s.selectedRunId !== null);
-  if (!hasGraph || runMode) return null;
-  if (saveError) return <span className="max-w-64 truncate text-xs text-red-700" title={saveError}>{saveError}</span>;
-  return <span className="text-xs text-muted-foreground">{saving || dirty ? "Saving…" : "Saved"}</span>;
 }
 
 /** App logo: a staircase of three joined nodes on a white tile (source artwork in docs/assets/logo.png). */

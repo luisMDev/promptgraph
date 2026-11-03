@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ServerInfoSchema, validateGraph } from "@promptgraph/shared";
+import { MCP_TOOL_NAMES, ServerInfoSchema, validateGraph } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { startServer } from "../src/cli/server.js";
 import { getPaths } from "../src/config/paths.js";
@@ -153,6 +153,12 @@ describe("promptgraph MCP server", () => {
     };
     return { repo, env, client, call, opened };
   }
+
+  it("the setup guide lists exactly the registered tools", async () => {
+    const { client } = await setup();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
+  });
 
   it("lists its tools and explains when no server is running", async () => {
     const { client, call, repo } = await setup();

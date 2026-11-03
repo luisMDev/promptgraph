@@ -431,3 +431,14 @@ body {
     @apply font-sans;
   }
 }
+
+/* Dragging a sidebar rail (SidebarRail onResize): follow the pointer without the collapse animation, and keep the
+   resize cursor and no text selection while the pointer is over the canvas or the other panels. */
+[data-sidebar-resizing] {
+  cursor: col-resize;
+  user-select: none;
+}
+[data-sidebar-resizing] [data-slot="sidebar-gap"],
+[data-sidebar-resizing] [data-slot="sidebar-container"] {
+  transition: none;
+}

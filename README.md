@@ -100,6 +100,8 @@ How it works:
   stop it with `kill <pid>` (`server_status` shows the pid).
 - Claude can save and validate graphs, start and cancel runs, wait for them, read outputs, diffs and
   reports, and mark steps done, retried or skipped.
+- The **Claude Code** button in the header opens a setup guide: the commands to install the plugin (or
+  register the server alone), a check that Claude Code sees it, the skills, the tools, and prompts to try.
 - **Approvals stay with you.** Claude can show you what an approval or PR step asks for, but only you
   approve or reject it, in the UI. `open_ui` opens the canvas already signed in.
 

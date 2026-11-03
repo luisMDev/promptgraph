@@ -36,8 +36,13 @@ export interface UiStore extends UiState {
   tabMeta: Record<string, TerminalTabMeta>;
   drawerOpen: boolean;
   leftPanel: LeftPanel;
-  /** Left sidebar expanded (it collapses off-canvas via the header trigger). */
+  /** Left sidebar expanded (it collapses off-canvas via its header trigger or its edge rail). */
   sidebarOpen: boolean;
+  /** Right sidebar (inspector) expanded (it collapses off-canvas via its edge rail). */
+  inspectorOpen: boolean;
+  /** Sidebar widths in px, resized by dragging their edge rail; persisted in localStorage. */
+  sidebarWidth: number;
+  inspectorWidth: number;
   toasts: Toast[];
   /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
   revealNodeId: string | null;
@@ -56,6 +61,9 @@ export interface UiStore extends UiState {
   /** Shows a left panel, expanding the sidebar if it was collapsed. */
   setLeftPanel(panel: LeftPanel): void;
   setSidebarOpen(open: boolean): void;
+  setInspectorOpen(open: boolean): void;
+  setSidebarWidth(px: number): void;
+  setInspectorWidth(px: number): void;
   toast(kind: Toast["kind"], message: string): void;
   dismissToast(id: number): void;
 }
@@ -63,6 +71,31 @@ export interface UiStore extends UiState {
 export const MIN_DRAWER_HEIGHT = 120;
 const TOAST_MS = 6000;
 let toastSeq = 0;
+
+export const SIDEBAR_WIDTH = { min: 192, max: 480, default: 240 } as const;
+export const INSPECTOR_WIDTH = { min: 256, max: 640, default: 320 } as const;
+const WIDTH_KEYS = { sidebar: "promptgraph.sidebarWidth", inspector: "promptgraph.inspectorWidth" } as const;
+
+export function clampWidth(px: number, bounds: { min: number; max: number }): number {
+  return Math.round(Math.max(bounds.min, Math.min(px, bounds.max)));
+}
+
+function loadWidth(key: string, bounds: { min: number; max: number; default: number }): number {
+  try {
+    const stored = Number(localStorage.getItem(key));
+    return stored ? clampWidth(stored, bounds) : bounds.default;
+  } catch {
+    return bounds.default;
+  }
+}
+
+function saveWidth(key: string, px: number): void {
+  try {
+    localStorage.setItem(key, String(px));
+  } catch {
+    // Storage unavailable (private mode, quota): the width just won't survive a reload.
+  }
+}
 
 export function clampDrawerHeight(px: number, viewport: number): number {
   return Math.round(Math.max(MIN_DRAWER_HEIGHT, Math.min(px, Math.max(MIN_DRAWER_HEIGHT, viewport - 160))));
@@ -80,6 +113,9 @@ export const useUiStore = create<UiStore>()((set, get) => ({
   drawerOpen: false,
   leftPanel: "palette",
   sidebarOpen: true,
+  inspectorOpen: true,
+  sidebarWidth: loadWidth(WIDTH_KEYS.sidebar, SIDEBAR_WIDTH),
+  inspectorWidth: loadWidth(WIDTH_KEYS.inspector, INSPECTOR_WIDTH),
   toasts: [],
   revealNodeId: null,
 
@@ -145,6 +181,22 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 
   setSidebarOpen(open) {
     set({ sidebarOpen: open });
+  },
+
+  setInspectorOpen(open) {
+    set({ inspectorOpen: open });
+  },
+
+  setSidebarWidth(px) {
+    const sidebarWidth = clampWidth(px, SIDEBAR_WIDTH);
+    set({ sidebarWidth });
+    saveWidth(WIDTH_KEYS.sidebar, sidebarWidth);
+  },
+
+  setInspectorWidth(px) {
+    const inspectorWidth = clampWidth(px, INSPECTOR_WIDTH);
+    set({ inspectorWidth });
+    saveWidth(WIDTH_KEYS.inspector, inspectorWidth);
   },
 
   toast(kind, message) {

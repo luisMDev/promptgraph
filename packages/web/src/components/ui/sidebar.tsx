@@ -227,8 +227,30 @@ function SidebarTrigger({
   )
 }
 
-function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
-  const { toggleSidebar } = useSidebar()
+/** Pointer travel (px) before a press on the rail counts as a resize drag instead of a click. */
+const RAIL_DRAG_THRESHOLD = 3
+
+// promptgraph: besides toggling on click, the rail resizes the (expanded) sidebar when dragged and `onResize` is
+// given; it reports the proposed width in px and the caller clamps and stores it (e.g. into --sidebar-width).
+// While dragging, `data-sidebar-resizing` on <html> turns off the width transitions (see index.css).
+function SidebarRail({
+  className,
+  onResize,
+  ...props
+}: React.ComponentProps<"button"> & { onResize?: (width: number) => void }) {
+  const { toggleSidebar, open } = useSidebar()
+  const drag = React.useRef<{ startX: number; startWidth: number; side: string; moved: boolean } | null>(null)
+  const suppressClick = React.useRef(false)
+
+  const endDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!drag.current) return
+    suppressClick.current = drag.current.moved
+    drag.current = null
+    delete document.documentElement.dataset.sidebarResizing
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
 
   return (
     <button
@@ -236,7 +258,42 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
       data-slot="sidebar-rail"
       aria-label="Toggle Sidebar"
       tabIndex={-1}
-      onClick={toggleSidebar}
+      onClick={() => {
+        if (suppressClick.current) {
+          suppressClick.current = false
+          return
+        }
+        toggleSidebar()
+      }}
+      onPointerDown={(event) => {
+        suppressClick.current = false
+        if (!onResize || !open || event.button !== 0) return
+        const container = event.currentTarget.closest<HTMLElement>('[data-slot="sidebar-container"]')
+        if (!container) return
+        drag.current = {
+          startX: event.clientX,
+          startWidth: container.getBoundingClientRect().width,
+          side: container.dataset.side ?? "left",
+          moved: false,
+        }
+        // No text selection and no native drag of a draggable item under the edge (palette nodes): either would
+        // fire pointercancel and end the resize after the first move.
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }}
+      onPointerMove={(event) => {
+        const d = drag.current
+        if (!d || !onResize) return
+        const dx = event.clientX - d.startX
+        if (!d.moved && Math.abs(dx) < RAIL_DRAG_THRESHOLD) return
+        if (!d.moved) {
+          d.moved = true
+          document.documentElement.dataset.sidebarResizing = ""
+        }
+        onResize(d.startWidth + (d.side === "right" ? -dx : dx))
+      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
       title="Toggle Sidebar"
       className={cn(
         "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",

@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "id": "test",
+  "name": "test",
+  "settings": {
+    "baseBranch": "main",
+    "branchPrefix": "",
+    "maxParallelClaude": 3,
+    "defaults": {
+      "permissionMode": "acceptEdits",
+      "completion": {
+        "mode": "auto",
+        "graceSec": 5
+      }
+    },
+    "keepWorktrees": "on-failure",
+    "autoTrustWorktrees": true,
+    "allowPrWithoutApproval": false
+  },
+  "nodes": [
+    {
+      "id": "n-j2kbq7u3tp",
+      "label": "Prompt",
+      "position": {
+        "x": 80,
+        "y": -112
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "cera una landing page sencilla",
+        "context": "fresh"
+      }
+    },
+    {
+      "id": "n-jngyfc211a",
+      "label": "Commit",
+      "position": {
+        "x": 1264,
+        "y": -96
+      },
+      "type": "commit",
+      "config": {
+        "generateMessage": true,
+        "squashCheckpoints": true
+      }
+    },
+    {
+      "id": "n-kq64jo7kgo",
+      "label": "Command",
+      "position": {
+        "x": 960,
+        "y": -96
+      },
+      "type": "command",
+      "config": {
+        "command": "/simplify",
+        "context": "fresh"
+      }
+    },
+    {
+      "id": "n-ik4dzd2a6t",
+      "label": "Prompt 2",
+      "position": {
+        "x": 736,
+        "y": 80
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "cambialaa color rosa",
+        "context": "fresh"
+      }
+    },
+    {
+      "id": "n-c3celbqhis",
+      "label": "Condition",
+      "position": {
+        "x": 432,
+        "y": -176
+      },
+      "type": "condition",
+      "config": {
+        "evaluator": {
+          "kind": "judge",
+          "question": ""
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-kzh8nhvwwa",
+      "source": "n-kq64jo7kgo",
+      "sourcePort": "out",
+      "target": "n-jngyfc211a",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-io0aas2j7b",
+      "source": "n-ik4dzd2a6t",
+      "sourcePort": "out",
+      "target": "n-kq64jo7kgo",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-cd9quyyomf",
+      "source": "n-c3celbqhis",
+      "sourcePort": "true",
+      "target": "n-kq64jo7kgo",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-cfy0mzo0it",
+      "source": "n-c3celbqhis",
+      "sourcePort": "false",
+      "target": "n-ik4dzd2a6t",
+      "targetPort": "in"
+    }
+  ]
+}

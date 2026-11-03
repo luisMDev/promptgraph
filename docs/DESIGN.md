@@ -516,8 +516,8 @@ All routes require the token (`Authorization: Bearer` or the `t` cookie set from
 
 ## 13. UI
 
-- **Header**: graph selector, Run / Cancel, pending approvals counter, run selector (live or historical).
-- **Canvas** (React Flow): palette on the left (drag node types in), minimap, snap to grid. In run mode the graph is read-only and nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance).
+- **Header**: graph selector, run selector (live or historical), pending approvals counter, settings.
+- **Canvas** (React Flow): palette on the left (drag node types in), minimap, snap to grid. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails), the problems button, the run's cost and **Report**, and Resume / Run / Cancel. In run mode the graph is read-only and nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance).
 - **Inspector** (right): config of the selected node; in run mode, its NodeRun details (output, session id, branch, timings, error) and controls (Done, Fail, Hold, Retry, Skip).
 - **Terminal drawer** (bottom, resizable): opens on node click. Tabs, one per open terminal. Live PTY for running nodes, replayed log for finished ones with "Reopen session".
 - **Approval dialog**: diff viewer + approve/reject.
@@ -526,7 +526,7 @@ All routes require the token (`Authorization: Bearer` or the `t` cookie set from
 
 ### 13.1 Run report
 
-A page that answers "what happened while I was away". It replaces the editor view until closed; it opens from the header (**Report**), from each run in the history, and by itself when the run shown on the canvas finishes. It follows the run live.
+A page that answers "what happened while I was away". It replaces the editor view until closed; it opens from **Report** on the canvas, from each run in the history, and by itself when the run shown on the canvas finishes. It follows the run live.
 
 - **Summary**: result, duration, total time spent waiting for the user, estimated cost, step counts, the run error.
 - **Where it stopped or waited**: unhandled failures, interruptions, cancellations and steps waiting for the user now; then waits of at least a minute, longest first. Waiting time is the time a node run spent in `idle`, `waiting_input` or `waiting_approval`, from the `node.status` events.
@@ -693,4 +693,12 @@ Once listening, the server writes `~/.promptgraph/servers/<repo-key>.json` (`Ser
 
 - `.mcp.json` registers the server as `${PROMPTGRAPH_BIN:-promptgraph} mcp`. `promptgraph` must be on `PATH`, or `PROMPTGRAPH_BIN` must point to `packages/server/dist/cli/index.js`.
 - Skills: `design-graph` (turn a task into a graph: decomposition, lanes, merge, checks, loops, prompts that work on their own; `references/patterns.md` holds complete graphs, validated by a test), `run-graph` (confirm, start, supervise, handle each attention state, report), `review-run` (explain a run from its report and suggest changes to the graph).
+
+### 19.5 Setup guide in the UI
+
+The header has a **Claude Code** button that opens a wizard with five steps: connect (plugin or MCP only, with copy buttons for the commands, and `PROMPTGRAPH_BIN` for a plugin that cannot find `promptgraph`), check (`POST /api/claude-setup/check` runs `claude mcp list` and looks for a `promptgraph` entry), skills (what each skill does and example requests), tools (grouped by purpose), and prompts to try.
+
+- `GET /api/claude-setup` derives the commands from the running server: the CLI entry (`process.argv[1]`), the Node binary, this repository, and whether the checkout bundles the plugin (`.claude-plugin/marketplace.json` two levels above the server package). No state is stored.
+- The skill and tool lists are the catalog in `packages/shared/src/mcp-guide.ts`. A test checks that the catalog names are exactly the registered MCP tools and that every skill has a `SKILL.md`, so the wizard cannot describe a tool that does not exist.
+- The check only reads the output of `claude mcp list`; it does not install anything.
 

@@ -50,6 +50,7 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 | `api.ts` | REST request/response schemas (§7 below), `AppSettingsSchema`, `API` path builders, `TOKEN_COOKIE` |
 | `ws.ts` | `ServerMessageSchema`, `ClientMessageSchema` (discriminated unions), `encodeBase64`/`decodeBase64` |
 | `server-info.ts` | `ServerInfoSchema` → `ServerInfo` (discovery record of a running server, DESIGN §19.1) |
+| `mcp-guide.ts` | `MCP_SKILLS`, `MCP_TOOL_GROUPS`, `MCP_TOOL_NAMES`, `ClaudeSetupResponseSchema`, `ClaudeCheckResponseSchema` (setup wizard content, DESIGN §19.5) |
 | `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
@@ -166,6 +167,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `mcp/draft.ts` | `normalizeGraphDraft(input, {layout})` (edge ids, GraphSchema, layered auto layout over `buildTopology`/`topologicalOrder`), `GraphDraftError`, `LAYOUT_DX` |
 | `mcp/format.ts` | compact views for tools: `compactRunDetail` (`attention` = nodeRunIds), `compactRunSummary`, `compactNodeRun`, `compactReport`, `compactDiff`, `latestAttempts`, `needsAttention` |
 | `mcp/reference.ts` | `GRAPH_REFERENCE` (markdown), `graphJsonSchema()` |
+| `mcp/setup.ts` | `buildClaudeSetup` (GET `/api/claude-setup`), `checkClaudeSetup` (POST `/api/claude-setup/check`), `bundledMarketplaceRoot`, `shellQuote` |
 | `mcp/tools.ts` | `registerTools(server, {mcpEnv, openUrl, pollMs?})` (tool list in DESIGN §19.3) |
 | `mcp/server.ts` | `createMcpServer(deps)`, `runMcpStdio()` |
 

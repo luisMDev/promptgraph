@@ -1,4 +1,5 @@
 import { formatCostUsd, isFinalRunStatus } from "@promptgraph/shared";
+import { Loader2Icon } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -22,7 +23,7 @@ import { Icons } from "../common/icons";
 import { ConfirmDialog } from "../common/PromptDialog";
 import { Button, StatusDot } from "../common/ui";
 
-/** Run / Cancel, validation summary, and the total cost of the shown run. */
+/** Run / Cancel, validation summary, and the total cost of the shown run. Floats over the canvas, top right. */
 export function RunControls() {
   const graph = useEditorStore((s) => s.graph);
   const errors = useEditorStore((s) => s.validation.errors.length);
@@ -61,7 +62,7 @@ export function RunControls() {
           size="sm"
           onClick={() => useEditorStore.getState().setSelection([], [])}
           title="Show problems in the inspector"
-          className={`gap-1 text-xs ${errors ? "bg-red-500/10 text-red-700 hover:bg-red-500/20 hover:text-red-700 dark:hover:bg-red-500/20" : "bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 hover:text-amber-700 dark:hover:bg-amber-500/20"}`}
+          className={`gap-1 text-xs shadow-soft ring-1 ring-border ${errors ? "bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-700 dark:bg-red-950 dark:hover:bg-red-900" : "bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-700 dark:bg-amber-950 dark:hover:bg-amber-900"}`}
         >
           <Icons.alert />
           {errors > 0 && `${errors} error${errors > 1 ? "s" : ""}`}
@@ -70,7 +71,7 @@ export function RunControls() {
         </Button>
       )}
       {shownRun && (
-        <span className="font-mono text-xs text-muted-foreground" title={`${shownRun.usage.inputTokens + shownRun.usage.outputTokens} input+output tokens (estimated cost)`}>
+        <span className="rounded-md bg-card px-2 py-1 font-mono text-xs text-muted-foreground shadow-soft ring-1 ring-border" title={`${shownRun.usage.inputTokens + shownRun.usage.outputTokens} input+output tokens (estimated cost)`}>
           {formatCostUsd(shownRun.usage.costUsd)}
         </span>
       )}
@@ -112,6 +113,33 @@ export function RunControls() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Autosave indicator next to the run controls: a spinner while an edit is pending or being written, the error if
+ * the last save failed, and nothing once the graph is saved.
+ */
+export function SaveIndicator() {
+  const pending = useEditorStore((s) => s.saving || s.dirty);
+  const saveError = useEditorStore((s) => s.saveError);
+  const hasGraph = useEditorStore((s) => s.graph !== null);
+  const runMode = useRunStore((s) => s.selectedRunId !== null);
+  if (!hasGraph || runMode) return null;
+  if (saveError) {
+    return (
+      <span role="alert" className="flex max-w-64 items-center gap-1.5 rounded-md bg-card px-2 py-1 text-xs text-red-700 shadow-soft ring-1 ring-border" title={saveError}>
+        <Icons.alert className="shrink-0" />
+        <span className="truncate">{saveError}</span>
+      </span>
+    );
+  }
+  if (!pending) return null;
+  return (
+    <span role="status" className="flex items-center gap-1.5 rounded-md bg-card px-2 py-1 text-xs text-muted-foreground shadow-soft ring-1 ring-border">
+      <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+      Saving…
+    </span>
   );
 }
 
