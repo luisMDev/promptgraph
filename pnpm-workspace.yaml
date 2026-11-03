@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - site
+  - video
 onlyBuiltDependencies:
   - node-pty
   - better-sqlite3
