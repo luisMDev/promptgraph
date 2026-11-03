@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type ProxyOptions } from "vite";
 
 /**
@@ -25,7 +26,7 @@ const asServer: ProxyOptions = {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  resolve: { conditions: ["source"] },
+  resolve: { conditions: ["source"], alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: {
     host: "127.0.0.1",
     proxy: {

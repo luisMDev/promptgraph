@@ -8,7 +8,8 @@
     "customConditions": ["source"],
     "jsx": "react-jsx",
     "types": ["vite/client"],
-    "declaration": false
+    "declaration": false,
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "vite.config.ts"]
 }
