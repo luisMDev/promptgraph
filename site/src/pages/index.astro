@@ -1,5 +1,5 @@
 ---
-import { Image } from 'astro:assets';
+import { Image, getImage } from 'astro:assets';
 import Base from '../layouts/Base.astro';
 import FlowDiagram from '../components/FlowDiagram.astro';
 
@@ -9,6 +9,27 @@ import editor from '../assets/screens/m6-editor.png';
 import prDialog from '../assets/screens/m4-pr-dialog.png';
 import loop from '../assets/screens/m6-run-loop.png';
 import report from '../assets/screens/run-report.png';
+
+import lightCorners from '../assets/bg/light-corners.webp';
+import lightCornersStrong from '../assets/bg/light-corners-strong.webp';
+import lightLogoTile from '../assets/bg/light-logo-tile.webp';
+import darkCorners from '../assets/bg/dark-corners.webp';
+import darkWaves from '../assets/bg/dark-waves.webp';
+import darkWavePattern from '../assets/bg/dark-wave-pattern.webp';
+import darkLogoTile from '../assets/bg/dark-logo-tile.webp';
+
+// Brand backgrounds, optimised at build time and passed to CSS as --bg-img.
+const bgImage = async (src: ImageMetadata, width: number) =>
+  `--bg-img:url(${(await getImage({ src, width, format: 'webp', quality: 82 })).src})`;
+const bg = {
+  hero: await bgImage(lightCorners, 1920),
+  safe: await bgImage(lightCornersStrong, 1920),
+  tile: await bgImage(lightLogoTile, 840),
+  mcp: await bgImage(darkCorners, 1920),
+  code: await bgImage(darkWavePattern, 900),
+  final: await bgImage(darkWaves, 1920),
+  footer: await bgImage(darkLogoTile, 840),
+};
 
 const repo = 'https://github.com/luisMDev/promptgraph';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -148,7 +169,7 @@ const jsonLd = [
   </header>
 
   <main id="main">
-    <section class="hero">
+    <section class="hero" style={bg.hero}>
       <div class="container hero-inner">
         <p class="pill"><span class="dot"></span> Open source (MIT) · Local tool for Claude Code · Linux &amp; WSL</p>
         <h1>Draw your Claude Code workflow. <span class="nowrap">Run it in parallel.</span></h1>
@@ -226,7 +247,7 @@ const jsonLd = [
       </div>
     </section>
 
-    <section id="features" class="section alt">
+    <section id="features" class="section alt" style={bg.tile}>
       <div class="container">
         <span class="eyebrow">Features</span>
         <h2>Orchestration that stays out of Claude’s way</h2>
@@ -272,7 +293,7 @@ const jsonLd = [
       </div>
     </section>
 
-    <section class="section alt">
+    <section class="section alt" style={bg.tile}>
       <div class="container">
         <span class="eyebrow">Building blocks</span>
         <h2>Eight node types cover the whole loop</h2>
@@ -303,7 +324,7 @@ const jsonLd = [
       </div>
     </section>
 
-    <section class="section">
+    <section class="section safe" style={bg.safe}>
       <div class="container showcase reverse">
         <figure class="window">
           <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -328,7 +349,7 @@ const jsonLd = [
       </div>
     </section>
 
-    <section id="claude-code" class="section dark">
+    <section id="claude-code" class="section dark" style={bg.mcp}>
       <div class="container showcase">
         <div>
           <span class="eyebrow">MCP server + Claude Code plugin</span>
@@ -357,7 +378,7 @@ claude mcp add promptgraph -- promptgraph mcp</code></pre>
           Requires Linux or WSL, Node.js 22+, pnpm, git and a logged-in Claude Code. The GitHub CLI is
           only needed for pull-request steps.
         </p>
-        <pre class="code light"><code>git clone {repo}.git
+        <pre class="code light" style={bg.code}><code>git clone {repo}.git
 cd promptgraph
 pnpm install && pnpm build
 cd packages/server && pnpm link --global
@@ -371,7 +392,7 @@ promptgraph ~/code/my-app</code></pre>
       </div>
     </section>
 
-    <section id="faq" class="section alt">
+    <section id="faq" class="section alt" style={bg.tile}>
       <div class="container narrow">
         <span class="eyebrow">FAQ</span>
         <h2>Frequently asked questions</h2>
@@ -390,8 +411,8 @@ promptgraph ~/code/my-app</code></pre>
       </div>
     </section>
 
-    <section class="final">
-      <div class="container narrow">
+    <section class="final" style={bg.final}>
+      <div class="container">
         <h2>Stop babysitting terminals. Draw the flow once.</h2>
         <p>Your Claude Code workflow, as a graph you can run, watch and repeat. Free and open source under the MIT license.</p>
         <div class="cta-row center">
@@ -401,7 +422,7 @@ promptgraph ~/code/my-app</code></pre>
     </section>
   </main>
 
-  <footer class="footer">
+  <footer class="footer" style={bg.footer}>
     <div class="container footer-inner">
       <span class="brand">
         <img src={`${base}/favicon.svg`} alt="" width="22" height="22" />
@@ -476,7 +497,8 @@ promptgraph ~/code/my-app</code></pre>
   .hero {
     padding: 72px 0 40px;
     background:
-      radial-gradient(60% 50% at 50% 0%, #fff 0%, transparent 70%),
+      radial-gradient(50% 40% at 50% 18%, rgb(255 255 255 / 0.7) 0%, transparent 70%),
+      var(--bg-img) center / cover no-repeat,
       var(--bg);
   }
   .hero-inner {
@@ -593,7 +615,10 @@ promptgraph ~/code/my-app</code></pre>
     max-width: 720px;
   }
   .alt {
-    background: var(--bg-soft);
+    background:
+      linear-gradient(rgb(252 244 240 / 0.45), rgb(252 244 240 / 0.45)),
+      var(--bg-img) 0 0 / 420px repeat,
+      var(--bg-soft);
     border-block: 1px solid var(--line);
   }
 
@@ -758,8 +783,11 @@ promptgraph ~/code/my-app</code></pre>
     margin-top: 10px;
   }
 
+  .safe {
+    background: var(--bg-img) center / cover no-repeat, var(--bg);
+  }
   .dark {
-    background: var(--ink);
+    background: var(--bg-img) center / cover no-repeat, #020202;
     color: #f5f5f5;
   }
   .dark .eyebrow {
@@ -786,7 +814,10 @@ promptgraph ~/code/my-app</code></pre>
   }
   .code.light {
     margin: 28px 0 32px;
-    background: var(--ink);
+    background:
+      linear-gradient(90deg, rgb(6 6 6 / 0.92) 0%, rgb(6 6 6 / 0.55) 100%),
+      var(--bg-img) center / 520px repeat,
+      var(--ink);
   }
   .c {
     color: #8a8a8a;
@@ -842,21 +873,38 @@ promptgraph ~/code/my-app</code></pre>
   }
 
   .final {
-    padding: 96px 0;
-    text-align: center;
+    padding: 128px 0;
+    color: #f5f5f5;
+    background:
+      linear-gradient(90deg, rgb(10 10 12 / 0.9) 0%, rgb(10 10 12 / 0.35) 55%, transparent 100%),
+      var(--bg-img) right center / cover no-repeat,
+      #101012;
+  }
+  .final h2 {
+    max-width: 560px;
   }
   .final p {
-    color: var(--ink-2);
+    color: #c9c9cc;
     font-size: 19px;
-    margin: 14px 0 28px;
+    margin: 16px 0 32px;
+    max-width: 480px;
   }
-  .final .center {
-    justify-content: center;
+  .final .btn-primary {
+    background: #fff;
+    color: var(--ink);
+  }
+  .final .btn-primary:hover {
+    background: #e7e7e7;
   }
 
   .footer {
-    border-top: 1px solid var(--line);
-    padding: 32px 0 40px;
+    padding: 40px 0 48px;
+    color: #e5e5e5;
+    background:
+      linear-gradient(rgb(6 6 6 / 0.6), rgb(6 6 6 / 0.6)),
+      var(--bg-img) 0 0 / 420px repeat,
+      #060606;
+    border-top: 1px solid #1c1c1c;
   }
   .footer-inner {
     display: flex;
@@ -870,7 +918,7 @@ promptgraph ~/code/my-app</code></pre>
     gap: 22px;
   }
   .footer nav a {
-    color: var(--ink-2);
+    color: #c9c9cc;
     text-decoration: none;
     font-size: 15px;
   }
@@ -878,7 +926,7 @@ promptgraph ~/code/my-app</code></pre>
     flex-basis: 100%;
     margin: 0;
     font-size: 13px;
-    color: var(--muted);
+    color: #8a8a8f;
   }
 
   @media (max-width: 960px) {

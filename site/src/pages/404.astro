@@ -1,0 +1,55 @@
+---
+import { getImage } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import lightEmboss from '../assets/bg/light-emboss.webp';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const bg = await getImage({ src: lightEmboss, width: 1920, format: 'webp', quality: 82 });
+---
+
+<Base
+  title="Page not found · promptgraph"
+  description="This page does not exist. Go back to the promptgraph home page."
+  noindex
+>
+  <main class="notfound" style={`--bg-img:url(${bg.src})`}>
+    <div class="card">
+      <p class="code">404</p>
+      <h1>This step isn’t in the graph</h1>
+      <p>The page you are looking for does not exist or has moved.</p>
+      <a class="btn btn-primary" href={`${base}/`}>Back to promptgraph</a>
+    </div>
+  </main>
+</Base>
+
+<style>
+  .notfound {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--bg-img) center / cover no-repeat, #f5f1ee;
+  }
+  .card {
+    text-align: center;
+    padding: 40px 48px;
+    border-radius: 20px;
+    background: rgb(255 255 255 / 0.72);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--line);
+    max-width: 480px;
+  }
+  .code {
+    margin: 0 0 8px;
+    font-family: var(--mono);
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+  h1 {
+    font-size: 30px;
+  }
+  .card p:not(.code) {
+    color: var(--ink-2);
+    margin: 12px 0 28px;
+  }
+</style>
