@@ -57,13 +57,12 @@ function SaveState() {
   return <span className="text-xs text-muted-foreground">{saving || dirty ? "Saving…" : "Saved"}</span>;
 }
 
+/** App logo: a staircase of three joined nodes on a white tile (source artwork in docs/assets/logo.png). */
 function Logo() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-      <rect x="2" y="3" width="8" height="6" rx="1.5" fill="#3b82f6" />
-      <rect x="14" y="9" width="8" height="6" rx="1.5" fill="#8b5cf6" />
-      <rect x="2" y="15" width="8" height="6" rx="1.5" fill="#22c55e" />
-      <path d="M10 6h2a2 2 0 0 1 2 2v2M10 18h2a2 2 0 0 0 2-2v-2" stroke="#71717a" strokeWidth="1.5" fill="none" />
+    <svg viewBox="0 0 100 100" width="20" height="20" aria-hidden="true">
+      <rect width="100" height="100" rx="20" fill="#fff" />
+      <path fill="#0a0a0a" d="M14 73V64A6 6 0 0 1 20 58H31A5 5 0 0 0 36 53V46A6 6 0 0 1 42 40H53A5 5 0 0 0 58 35V26A6 6 0 0 1 64 20H76A6 6 0 0 1 82 26V36A6 6 0 0 1 76 42H64A5 5 0 0 0 59 47V55A6 6 0 0 1 53 61H42A5 5 0 0 0 37 66V73A6 6 0 0 1 31 79H20A6 6 0 0 1 14 73Z" />
     </svg>
   );
 }
