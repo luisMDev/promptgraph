@@ -2,6 +2,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { THEME_STORAGE_KEY } from "../../lib/theme";
 import { useAppStore } from "../../store/app-store";
 import { useUiStore } from "../../store/ui-store";
 import { SettingsMenu } from "./SettingsMenu";
@@ -45,7 +46,27 @@ describe("settings menu", () => {
     await screen.findByRole("menu");
 
     await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(screen.getByRole("menuitemradio", { name: "Light" }));
+    await user.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(screen.getByRole("menuitemcheckbox", { name: "Desktop notifications" }));
+  });
+
+  it("switches the theme, remembers it and keeps the menu open", async () => {
+    document.documentElement.classList.add("dark");
+    const user = userEvent.setup();
+    render(<SettingsMenu />);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect((await screen.findByRole("menuitemradio", { name: "Dark" })).getAttribute("aria-checked")).toBe("true");
+
+    await user.click(screen.getByRole("menuitemradio", { name: "Light" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+    expect(screen.getByRole("menuitemradio", { name: "Light" }).getAttribute("aria-checked")).toBe("true");
+    expect(useUiStore.getState().settingsOpen).toBe(true);
+
+    await user.click(screen.getByRole("menuitemradio", { name: "Dark" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
   });
 
   it("toggling the checkbox item saves the setting and keeps the menu open", async () => {

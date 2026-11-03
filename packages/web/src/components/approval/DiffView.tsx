@@ -5,6 +5,7 @@ import type { ColorSchemeType } from "diff2html/lib/types";
 import { useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useTheme } from "../../lib/theme";
 import { Button } from "../common/ui";
 
 type Layout = "line-by-line" | "side-by-side";
@@ -25,9 +26,10 @@ const STATUS_MARK: Record<DiffFile["status"], { mark: string; className: string 
 export function DiffView({ diff, title, emptyText = "No changes in this lane." }: { diff: DiffResponse; title?: string; emptyText?: string }) {
   const [layout, setLayout] = useState<Layout>("line-by-line");
   const bodyRef = useRef<HTMLDivElement>(null);
+  const theme = useTheme();
   const markup = useMemo(
-    () => (diff.patch ? diffHtml(diff.patch, { drawFileList: false, matching: "lines", outputFormat: layout, colorScheme: "light" as ColorSchemeType }) : ""),
-    [diff.patch, layout],
+    () => (diff.patch ? diffHtml(diff.patch, { drawFileList: false, matching: "lines", outputFormat: layout, colorScheme: theme as ColorSchemeType }) : ""),
+    [diff.patch, layout, theme],
   );
   const additions = diff.files.reduce((n, f) => n + f.additions, 0);
   const deletions = diff.files.reduce((n, f) => n + f.deletions, 0);

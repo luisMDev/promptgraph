@@ -19,7 +19,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
 import { toFlowEdges, toFlowNodes } from "../../lib/flow-mapping";
 import { connectionError } from "../../lib/graph-ops";
-import { NODE_STATUS_COLOR_HEX } from "../../lib/status-hex";
+import { editorNodeHex, statusHex } from "../../lib/status-hex";
+import { useTheme } from "../../lib/theme";
 import { readableViewport } from "../../lib/viewport";
 import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { openNodeTerminal } from "../../store/app-actions";
@@ -67,6 +68,7 @@ function useMeasured() {
 }
 
 function EditCanvas() {
+  const theme = useTheme();
   const graph = useEditorStore((s) => s.graph);
   const phase = useEditorStore((s) => s.phase);
   const validation = useEditorStore((s) => s.validation);
@@ -165,12 +167,12 @@ function EditCanvas() {
         minZoom={0.2}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#d6cdbf" />
+        <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="var(--pg-canvas-dots)" />
         <CanvasControls manual={manual} />
         <AutoFit manual={manual} fitOnInit={fitOnMount} />
         <RevealRequestedNode measured={measured} />
         <WideEnoughForMinimap>
-          <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => (n.data.issues.errors.length ? "#ef4444" : "#a8a29e")} nodeStrokeWidth={0} maskColor="rgb(245 241 235 / 0.7)" />
+          <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => editorNodeHex(n.data.issues.errors.length > 0, theme)} nodeStrokeWidth={0} maskColor="var(--pg-minimap-mask)" />
         </WideEnoughForMinimap>
       </ReactFlow>
       {graph.nodes.length === 0 && <EmptyHint readOnly={readOnly} />}
@@ -179,6 +181,7 @@ function EditCanvas() {
 }
 
 function RunCanvas() {
+  const theme = useTheme();
   const detail = useRunStore((s) => s.detail);
   const currentByNode = useRunStore((s) => s.currentByNode);
   const lanes = useRunStore((s) => s.lanes);
@@ -238,7 +241,7 @@ function RunCanvas() {
       minZoom={0.2}
       proOptions={{ hideAttribution: true }}
     >
-      <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#d6cdbf" />
+      <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="var(--pg-canvas-dots)" />
       <CanvasControls manual={manual} />
       <AutoFit manual={manual} fitOnInit />
       <WideEnoughForMinimap>
@@ -246,9 +249,9 @@ function RunCanvas() {
           style={MINIMAP_STYLE}
           pannable
           zoomable
-          nodeColor={(n) => NODE_STATUS_COLOR_HEX[n.data.nodeRun?.status ?? "pending"]}
+          nodeColor={(n) => statusHex(n.data.nodeRun?.status ?? "pending", theme)}
           nodeStrokeWidth={0}
-          maskColor="rgb(245 241 235 / 0.7)"
+          maskColor="var(--pg-minimap-mask)"
         />
       </WideEnoughForMinimap>
     </ReactFlow>
