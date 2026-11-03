@@ -3,6 +3,7 @@
 // the fake claude CLI and the fake gh CLI. See README.md next to this file.
 //
 //   node scripts/screenshots/capture.mjs <out-dir> [--keep] [--scene add-feature,ship-feature,test-fix]
+//   node scripts/screenshots/capture.mjs <out-dir> --real-claude   (m2-real-claude-replay.png, real Claude Code)
 //
 // Never touches the user's ~/.promptgraph, ~/.claude.json or real repositories: everything lives in a temp dir.
 
@@ -22,6 +23,8 @@ const FAKE_GH = path.join(ROOT, "packages/server/test/fixtures/fake-gh");
 const DEFAULT_CHROME = path.join(os.homedir(), ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome");
 const VIEWPORT = { width: 1600, height: 900 };
 const SCENES = ["add-feature", "ship-feature", "test-fix"];
+/** Opt-in scene (--real-claude): a real Claude Code session with haiku and minimal prompts. */
+const REAL_SCENE = "real-claude";
 const WAIT_MS = 60_000;
 
 // ---------------------------------------------------------------------------- arguments
@@ -31,13 +34,15 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--keep") opts.keep = true;
+    else if (a === "--real-claude") opts.real = true;
     else if (a === "--out") opts.out = argv[++i];
     else if (a === "--scene" || a === "--scenes") opts.scenes = argv[++i].split(",").map((s) => s.trim());
     else if (a === "--help" || a === "-h") opts.help = true;
     else if (!a.startsWith("-")) opts.out = a;
     else throw new Error(`Unknown option ${a}`);
   }
-  for (const s of opts.scenes) if (!SCENES.includes(s)) throw new Error(`Unknown scene "${s}" (known: ${SCENES.join(", ")})`);
+  if (opts.real) opts.scenes = [REAL_SCENE];
+  else for (const s of opts.scenes) if (!SCENES.includes(s)) throw new Error(`Unknown scene "${s}" (known: ${SCENES.join(", ")})`);
   return opts;
 }
 
@@ -45,6 +50,8 @@ const USAGE = `Usage: node scripts/screenshots/capture.mjs <out-dir> [--keep] [-
   <out-dir>   where the PNGs are written (or PG_SHOTS_OUT)
   --keep      keep the temp dir (demo repo, PG_HOME) and print its path
   --scene     only run these scenes (comma separated)
+  --real-claude  only m2-real-claude-replay.png, with the real Claude Code (haiku, two tiny prompts; uses a temp
+                 copy of ~/.claude.json and ~/.claude/.credentials.json, removed at the end)
 Env: PG_SHOTS_CHROME (browser executable), PLAYWRIGHT_CORE (playwright-core dir or a dir whose node_modules has it)`;
 
 // ---------------------------------------------------------------------------- helpers
@@ -151,6 +158,23 @@ const GRAPHS = {
       { id: "commit", type: "commit", label: "Commit", position: { x: 840, y: 0 }, config: { generateMessage: true } },
     ],
     edges: chain("implement", "test", "review", "commit"),
+  },
+  [REAL_SCENE]: {
+    version: 1,
+    id: REAL_SCENE,
+    name: "Pong smoke",
+    settings: { baseBranch: "main", defaults: { model: "haiku", completion: { mode: "auto", graceSec: 0 } } },
+    nodes: [
+      { id: "ping", type: "prompt", label: "Ping", position: { x: 0, y: 0 }, config: { prompt: "Reply with exactly PONG" } },
+      {
+        id: "echo",
+        type: "prompt",
+        label: "Echo",
+        position: { x: 320, y: 0 },
+        config: { prompt: "What word did the previous step output? Reply with only that word, in lowercase." },
+      },
+    ],
+    edges: chain("ping", "echo"),
   },
   "ship-feature": {
     version: 1,
@@ -404,6 +428,19 @@ function makeScenes({ api, page, outDir }) {
   }
 
   return {
+    async [REAL_SCENE]() {
+      await openGraph(REAL_SCENE);
+      const runId = await startRun(REAL_SCENE);
+      await waitRun(runId);
+      await openRunFromHistory(runId);
+      await clickPane();
+      await cardShows("echo", "Succeeded");
+      await clickNode("echo");
+      await page.getByText("Read-only replay").first().waitFor();
+      await sleep(1500); // The replay is written to xterm in chunks.
+      await shot("m2-real-claude-replay.png");
+    },
+
     async "add-feature"() {
       await openGraph("add-feature");
       await shot("m2-editor.png");
@@ -550,11 +587,21 @@ async function main() {
     gitConfig,
     "[user]\n\tname = promptgraph demo\n\temail = demo@promptgraph.local\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n",
   );
+  if (opts.real) {
+    // Real Claude Code: a copy of the user's config (onboarding done, dark TUI) and credentials in the temp
+    // CLAUDE_CONFIG_DIR, so the real ~/.claude.json is never written. The copies go with the temp dir.
+    const src = path.join(os.homedir(), ".claude.json");
+    const cfg = fs.existsSync(src) ? JSON.parse(fs.readFileSync(src, "utf8")) : {};
+    fs.writeFileSync(path.join(claudeConfig, ".claude.json"), JSON.stringify({ ...cfg, hasCompletedOnboarding: true, theme: "dark" }));
+    const creds = path.join(os.homedir(), ".claude", ".credentials.json");
+    if (fs.existsSync(creds)) fs.copyFileSync(creds, path.join(claudeConfig, ".credentials.json"));
+    fs.chmodSync(claudeConfig, 0o700);
+  }
   const env = {
     ...process.env,
     PG_HOME: pgHome,
     CLAUDE_CONFIG_DIR: claudeConfig,
-    PG_CLAUDE_BIN: FAKE_CLAUDE,
+    PG_CLAUDE_BIN: opts.real ? (process.env.PG_SHOTS_CLAUDE ?? "claude") : FAKE_CLAUDE,
     PG_GH_BIN: FAKE_GH,
     FAKE_GH_URL: "https://github.com/acme/demo-app/pull/42",
     FAKE_CLAUDE_DELAY_MS: "50",
@@ -595,6 +642,8 @@ async function main() {
   } finally {
     await browser?.close().catch(() => {});
     await stopServer(server);
+    // Never leave a copy of the Claude credentials behind, even with --keep.
+    fs.rmSync(path.join(claudeConfig, ".credentials.json"), { force: true });
     if (opts.keep) log("kept", root);
     else fs.rmSync(root, { recursive: true, force: true });
   }

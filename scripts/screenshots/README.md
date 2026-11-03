@@ -47,10 +47,21 @@ the ones you want.
 | `<out-dir>`, `--out <dir>`, `PG_SHOTS_OUT` | Output directory (created if missing) |
 | `--scene a,b` | Only these scenes: `add-feature` (m2-*), `ship-feature` (m4-*, run-report), `test-fix` (m6-*) |
 | `--keep` | Keep the temp dir (demo repo, `PG_HOME`, worktrees) and print its path |
+| `--real-claude` | Only `m2-real-claude-replay.png`, with the real Claude Code (see below) |
 | `PG_SHOTS_CHROME` | Browser executable |
 | `PLAYWRIGHT_CORE` | Directory where `playwright-core` is installed |
+| `PG_SHOTS_CLAUDE` | Claude Code executable for `--real-claude` (default `claude`) |
 
 A full run takes about two minutes. On failure the script prints the server output and saves the page as
 `$TMPDIR/pg-shots-failure.png`.
 
-`m2-real-claude-replay.png` is not generated: it needs the real Claude Code.
+`m2-real-claude-replay.png` needs the real Claude Code, so it is opt-in:
+
+```bash
+PLAYWRIGHT_CORE=/tmp/pw node scripts/screenshots/capture.mjs /tmp/shots --real-claude
+```
+
+It runs a two-step graph ("Pong smoke": two one-line prompts, model `haiku`) with `claude` from `PATH` (or
+`PG_SHOTS_CLAUDE`), logged in as you. The temp `CLAUDE_CONFIG_DIR` gets a copy of `~/.claude.json` and
+`~/.claude/.credentials.json`; the credentials copy is deleted at the end, even with `--keep`. The cost is a
+fraction of a cent.
