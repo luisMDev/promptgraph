@@ -210,6 +210,8 @@ step, how long it took and how long it waited for you, what it changed, its cost
 and changes of each lane, the PR links, and where the run stopped or waited. It opens by itself when the
 run you are watching finishes.
 
+![The run report of a fan-out run that opened a pull request](docs/screenshots/run-report.png)
+
 Each step's changes are recorded separately: promptgraph snapshots the worktree when a step starts and
 when it finishes (hidden refs under `refs/promptgraph/`, never on your branches; kept 30 days). **View
 diff** in the inspector or the report shows what that step changed, with a switch to the whole lane.
