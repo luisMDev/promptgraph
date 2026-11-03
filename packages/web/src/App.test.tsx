@@ -68,7 +68,7 @@ describe("App (smoke)", () => {
     expect(await screen.findByText("Graph settings")).toBeTruthy();
   });
 
-  it("switches the left panel with the tabs and collapses it with the sidebar trigger", async () => {
+  it("switches the left panel with the tabs and collapses it from inside the sidebar", async () => {
     const { useRunStore } = await import("./store/run-store");
     const { useUiStore } = await import("./store/ui-store");
     await act(() => useRunStore.getState().selectRun(null));
@@ -87,22 +87,26 @@ describe("App (smoke)", () => {
 
     const sidebar = container.querySelector('[data-slot="sidebar"]');
     const panel = container.querySelector('[data-slot="sidebar-container"]');
-    const trigger = screen.getByRole("button", { name: "Toggle sidebar" });
+    const collapse = screen.getByRole("button", { name: "Collapse sidebar" });
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    expect(panel?.contains(collapse)).toBe(true);
     expect(panel?.hasAttribute("inert")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Expand sidebar" })).toBeNull();
 
-    await user.click(trigger);
+    await user.click(collapse);
     expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    // Collapsed off-canvas: out of the Tab order and the accessibility tree.
+    // Collapsed off-canvas: out of the Tab order and the accessibility tree; the canvas offers the expand button.
     expect(panel?.hasAttribute("inert")).toBe(true);
+    const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
 
-    await user.click(trigger);
+    await user.click(expand);
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+    expect(screen.queryByRole("button", { name: "Expand sidebar" })).toBeNull();
 
     // Asking for a panel (e.g. "Open run history…" in the run menu) re-expands a collapsed sidebar.
-    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
     expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
     act(() => useUiStore.getState().setLeftPanel("history"));
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");

@@ -27,9 +27,9 @@ export function LaneLegend() {
                 <span className="text-muted-foreground italic">not created yet</span>
               )}
               <span className="ml-auto flex shrink-0 items-center gap-1">
-                {e.setup === "running" && <span className="text-blue-300">setting up…</span>}
-                {e.setup === "failed" && <span className="text-red-300">setup failed</span>}
-                {e.lane?.pushed && <Badge className="h-auto rounded bg-indigo-500/20 px-1 py-0 text-[10px] font-normal text-indigo-200">pushed</Badge>}
+                {e.setup === "running" && <span className="text-blue-700">setting up…</span>}
+                {e.setup === "failed" && <span className="text-red-700">setup failed</span>}
+                {e.lane?.pushed && <Badge className="h-auto rounded bg-indigo-500/20 px-1 py-0 text-[10px] font-normal text-indigo-700">pushed</Badge>}
                 {e.lane && e.lane.status !== "active" && <span className="text-muted-foreground">{e.lane.status}</span>}
               </span>
             </div>

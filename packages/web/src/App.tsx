@@ -5,7 +5,8 @@ import { PromptDialog } from "./components/common/PromptDialog";
 import { Toasts } from "./components/common/Toasts";
 import { Icons } from "./components/common/icons";
 import { Button } from "./components/common/ui";
-import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider } from "./components/ui/sidebar";
+import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider, SidebarTrigger, useSidebar } from "./components/ui/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Header } from "./components/header/Header";
 import { RunHistory } from "./components/history/RunHistory";
@@ -46,7 +47,7 @@ export function App() {
   if (bootError) return <FullScreenMessage title="Cannot reach the promptgraph server" detail={bootError} />;
   if (!booted) return <FullScreenMessage title="Loading…" />;
 
-  // The sidebar provider wraps the whole shell so the header's SidebarTrigger can toggle the left panel.
+  // The sidebar provider wraps the whole shell: the sidebar collapses itself, and the canvas shows the expand button.
   return (
     <SidebarProvider
       open={sidebarOpen}
@@ -61,7 +62,8 @@ export function App() {
           always sits below the header and any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="relative flex min-w-0 flex-1 flex-col">
+          <SidebarExpandButton />
           <div className="min-h-0 flex-1">
             <CanvasArea />
           </div>
@@ -99,6 +101,25 @@ function DiffGate() {
   );
 }
 
+/** The sidebar trigger with a tooltip; aria-label names the action (collapse inside the sidebar, expand outside). */
+function SidebarToggle({ label, className }: { label: string; className?: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <SidebarTrigger aria-label={label} className={className} />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** While the sidebar is collapsed off-canvas, a small button at the top-left of the canvas brings it back. */
+function SidebarExpandButton() {
+  const { open } = useSidebar();
+  if (open) return null;
+  return <SidebarToggle label="Expand sidebar" className="absolute top-2 left-2 z-10 bg-card shadow-soft ring-1 ring-border" />;
+}
+
 function LeftSidebar() {
   const panel = useUiStore((s) => s.leftPanel);
   const runMode = useRunStore((s) => s.selectedRunId !== null);
@@ -114,8 +135,8 @@ function LeftSidebar() {
     <Sidebar collapsible="offcanvas" className="nokey absolute h-full">
       {/* Manual activation: arrowing across the tabs must not leave run mode; Enter/Space/click select. */}
       <Tabs value={shown} activationMode="manual" onValueChange={(v) => choose(v as LeftPanel)} className="min-h-0 flex-1 gap-0">
-        <SidebarHeader className="border-b">
-          <TabsList className="w-full">
+        <SidebarHeader className="flex-row items-center gap-1 border-b">
+          <TabsList className="min-w-0 flex-1">
             <TabsTrigger value="palette" className="text-xs">
               Nodes
             </TabsTrigger>
@@ -125,6 +146,7 @@ function LeftSidebar() {
               {`Runs${runs ? ` (${runs})` : ""}`}
             </TabsTrigger>
           </TabsList>
+          <SidebarToggle label="Collapse sidebar" />
         </SidebarHeader>
         <SidebarContent>
           <TabsContent value="palette" className="min-h-0">
@@ -151,8 +173,8 @@ function CanvasArea() {
     return (
       <Centered>
         <div className="max-w-lg space-y-2 text-center">
-          <Icons.alert className="mx-auto text-2xl text-red-400" />
-          <p className="text-sm font-medium text-red-300">This graph cannot be loaded</p>
+          <Icons.alert className="mx-auto text-2xl text-red-600" />
+          <p className="text-sm font-medium text-red-700">This graph cannot be loaded</p>
           <pre className="rounded-md bg-muted p-3 text-left text-xs whitespace-pre-wrap text-muted-foreground">{loadError}</pre>
           <p className="text-xs text-muted-foreground">Fix the JSON file in .promptgraph/graphs/ or delete it from the graph menu.</p>
         </div>

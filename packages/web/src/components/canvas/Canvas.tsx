@@ -165,12 +165,12 @@ function EditCanvas() {
         minZoom={0.2}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#27272a" />
+        <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#d6cdbf" />
         <CanvasControls manual={manual} />
         <AutoFit manual={manual} fitOnInit={fitOnMount} />
         <RevealRequestedNode measured={measured} />
         <WideEnoughForMinimap>
-          <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => (n.data.issues.errors.length ? "#ef4444" : "#52525b")} nodeStrokeWidth={0} maskColor="rgb(9 9 11 / 0.7)" />
+          <MiniMap<PgFlowNode> style={MINIMAP_STYLE} pannable zoomable nodeColor={(n) => (n.data.issues.errors.length ? "#ef4444" : "#a8a29e")} nodeStrokeWidth={0} maskColor="rgb(245 241 235 / 0.7)" />
         </WideEnoughForMinimap>
       </ReactFlow>
       {graph.nodes.length === 0 && <EmptyHint readOnly={readOnly} />}
@@ -238,7 +238,7 @@ function RunCanvas() {
       minZoom={0.2}
       proOptions={{ hideAttribution: true }}
     >
-      <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#27272a" />
+      <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="#d6cdbf" />
       <CanvasControls manual={manual} />
       <AutoFit manual={manual} fitOnInit />
       <WideEnoughForMinimap>
@@ -248,7 +248,7 @@ function RunCanvas() {
           zoomable
           nodeColor={(n) => NODE_STATUS_COLOR_HEX[n.data.nodeRun?.status ?? "pending"]}
           nodeStrokeWidth={0}
-          maskColor="rgb(9 9 11 / 0.7)"
+          maskColor="rgb(245 241 235 / 0.7)"
         />
       </WideEnoughForMinimap>
     </ReactFlow>
@@ -391,5 +391,5 @@ function EmptyHint({ readOnly }: { readOnly: boolean }) {
 }
 
 function CenteredMessage({ children, tone }: { children: ReactNode; tone?: "error" }) {
-  return <div className={`flex h-full items-center justify-center text-sm ${tone === "error" ? "text-red-300" : "text-muted-foreground"}`}>{children}</div>;
+  return <div className={`flex h-full items-center justify-center text-sm ${tone === "error" ? "text-red-700" : "text-muted-foreground"}`}>{children}</div>;
 }

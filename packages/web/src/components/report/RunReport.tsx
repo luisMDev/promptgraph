@@ -96,7 +96,7 @@ export function RunReport({ runId }: { runId: string }) {
 
         {error && (
           <Alert variant="destructive" className="border-red-500/30 bg-red-500/10">
-            <AlertDescription className="text-xs text-red-200!">Could not load the report: {error}</AlertDescription>
+            <AlertDescription className="text-xs text-red-700!">Could not load the report: {error}</AlertDescription>
           </Alert>
         )}
         {!report && !error && <p className="text-sm text-muted-foreground">Loading report…</p>}
@@ -109,7 +109,7 @@ export function RunReport({ runId }: { runId: string }) {
                 <ul className="space-y-1 text-sm">
                   {report.prs.map((pr) => (
                     <li key={pr.nodeRunId}>
-                      <a href={pr.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-blue-400 hover:underline">
+                      <a href={pr.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-blue-600 hover:underline">
                         <Icons.pr /> {prLabel(pr.url)} <Icons.externalLink className="text-[10px]" />
                       </a>
                       <span className="ml-2 text-xs text-muted-foreground">{pr.label}</span>
@@ -165,7 +165,7 @@ function Summary({ report }: { report: RunReportResponse }) {
       </Stat>
       {run.error && (
         <Alert variant="destructive" className="col-span-full border-red-500/30 bg-red-500/10">
-          <AlertDescription className="text-xs whitespace-pre-wrap text-red-200!">{run.error}</AlertDescription>
+          <AlertDescription className="text-xs whitespace-pre-wrap text-red-700!">{run.error}</AlertDescription>
         </Alert>
       )}
     </div>
@@ -184,11 +184,11 @@ function Stat({ label, hint, children }: { label: string; hint?: string; childre
 }
 
 const STALL_STYLE: Record<ReportStall["kind"], { label: string; className: string }> = {
-  failed: { label: "Failed", className: "bg-red-500/15 text-red-200" },
-  interrupted: { label: "Interrupted", className: "bg-orange-500/15 text-orange-200" },
+  failed: { label: "Failed", className: "bg-red-500/15 text-red-700" },
+  interrupted: { label: "Interrupted", className: "bg-orange-500/15 text-orange-700" },
   cancelled: { label: "Cancelled", className: "bg-muted text-foreground/85" },
-  waiting: { label: "Waiting for you", className: "bg-amber-500/15 text-amber-200" },
-  slow_wait: { label: "Long wait", className: "bg-sky-500/15 text-sky-200" },
+  waiting: { label: "Waiting for you", className: "bg-amber-500/15 text-amber-700" },
+  slow_wait: { label: "Long wait", className: "bg-sky-500/15 text-sky-700" },
 };
 
 function Stalls({ stalls, status, nodes, onShow }: { stalls: ReportStall[]; status: RunStatus; nodes: ReportNode[]; onShow: (nodeId: string) => void }) {
@@ -295,7 +295,7 @@ function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) 
       <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-foreground/85">{o?.usage ? formatCostUsd(o.usage.costUsd) : "—"}</td>
       <td className="max-w-80 px-3 py-2 text-foreground/85">
         {o?.prUrl && (
-          <a href={o.prUrl} target="_blank" rel="noreferrer" className="block text-blue-400 hover:underline">
+          <a href={o.prUrl} target="_blank" rel="noreferrer" className="block text-blue-600 hover:underline">
             {prLabel(o.prUrl)}
           </a>
         )}
@@ -307,8 +307,8 @@ function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) 
         {o?.noop && <span className="block text-muted-foreground">Nothing to commit</span>}
         {o?.approved !== undefined && <span className="block">{o.approved ? "Approved" : "Rejected"}{o.comment ? ` — ${o.comment}` : ""}</span>}
         {o?.port && <span className="block">Branch: {o.port}</span>}
-        {o?.exitCode !== undefined && o.exitCode !== 0 && <span className="block text-red-300">Exit code {o.exitCode ?? "killed"}</span>}
-        {nr.error && nr.status === "failed" && <span className="line-clamp-2 block text-red-300" title={nr.error}>{nr.error}</span>}
+        {o?.exitCode !== undefined && o.exitCode !== 0 && <span className="block text-red-700">Exit code {o.exitCode ?? "killed"}</span>}
+        {nr.error && nr.status === "failed" && <span className="line-clamp-2 block text-red-700" title={nr.error}>{nr.error}</span>}
         {!o?.sha && !o?.prUrl && o?.text && nr.status !== "failed" && <span className="line-clamp-2 block text-muted-foreground" title={o.text}>{o.text}</span>}
       </td>
     </tr>
@@ -328,7 +328,7 @@ function Lanes({ runId, lanes }: { runId: string; lanes: ReportLane[] }) {
                 <span className="min-w-0 flex-1 truncate font-mono text-foreground/90" title={lane.branch}>
                   {lane.branch}
                 </span>
-                {lane.pushed && <Badge className="h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] font-normal text-indigo-200">pushed</Badge>}
+                {lane.pushed && <Badge className="h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] font-normal text-indigo-700">pushed</Badge>}
                 <span className="text-[10px] text-muted-foreground">{lane.status}</span>
               </div>
               <div className="mt-2 flex items-center gap-2">
@@ -368,8 +368,8 @@ function Stats({ changes }: { changes: ChangeStats }) {
   if (changes.files === 0) return <span className="text-muted-foreground">No changes</span>;
   return (
     <span className="font-mono tabular-nums">
-      {changes.files} file{changes.files === 1 ? "" : "s"} <span className="text-green-400">+{changes.additions}</span>{" "}
-      <span className="text-red-400">−{changes.deletions}</span>
+      {changes.files} file{changes.files === 1 ? "" : "s"} <span className="text-green-600">+{changes.additions}</span>{" "}
+      <span className="text-red-600">−{changes.deletions}</span>
     </span>
   );
 }

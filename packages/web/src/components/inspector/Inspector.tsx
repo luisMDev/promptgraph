@@ -178,7 +178,7 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
     <>
       <Section title={edge.loop ? "Loop edge" : "Edge"} actions={<Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([], [edge.id])}>Delete</Button>}>
         <p className="text-sm text-foreground/85">
-          {label(edge.source)} <span className={errorPort ? "text-red-400" : "text-muted-foreground"}>({PORT_LABEL[edge.sourcePort]})</span> → {label(edge.target)}
+          {label(edge.source)} <span className={errorPort ? "text-red-600" : "text-muted-foreground"}>({PORT_LABEL[edge.sourcePort]})</span> → {label(edge.target)}
         </p>
         {(edgeIssues.errors.length > 0 || edgeIssues.warnings.length > 0) && <ValidationList validation={edgeIssues} />}
         {phase < 2 && <p className="text-[11px] text-muted-foreground">Edge conditions, error ports and loops need phase 2.</p>}
@@ -291,9 +291,9 @@ function RunOverview() {
           <span className="font-mono text-xs text-muted-foreground">#{run.shortId}</span>
           <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
         </div>
-        {run.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-200">{run.error}</pre>}
+        {run.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-700">{run.error}</pre>}
         {run.status === "paused" && (
-          <p className="text-xs text-amber-200/90">The run is paused: select a failed or interrupted node to retry or skip it, or cancel the run.</p>
+          <p className="text-xs text-amber-700/90">The run is paused: select a failed or interrupted node to retry or skip it, or cancel the run.</p>
         )}
         <p className="text-xs text-muted-foreground">Click a node to see its details and open its terminal.</p>
       </Section>

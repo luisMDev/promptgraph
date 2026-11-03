@@ -46,7 +46,7 @@ export function TerminalDrawer() {
     <div className="flex shrink-0 flex-col border-t bg-background" style={{ height: open ? height : undefined }}>
       {open && (
         <div
-          className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-blue-500/50"
+          className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-stone-400/60"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -90,7 +90,7 @@ export function TerminalDrawer() {
                   className="gap-1.5 pl-2.5 font-normal text-inherit hover:bg-transparent hover:text-inherit dark:hover:bg-transparent"
                   onClick={() => useUiStore.getState().setActiveTerminal(ptyId)}
                 >
-                  <span className={`size-1.5 rounded-full ${st?.phase === "live" ? "bg-green-500" : st?.phase === "error" ? "bg-red-500" : "bg-zinc-500"}`} />
+                  <span className={`size-1.5 rounded-full ${st?.phase === "live" ? "bg-green-500" : st?.phase === "error" ? "bg-red-500" : "bg-stone-400"}`} />
                   <span className="max-w-48 truncate">{meta[ptyId]?.title ?? ptyId}</span>
                 </Button>
                 <Tooltip>
@@ -133,10 +133,10 @@ function TabStatus({ state, nodeRunId, title }: { state: PtyState | undefined; n
   return (
     <div className="flex shrink-0 items-center gap-2 pl-2 text-[11px]">
       <GraceCountdown nodeRun={nodeRun} compact />
-      {state?.phase === "live" && <span className="text-green-400">Live — you can type</span>}
+      {state?.phase === "live" && <span className="text-green-600">Live — you can type</span>}
       {state?.phase === "replay" && <span className="text-muted-foreground">Read-only replay</span>}
       {state?.phase === "connecting" && <span className="text-muted-foreground">Connecting…</span>}
-      {state?.phase === "error" && <span className="text-red-400">{state.message}</span>}
+      {state?.phase === "error" && <span className="text-red-600">{state.message}</span>}
       {canReopen && nodeRunId && (
         <Button size="sm" onClick={() => void reopenSession(nodeRunId, title)} title="claude --resume in a new terminal (not part of the run)">
           Reopen session

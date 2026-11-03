@@ -68,7 +68,7 @@ export function SettingsMenu() {
                 promptgraph {repo.version} · phase {repo.phase}
               </div>
               {repo.warnings.map((w) => (
-                <div key={w} className="text-amber-400/90">
+                <div key={w} className="text-amber-600/90">
                   {w}
                 </div>
               ))}

@@ -10,11 +10,11 @@ import { Button } from "../common/ui";
 type Layout = "line-by-line" | "side-by-side";
 
 const STATUS_MARK: Record<DiffFile["status"], { mark: string; className: string }> = {
-  added: { mark: "A", className: "text-green-400" },
-  modified: { mark: "M", className: "text-amber-300" },
-  deleted: { mark: "D", className: "text-red-400" },
-  renamed: { mark: "R", className: "text-sky-300" },
-  copied: { mark: "C", className: "text-sky-300" },
+  added: { mark: "A", className: "text-green-600" },
+  modified: { mark: "M", className: "text-amber-700" },
+  deleted: { mark: "D", className: "text-red-600" },
+  renamed: { mark: "R", className: "text-sky-700" },
+  copied: { mark: "C", className: "text-sky-700" },
   other: { mark: "?", className: "text-muted-foreground" },
 };
 
@@ -26,7 +26,7 @@ export function DiffView({ diff, title, emptyText = "No changes in this lane." }
   const [layout, setLayout] = useState<Layout>("line-by-line");
   const bodyRef = useRef<HTMLDivElement>(null);
   const markup = useMemo(
-    () => (diff.patch ? diffHtml(diff.patch, { drawFileList: false, matching: "lines", outputFormat: layout, colorScheme: "dark" as ColorSchemeType }) : ""),
+    () => (diff.patch ? diffHtml(diff.patch, { drawFileList: false, matching: "lines", outputFormat: layout, colorScheme: "light" as ColorSchemeType }) : ""),
     [diff.patch, layout],
   );
   const additions = diff.files.reduce((n, f) => n + f.additions, 0);
@@ -52,8 +52,8 @@ export function DiffView({ diff, title, emptyText = "No changes in this lane." }
           )}
         </h3>
         <span className="text-xs text-muted-foreground">
-          {diff.files.length} file{diff.files.length === 1 ? "" : "s"} · <span className="text-green-400">+{additions}</span>{" "}
-          <span className="text-red-400">−{deletions}</span>
+          {diff.files.length} file{diff.files.length === 1 ? "" : "s"} · <span className="text-green-600">+{additions}</span>{" "}
+          <span className="text-red-600">−{deletions}</span>
         </span>
         {diff.patch && (
           <ToggleGroup
@@ -77,7 +77,7 @@ export function DiffView({ diff, title, emptyText = "No changes in this lane." }
       </div>
       {diff.truncated && (
         <Alert role="status" className="border-amber-500/30">
-          <AlertDescription className="text-xs text-amber-300">The diff is too large and was truncated.</AlertDescription>
+          <AlertDescription className="text-xs text-amber-700">The diff is too large and was truncated.</AlertDescription>
         </Alert>
       )}
       {diff.files.length === 0 ? (
@@ -97,7 +97,7 @@ export function DiffView({ diff, title, emptyText = "No changes in this lane." }
                   <span className="text-muted-foreground">binary</span>
                 ) : (
                   <span className="font-mono tabular-nums">
-                    <span className="text-green-400">+{f.additions}</span> <span className="text-red-400">−{f.deletions}</span>
+                    <span className="text-green-600">+{f.additions}</span> <span className="text-red-600">−{f.deletions}</span>
                   </span>
                 )}
               </Button>

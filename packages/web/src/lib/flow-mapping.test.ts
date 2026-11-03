@@ -81,7 +81,7 @@ describe("flow mapping (phase 2)", () => {
     const passed = { ...run, currentByNode: { ...run.currentByNode, fix: nodeRunOf({ id: "f2", nodeId: "fix", iteration: 2, status: "skipped" }) } };
     const after = toFlowEdges({ ...base, graph, validation: noIssues, run: passed }).find((e) => e.id === "loop")!;
     expect(after.data).toMatchObject({ runState: "dead", looped: true });
-    expect(after.style).toMatchObject({ stroke: "#a78bfa", opacity: 0.7 });
+    expect(after.style).toMatchObject({ stroke: "#8b5cf6", opacity: 0.7 });
   });
 
   it("highlights the selected edge (inline strokes override React Flow's selected colour)", () => {

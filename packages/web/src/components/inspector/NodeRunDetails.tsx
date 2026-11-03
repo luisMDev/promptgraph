@@ -85,16 +85,16 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
       <div className="flex items-center gap-2 text-sm">
         <StatusDot className={style.dot} />
         <span className={`font-medium ${style.text}`}>{style.label}</span>
-        {nodeRun.hold && <Badge className="h-4 rounded-sm bg-sky-900/60 px-1.5 text-[10px] text-sky-200">hold</Badge>}
+        {nodeRun.hold && <Badge className="h-4 rounded-sm bg-sky-100 px-1.5 text-[10px] text-sky-700">hold</Badge>}
       </div>
       <GraceCountdown nodeRun={nodeRun} />
-      {nodeRun.waitingReason && <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">{nodeRun.waitingReason.message}</p>}
+      {nodeRun.waitingReason && <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700">{nodeRun.waitingReason.message}</p>}
       {nodeRun.activity && isActiveNodeStatus(nodeRun.status) && <p className="truncate font-mono text-xs text-muted-foreground">{nodeRun.activity}</p>}
       <div className="space-y-1.5">
         {lane ? (
           <DetailRow label="Lane">
             <LaneBadge id={lane.id} index={lane.index} /> <span className="font-mono">{lane.branch}</span>
-            {lane.pushed && <Badge className="ml-1.5 h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] text-indigo-200">pushed</Badge>}
+            {lane.pushed && <Badge className="ml-1.5 h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] text-indigo-700">pushed</Badge>}
           </DetailRow>
         ) : (
           nodeRun.laneId && <DetailRow label="Lane">{nodeRun.laneId}</DetailRow>
@@ -123,7 +123,7 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
       {mergeShell && (
         <p className="text-[11px] text-muted-foreground">Resolve the conflicts in the merge shell (edit, then <span className="font-mono">git add</span>), then click Done.</p>
       )}
-      {nodeRun.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-200">{nodeRun.error}</pre>}
+      {nodeRun.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-700">{nodeRun.error}</pre>}
     </Section>
   );
 }
@@ -229,7 +229,7 @@ function OutputSection({ nodeRun, reasonShown }: { nodeRun: NodeRun; reasonShown
         {o.message && <DetailRow label="Message"><span className="whitespace-pre-wrap">{o.message}</span></DetailRow>}
         {o.prUrl && (
           <DetailRow label="PR">
-            <a href={o.prUrl} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">
+            <a href={o.prUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
               {o.prUrl}
             </a>
           </DetailRow>
@@ -329,7 +329,7 @@ function ConditionResult({ node, nodeRun }: { node: GraphNodeOf<"condition">; no
           {result === undefined ? (
             <span className="text-muted-foreground">{isActiveNodeStatus(nodeRun.status) ? "Evaluating…" : "Not evaluated"}</span>
           ) : (
-            <Badge variant="secondary" className={`h-auto rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-semibold ${result ? "bg-green-500/15 text-green-300" : ""}`}>
+            <Badge variant="secondary" className={`h-auto rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-semibold ${result ? "bg-green-500/15 text-green-700" : ""}`}>
               {result ? "true" : "false"}
             </Badge>
           )}

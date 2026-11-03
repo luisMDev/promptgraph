@@ -7,7 +7,7 @@ import { Button } from "../common/ui";
 /** Errors (block Run) and warnings (informational); clicking an issue selects its node/edge. */
 export function ValidationList({ validation }: { validation: ValidationResult }) {
   if (!validation.errors.length && !validation.warnings.length) {
-    return <p className="text-xs text-green-400/90">No problems found.</p>;
+    return <p className="text-xs text-green-600/90">No problems found.</p>;
   }
   return (
     <ul className="space-y-1">
@@ -32,7 +32,7 @@ function IssueRow({ issue, tone }: { issue: ValidationIssue; tone: "error" | "wa
         onClick={() => useEditorStore.getState().setSelection(issue.nodeId ? [issue.nodeId] : [], issue.edgeId ? [issue.edgeId] : [])}
         className={cn(
           "h-auto w-full items-start justify-start gap-2 rounded-md px-2 py-1.5 text-left text-xs font-normal whitespace-normal hover:bg-accent disabled:opacity-100",
-          tone === "error" ? "text-red-300 hover:text-red-300" : "text-amber-300 hover:text-amber-300",
+          tone === "error" ? "text-red-700 hover:text-red-700" : "text-amber-700 hover:text-amber-700",
         )}
       >
         <Icons.alert className="mt-0.5 shrink-0" />

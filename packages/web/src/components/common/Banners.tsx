@@ -59,7 +59,7 @@ function Banner({ tone, children, onDismiss }: { tone: "warning" | "info"; child
     <div
       className={cn(
         "flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-xs",
-        tone === "warning" ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-primary/20 bg-primary/5 text-blue-200",
+        tone === "warning" ? "border-amber-500/30 bg-amber-500/10 text-amber-700" : "border-border bg-card text-foreground",
       )}
     >
       {tone === "warning" && <Icons.alert className="shrink-0" />}

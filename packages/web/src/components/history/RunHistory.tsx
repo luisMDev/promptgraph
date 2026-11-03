@@ -61,7 +61,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         setExpanded(next);
       }}
       onClick={open}
-      className={`cursor-pointer rounded-md border px-2.5 py-2 text-xs ${selected ? "border-blue-500/60 bg-blue-500/10" : "hover:border-ring/40 hover:bg-accent/50"}`}
+      className={`cursor-pointer rounded-md border px-2.5 py-2 text-xs ${selected ? "border-primary/30 bg-primary/5" : "hover:border-ring/40 hover:bg-accent/50"}`}
     >
       <div className="flex items-center gap-2">
         <Button
@@ -79,7 +79,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
           <span className={`font-medium ${style.text}`}>{style.label}</span>
           <span className="font-mono text-muted-foreground">#{run.shortId}</span>
         </Button>
-        {attention > 0 && <Badge className="h-4 bg-amber-500/20 px-1.5 text-[10px] font-normal text-amber-300">{attention} waiting</Badge>}
+        {attention > 0 && <Badge className="h-4 bg-amber-500/20 px-1.5 text-[10px] font-normal text-amber-700">{attention} waiting</Badge>}
         <Tooltip>
           <TooltipTrigger asChild>
             <CollapsibleTrigger asChild>
@@ -104,7 +104,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         <span className="whitespace-nowrap tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
         <span className="ml-auto font-mono">{formatCostUsd(run.usage.costUsd)}</span>
       </div>
-      {run.error && <div className={`mt-1 line-clamp-2 ${run.status === "paused" ? "text-amber-300/90" : "text-red-300/90"}`}>{run.error}</div>}
+      {run.error && <div className={`mt-1 line-clamp-2 ${run.status === "paused" ? "text-amber-700/90" : "text-red-700/90"}`}>{run.error}</div>}
       <CollapsibleContent>
         <RunRowDetails runId={run.id} />
       </CollapsibleContent>
@@ -153,7 +153,7 @@ function RunRowDetails({ runId }: { runId: string }) {
     <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
       <Separator className="mb-1.5" />
       {info.prs.map((pr) => (
-        <a key={pr.nodeId} href={pr.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-400 hover:underline" title={`${pr.label}: ${pr.url}`}>
+        <a key={pr.nodeId} href={pr.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-600 hover:underline" title={`${pr.label}: ${pr.url}`}>
           <Icons.pr className="shrink-0" />
           <span className="truncate">{prLabel(pr.url)}</span>
           <Icons.externalLink className="shrink-0 text-[10px]" />
@@ -166,7 +166,7 @@ function RunRowDetails({ runId }: { runId: string }) {
           <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/85" title={lane.branch}>
             {lane.branch}
           </span>
-          {lane.pushed && <Badge className="h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] font-normal text-indigo-200">pushed</Badge>}
+          {lane.pushed && <Badge className="h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] font-normal text-indigo-700">pushed</Badge>}
           <span className="text-[10px] text-muted-foreground">{lane.status}</span>
         </div>
       ))}

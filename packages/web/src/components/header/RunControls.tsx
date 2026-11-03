@@ -61,7 +61,7 @@ export function RunControls() {
           size="sm"
           onClick={() => useEditorStore.getState().setSelection([], [])}
           title="Show problems in the inspector"
-          className={`gap-1 text-xs ${errors ? "bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:text-red-200 dark:hover:bg-red-500/20" : "bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:text-amber-200 dark:hover:bg-amber-500/20"}`}
+          className={`gap-1 text-xs ${errors ? "bg-red-500/10 text-red-700 hover:bg-red-500/20 hover:text-red-700 dark:hover:bg-red-500/20" : "bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 hover:text-amber-700 dark:hover:bg-amber-500/20"}`}
         >
           <Icons.alert />
           {errors > 0 && `${errors} error${errors > 1 ? "s" : ""}`}
@@ -190,7 +190,7 @@ export function PendingApprovals() {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={label} className={`relative ${count ? "text-violet-300" : "text-muted-foreground"}`}>
+            <Button variant="ghost" size="icon" aria-label={label} className={`relative ${count ? "text-violet-700" : "text-muted-foreground"}`}>
               <Icons.bell />
               {count > 0 && (
                 <Badge className="absolute -top-0.5 -right-0.5 h-4 min-w-4 bg-violet-500 px-1 text-[10px] font-semibold text-white">{count}</Badge>

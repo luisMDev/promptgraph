@@ -8,7 +8,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { createGraph, deleteGraph, selectGraph, uniqueGraphId } from "../../store/app-actions";
 import { useAppStore } from "../../store/app-store";
@@ -19,7 +18,7 @@ import { Button } from "../common/ui";
 
 type Dialog = "create" | "rename" | "delete" | null;
 
-/** Graph dropdown with create / rename / delete. */
+/** Graph dropdown: switch graphs, plus create / rename / delete in its footer. */
 export function GraphSelector() {
   const graphs = useAppStore((s) => s.graphs);
   const graph = useEditorStore((s) => s.graph);
@@ -30,12 +29,10 @@ export function GraphSelector() {
   // dialog then traps focus without racing the menu's focus restore, and gives focus back to the trigger.
   const pendingDialog = useRef<Dialog>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const renameRef = useRef<HTMLButtonElement>(null);
-  // Modal has no Radix DialogTrigger to return focus to, so give it back to whatever opened the dialog.
+  // Modal has no Radix DialogTrigger to return focus to, so give it back to the menu trigger that opened it.
   const closeDialog = () => {
-    const opener = dialog === "rename" ? renameRef : triggerRef;
     setDialog(null);
-    setTimeout(() => opener.current?.focus(), 0);
+    setTimeout(() => triggerRef.current?.focus(), 0);
   };
   const openFromMenu = (d: Exclude<Dialog, null>) => {
     pendingDialog.current = d;
@@ -43,7 +40,7 @@ export function GraphSelector() {
   const currentId = useEditorStore((s) => s.graphId);
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button ref={triggerRef} variant="ghost" className="max-w-72 gap-2 px-2.5 font-medium ring-1 ring-border ring-inset">
@@ -75,10 +72,10 @@ export function GraphSelector() {
               {graphs.map((g) => (
                 <DropdownMenuRadioItem key={g.id} value={g.id} className="gap-2 py-2 pr-8 pl-3">
                   <span className="min-w-0 flex-1">
-                    <span className={cn("block truncate", g.loadError ? "text-red-300" : "text-foreground")}>{g.name ?? g.id}</span>
+                    <span className={cn("block truncate", g.loadError ? "text-red-700" : "text-foreground")}>{g.name ?? g.id}</span>
                     <span className="block truncate font-mono text-[11px] text-muted-foreground">{g.loadError ? g.loadError : `${g.id}.json`}</span>
                   </span>
-                  {g.loadError && <Icons.alert className="shrink-0 text-red-400" />}
+                  {g.loadError && <Icons.alert className="shrink-0 text-red-600" />}
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
@@ -88,6 +85,11 @@ export function GraphSelector() {
             <DropdownMenuItem className="flex-1 justify-center text-xs font-medium" onSelect={() => openFromMenu("create")}>
               <Icons.plus /> New graph
             </DropdownMenuItem>
+            {graph && (
+              <DropdownMenuItem disabled={readOnly} className="flex-1 justify-center text-xs font-medium" onSelect={() => openFromMenu("rename")}>
+                <Icons.pencil /> Rename
+              </DropdownMenuItem>
+            )}
             {(graph || loadError) && (
               <DropdownMenuItem
                 variant="destructive"
@@ -101,24 +103,6 @@ export function GraphSelector() {
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-      {graph && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={renameRef}
-              variant="ghost"
-              size="icon"
-              aria-label="Rename graph"
-              disabled={readOnly}
-              onClick={() => setDialog("rename")}
-              className="text-muted-foreground"
-            >
-              <Icons.pencil />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Rename graph</TooltipContent>
-        </Tooltip>
-      )}
       {dialog === "create" && (
         <PromptDialog
           title="New graph"

@@ -125,28 +125,29 @@ describe("GraphSelector", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("Delete is disabled while the graph is read-only", async () => {
+  it("Rename and Delete are disabled while the graph is read-only", async () => {
     useEditorStore.setState({ activeRunId: "r1" });
     const user = userEvent.setup();
     render(<GraphSelector />);
-    expect((screen.getByRole("button", { name: "Rename graph" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(trigger());
+    expect((await screen.findByRole("menuitem", { name: /Rename/ })).getAttribute("aria-disabled")).toBe("true");
     const del = await screen.findByRole("menuitem", { name: /Delete/ });
     expect(del.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("the rename button opens the rename dialog prefilled with the graph name", async () => {
+  it("the Rename menu item opens the rename dialog prefilled with the graph name", async () => {
     const rename = vi.spyOn(useEditorStore.getState(), "rename").mockImplementation(() => undefined);
     const user = userEvent.setup();
     render(<GraphSelector />);
-    await user.click(screen.getByRole("button", { name: "Rename graph" }));
+    await user.click(trigger());
+    await user.click(await screen.findByRole("menuitem", { name: /Rename/ }));
     // The field's hint is part of the label, hence the prefix match.
     const input = await screen.findByRole("textbox", { name: /^Name/ });
     expect((input as HTMLInputElement).value).toBe("Graph 1");
     await user.clear(input);
     await user.type(input, "Renamed{Enter}");
     expect(rename).toHaveBeenCalledWith("Renamed");
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename graph" })));
+    await waitFor(() => expect(document.activeElement).toBe(trigger()));
     rename.mockRestore();
   });
 });

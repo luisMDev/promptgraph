@@ -7,20 +7,27 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Node status colours (§8.2), shared by canvas nodes, badges and history. */
+/*
+ * Theme: warm light, after the README banner and the logo (docs/assets): cream canvas, off-white cards with soft
+ * shadows, near-black ink and primary, rounded corners. Node status colours (§8.2), shared by canvas nodes,
+ * badges and history.
+ */
 @theme {
-  --color-status-pending: var(--color-zinc-400);
-  --color-status-ready: var(--color-zinc-500);
+  --color-status-pending: var(--color-stone-400);
+  --color-status-ready: var(--color-stone-500);
   --color-status-running: var(--color-blue-500);
-  --color-status-idle: var(--color-sky-300);
+  --color-status-idle: var(--color-sky-400);
   --color-status-waiting-input: var(--color-amber-500);
   --color-status-waiting-approval: var(--color-violet-500);
   --color-status-succeeded: var(--color-green-500);
   --color-status-failed: var(--color-red-500);
-  --color-status-skipped: var(--color-zinc-300);
-  --color-status-cancelled: var(--color-zinc-600);
-  --color-status-interrupted: var(--color-zinc-600);
+  --color-status-skipped: var(--color-stone-300);
+  --color-status-cancelled: var(--color-stone-500);
+  --color-status-interrupted: var(--color-stone-500);
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  /* Soft, diffuse elevation like the logo tile on the banner. */
+  --shadow-soft: 0 1px 2px rgb(41 37 36 / 0.05), 0 6px 18px -6px rgb(41 37 36 / 0.1);
+  --shadow-lifted: 0 2px 4px rgb(41 37 36 / 0.05), 0 14px 32px -10px rgb(41 37 36 / 0.18);
 }
 
 html,
@@ -30,9 +37,7 @@ body,
 }
 
 body {
-  background: var(--color-zinc-950);
-  color: var(--color-zinc-200);
-  color-scheme: dark;
+  color-scheme: light;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -46,8 +51,8 @@ body {
 .pg-running {
   border-color: transparent;
   background:
-    linear-gradient(#0d1a36, #0d1a36) padding-box,
-    conic-gradient(from var(--pg-angle), #1e3a8a, #60a5fa 20%, #1e3a8a 40%, #1e3a8a) border-box;
+    linear-gradient(#eff6ff, #eff6ff) padding-box,
+    conic-gradient(from var(--pg-angle), #bfdbfe, #2563eb 20%, #bfdbfe 40%, #bfdbfe) border-box;
   animation: pg-spin 2.2s linear infinite;
 }
 
@@ -72,17 +77,26 @@ body {
   }
 }
 
-/* React Flow dark tweaks. */
+/* React Flow on the cream canvas. */
 .react-flow {
-  --xy-background-color: var(--color-zinc-950);
-  --xy-minimap-background-color: var(--color-zinc-900);
-  --xy-controls-button-background-color: var(--color-zinc-900);
-  --xy-controls-button-background-color-hover: var(--color-zinc-800);
-  --xy-controls-button-color: var(--color-zinc-300);
-  --xy-controls-button-border-color: var(--color-zinc-800);
-  --xy-edge-stroke: var(--color-zinc-500);
-  --xy-edge-stroke-selected: var(--color-blue-400);
-  --xy-connectionline-stroke: var(--color-blue-400);
+  --xy-background-color: var(--background);
+  --xy-minimap-background-color: var(--card);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--muted);
+  --xy-controls-button-color: var(--muted-foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-edge-stroke: var(--color-stone-400);
+  --xy-edge-stroke-selected: var(--foreground);
+  --xy-connectionline-stroke: var(--foreground);
+}
+
+.react-flow__controls,
+.react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
 }
 
 .react-flow__node-pg {
@@ -93,11 +107,11 @@ body {
 
 /* Edge label pill (loop / condition). */
 .react-flow__edge-textbg {
-  fill: var(--color-zinc-900);
+  fill: var(--card);
 }
 
 .react-flow__edge-text {
-  fill: var(--color-zinc-300);
+  fill: var(--muted-foreground);
   font-size: 10px;
 }
 
@@ -112,7 +126,7 @@ body {
   height: auto;
 }
 
-/* diff2html in the dark approval dialog. */
+/* diff2html in the approval dialog. */
 .pg-diff .d2h-wrapper {
   font-size: 12px;
 }
@@ -140,7 +154,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-zinc-700);
+  background: var(--color-stone-300);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: padding-box;
@@ -194,73 +208,39 @@ body {
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  /* promptgraph accent: keep the blue primary (blue-600) the UI used before shadcn. */
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.623 0.214 259.815);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Warm neutrals sampled from the banner: cream background, off-white surfaces, near-black ink (#0a0a0a). */
+  --background: oklch(0.965 0.007 75);
+  --foreground: oklch(0.18 0.006 60);
+  --card: oklch(0.993 0.003 80);
+  --card-foreground: oklch(0.18 0.006 60);
+  --popover: oklch(0.993 0.003 80);
+  --popover-foreground: oklch(0.18 0.006 60);
+  --primary: oklch(0.18 0.006 60);
+  --primary-foreground: oklch(0.985 0.004 80);
+  --secondary: oklch(0.938 0.009 75);
+  --secondary-foreground: oklch(0.24 0.008 60);
+  --muted: oklch(0.938 0.009 75);
+  --muted-foreground: oklch(0.52 0.014 62);
+  --accent: oklch(0.93 0.011 72);
+  --accent-foreground: oklch(0.2 0.006 60);
+  --destructive: oklch(0.577 0.215 27.325);
+  --border: oklch(0.9 0.011 75);
+  --input: oklch(0.875 0.013 72);
+  --ring: oklch(0.62 0.014 62);
+  --chart-1: oklch(0.87 0.01 70);
+  --chart-2: oklch(0.556 0.012 62);
+  --chart-3: oklch(0.439 0.01 60);
+  --chart-4: oklch(0.371 0.008 60);
+  --chart-5: oklch(0.269 0.006 60);
+  --radius: 0.75rem;
+  --sidebar: oklch(0.978 0.006 78);
+  --sidebar-foreground: oklch(0.18 0.006 60);
+  --sidebar-primary: oklch(0.18 0.006 60);
+  --sidebar-primary-foreground: oklch(0.985 0.004 80);
+  --sidebar-accent: oklch(0.935 0.01 74);
+  --sidebar-accent-foreground: oklch(0.18 0.006 60);
+  --sidebar-border: oklch(0.9 0.011 75);
+  --sidebar-ring: oklch(0.62 0.014 62);
 }
 
 @layer base {

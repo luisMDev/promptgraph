@@ -14,7 +14,7 @@ import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import type { PgFlowNode } from "./types";
 
-const handleBase = "!size-2.5 !border-2 !border-zinc-950";
+const handleBase = "!size-2.5 !border-2 !border-card";
 
 /** Canvas card for every node type: label, type icon, config preview; in run mode status, timing, activity, lane, usage. */
 export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgFlowNode>) {
@@ -34,18 +34,18 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
       ? "border-red-500 bg-card ring-1 ring-red-500/60"
       : hasWarnings
         ? "border-amber-500/80 bg-card"
-        : "border-zinc-700 bg-card";
+        : "border-border bg-card";
 
   return (
     <div
       title={tooltip}
-      className={`relative w-60 rounded-lg border-2 text-left shadow-lg shadow-black/30 transition-colors ${border} ${selected ? "outline-2 outline-offset-2 outline-blue-400" : ""}`}
+      className={`relative w-60 rounded-xl border-2 text-left shadow-soft transition-[color,background-color,border-color,box-shadow] hover:shadow-lifted ${border} ${selected ? "outline-2 outline-offset-2 outline-primary" : ""}`}
     >
       {lane && <span className="absolute top-2 bottom-2 -left-0.5 w-1 rounded-full" style={{ background: laneSwatch(lane.index).hex }} />}
-      <Handle type="target" position={Position.Left} id="in" className={`${handleBase} !bg-zinc-400`} isConnectable={!runMode} />
+      <Handle type="target" position={Position.Left} id="in" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />
 
       <div className={`flex items-center gap-2 px-3 pt-2.5 ${portPad}`}>
-        <span className={`flex size-6 shrink-0 items-center justify-center rounded-md text-[13px] ${meta.accent}`}>
+        <span className={`flex size-6 shrink-0 items-center justify-center rounded-lg text-[13px] ${meta.accent}`}>
           <NodeTypeIcon type={node.type} />
         </span>
         <div className="min-w-0 flex-1">
@@ -53,7 +53,7 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
           <div className="text-[10px] tracking-wide text-muted-foreground uppercase">{meta.title}</div>
         </div>
         {(hasErrors || hasWarnings) && (
-          <Icons.alert className={`shrink-0 text-sm ${hasErrors ? "text-red-400" : "text-amber-400"}`} />
+          <Icons.alert className={`shrink-0 text-sm ${hasErrors ? "text-red-600" : "text-amber-600"}`} />
         )}
       </div>
 
@@ -65,11 +65,11 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
 
       {node.type === "condition" ? (
         <>
-          <PortHandle id="true" top="28px" color="!bg-green-500" label="true" labelColor="text-green-400" runMode={runMode} taken={nodeRun?.output?.port === "true"} />
-          <PortHandle id="false" top="52px" color="!bg-zinc-400" label="false" labelColor="text-zinc-400" runMode={runMode} taken={nodeRun?.output?.port === "false"} />
+          <PortHandle id="true" top="28px" color="!bg-green-500" label="true" labelColor="text-green-600" runMode={runMode} taken={nodeRun?.output?.port === "true"} />
+          <PortHandle id="false" top="52px" color="!bg-stone-400" label="false" labelColor="text-stone-500" runMode={runMode} taken={nodeRun?.output?.port === "false"} />
         </>
       ) : (
-        <Handle type="source" position={Position.Right} id="out" className={`${handleBase} !bg-zinc-300`} isConnectable={!runMode} />
+        <Handle type="source" position={Position.Right} id="out" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />
       )}
       {phase === 2 && (
         <Handle
@@ -77,7 +77,7 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
           position={Position.Bottom}
           id="error"
           title="Error port: drag to connect a node that runs when this one fails"
-          className={`${handleBase} !bg-red-500 ${nodeRun?.status === "failed" ? "!size-3.5 ring-2 ring-red-300/60" : ""}`}
+          className={`${handleBase} !bg-red-500 ${nodeRun?.status === "failed" ? "!size-3.5 ring-2 ring-red-400/60" : ""}`}
           isConnectable={!runMode}
         />
       )}
@@ -98,11 +98,11 @@ function PortHandle({ id, top, color, label, labelColor, runMode, taken }: { id:
         id={id}
         style={{ top }}
         title={`${label} branch: runs the target when the condition is ${label}`}
-        className={`${handleBase} ${color} ${taken ? "!size-3.5 ring-2 ring-white/60" : ""}`}
+        className={`${handleBase} ${color} ${taken ? "!size-3.5 ring-2 ring-stone-900/25" : ""}`}
         isConnectable={!runMode}
       />
       <span
-        className={`pointer-events-none absolute right-2.5 -translate-y-1/2 rounded bg-zinc-950/80 px-1 text-[9px] font-semibold tracking-wide uppercase ${labelColor} ${runMode && !taken ? "opacity-50" : ""}`}
+        className={`pointer-events-none absolute right-2.5 -translate-y-1/2 rounded bg-card/90 px-1 text-[9px] font-semibold tracking-wide uppercase ${labelColor} ${runMode && !taken ? "opacity-50" : ""}`}
         style={{ top }}
       >
         {label}
@@ -127,12 +127,12 @@ function MergeOrder({ inputs }: { inputs: string[] }) {
 }
 
 const NOTE_TONE: Record<NoteTone, string> = {
-  amber: "bg-amber-500/15 text-amber-200",
-  violet: "bg-violet-500/20 text-violet-200",
-  green: "bg-green-500/10 text-green-300",
-  red: "bg-red-500/15 text-red-200",
-  blue: "bg-blue-500/15 text-blue-200",
-  zinc: "bg-zinc-700/40 text-zinc-200",
+  amber: "bg-amber-500/15 text-amber-700",
+  violet: "bg-violet-500/20 text-violet-700",
+  green: "bg-green-500/10 text-green-700",
+  red: "bg-red-500/15 text-red-700",
+  blue: "bg-blue-500/15 text-blue-700",
+  zinc: "bg-stone-200/70 text-stone-800",
 };
 
 function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun | null; lane: NodeLane | null }) {
@@ -148,7 +148,7 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
   const prUrl = nodeRun?.output?.prUrl;
 
   return (
-    <div className="space-y-1.5 border-t border-white/5 px-3 py-2">
+    <div className="space-y-1.5 border-t border-border px-3 py-2">
       <div className="flex items-center gap-2 text-[11px]">
         <span className={`inline-block size-2 rounded-full ${style.dot} ${live ? "animate-pulse" : ""}`} />
         <span className={`font-medium ${style.text}`}>{style.label}</span>
@@ -162,7 +162,7 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
           href={prUrl}
           target="_blank"
           rel="noreferrer"
-          className="nodrag nopan block truncate text-[11px] text-blue-400 hover:underline"
+          className="nodrag nopan block truncate text-[11px] text-blue-600 hover:underline"
           title={prUrl}
           onClick={(e) => e.stopPropagation()}
         >
@@ -170,23 +170,23 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
         </a>
       )}
       {/* A rejection's comment is already in the card note. */}
-      {nodeRun?.error && status === "failed" && nodeRun.output?.approved !== false && <div className="line-clamp-2 text-[11px] text-red-300" title={nodeRun.error}>{nodeRun.error}</div>}
+      {nodeRun?.error && status === "failed" && nodeRun.output?.approved !== false && <div className="line-clamp-2 text-[11px] text-red-700" title={nodeRun.error}>{nodeRun.error}</div>}
       <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
         {lane && <LaneBadge id={lane.id} index={lane.index} title={`Lane ${lane.id}`} />}
         {nodeRun && nodeRun.iteration > 0 && (
-          <Pill className="bg-violet-900/50 text-violet-200" title="Loop iteration (previous iterations are in the inspector)">
+          <Pill className="bg-violet-100 text-violet-700" title="Loop iteration (previous iterations are in the inspector)">
             iter {nodeRun.iteration + 1}
           </Pill>
         )}
         {nodeRun && nodeRun.attempt > 0 && <Pill className="bg-secondary text-secondary-foreground">try {nodeRun.attempt + 1}</Pill>}
-        {nodeRun?.hold && <Pill className="bg-sky-900/60 text-sky-200">hold</Pill>}
+        {nodeRun?.hold && <Pill className="bg-sky-100 text-sky-700">hold</Pill>}
         {nodeRun?.laneSetup === "running" && (
-          <Pill className="animate-pulse bg-blue-900/60 text-blue-200" title="Workspace setup is running in the new worktree">
+          <Pill className="animate-pulse bg-blue-100 text-blue-700" title="Workspace setup is running in the new worktree">
             setting up…
           </Pill>
         )}
         {nodeRun?.laneSetup === "failed" && (
-          <Pill className="bg-red-900/60 text-red-200" title="Workspace setup failed; see its log in the inspector">
+          <Pill className="bg-red-100 text-red-700" title="Workspace setup failed; see its log in the inspector">
             setup failed
           </Pill>
         )}

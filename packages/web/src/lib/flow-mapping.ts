@@ -64,10 +64,10 @@ export function toFlowNodes(input: FlowInput): PgFlowNode[] {
 }
 
 const RUN_EDGE_STYLE: Record<EdgeRunState, { stroke: string; animated: boolean; opacity?: number }> = {
-  idle: { stroke: "#52525b", animated: false },
-  flowing: { stroke: "#60a5fa", animated: true },
-  activated: { stroke: "#22c55e", animated: false },
-  dead: { stroke: "#3f3f46", animated: false, opacity: 0.5 },
+  idle: { stroke: "#a8a29e", animated: false },
+  flowing: { stroke: "#2563eb", animated: true },
+  activated: { stroke: "#16a34a", animated: false },
+  dead: { stroke: "#c8c1b8", animated: false, opacity: 0.5 },
 };
 
 /** Edit-mode pill: non-default conditions and loop bounds. Error-port edges are already red. */
@@ -93,7 +93,7 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
   const halo = "drop-shadow(0 0 3px rgb(96 165 250))";
   return input.graph.edges.map((edge) => {
     const failure = edgeWhen(edge) === "failure";
-    let stroke = failure ? "#ef4444" : edge.loop ? "#a78bfa" : "#71717a";
+    let stroke = failure ? "#ef4444" : edge.loop ? "#8b5cf6" : "#a8a29e";
     let animated = false;
     let opacity: number | undefined;
     let state: EdgeRunState | undefined;
@@ -104,7 +104,7 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
       ({ stroke, animated, opacity } = RUN_EDGE_STYLE[state]);
       // A loop that did loop back stays violet even when its source was skipped in the last pass.
       looped = !!edge.loop && state === "dead" && (loop?.iteration ?? 0) > 0 && !loop?.exhausted;
-      if (looped) ({ stroke, opacity } = { stroke: "#a78bfa", opacity: 0.7 });
+      if (looped) ({ stroke, opacity } = { stroke: "#8b5cf6", opacity: 0.7 });
     } else if (errorEdges.has(edge.id)) {
       stroke = "#ef4444";
     } else if (warnEdges.has(edge.id)) {

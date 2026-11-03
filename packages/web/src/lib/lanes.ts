@@ -14,14 +14,14 @@ export interface LaneSwatch {
 
 /** Literal class names so Tailwind picks them up. Ordered for contrast between neighbours. */
 const LANE_PALETTE: readonly LaneSwatch[] = [
-  { badge: "bg-cyan-500/20 text-cyan-300 ring-cyan-500/40", hex: "#06b6d4" },
-  { badge: "bg-fuchsia-500/20 text-fuchsia-300 ring-fuchsia-500/40", hex: "#d946ef" },
-  { badge: "bg-lime-500/20 text-lime-300 ring-lime-500/40", hex: "#84cc16" },
-  { badge: "bg-orange-500/20 text-orange-300 ring-orange-500/40", hex: "#f97316" },
-  { badge: "bg-teal-500/20 text-teal-300 ring-teal-500/40", hex: "#14b8a6" },
-  { badge: "bg-pink-500/20 text-pink-300 ring-pink-500/40", hex: "#ec4899" },
-  { badge: "bg-indigo-500/20 text-indigo-300 ring-indigo-500/40", hex: "#6366f1" },
-  { badge: "bg-yellow-500/20 text-yellow-300 ring-yellow-500/40", hex: "#eab308" },
+  { badge: "bg-cyan-500/20 text-cyan-700 ring-cyan-500/40", hex: "#06b6d4" },
+  { badge: "bg-fuchsia-500/20 text-fuchsia-700 ring-fuchsia-500/40", hex: "#d946ef" },
+  { badge: "bg-lime-500/20 text-lime-700 ring-lime-500/40", hex: "#84cc16" },
+  { badge: "bg-orange-500/20 text-orange-700 ring-orange-500/40", hex: "#f97316" },
+  { badge: "bg-teal-500/20 text-teal-700 ring-teal-500/40", hex: "#14b8a6" },
+  { badge: "bg-pink-500/20 text-pink-700 ring-pink-500/40", hex: "#ec4899" },
+  { badge: "bg-indigo-500/20 text-indigo-700 ring-indigo-500/40", hex: "#6366f1" },
+  { badge: "bg-yellow-500/20 text-yellow-700 ring-yellow-500/40", hex: "#eab308" },
 ];
 
 /** Swatch of the lane with this index (Lane.index / PlannedLane.index); wraps around the palette. */

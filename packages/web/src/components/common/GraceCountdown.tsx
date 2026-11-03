@@ -22,7 +22,7 @@ export function GraceCountdown({ nodeRun, compact = false }: { nodeRun: NodeRun 
   return (
     <div
       role="status"
-      className={`flex items-center gap-2 rounded bg-sky-500/15 text-sky-100 ${compact ? "px-1.5 py-1 text-[11px]" : "px-2 py-1 text-xs"}`}
+      className={`flex items-center gap-2 rounded bg-sky-500/15 text-sky-700 ${compact ? "px-1.5 py-1 text-[11px]" : "px-2 py-1 text-xs"}`}
       title="Claude finished its turn. The step succeeds when the countdown ends; typing in the terminal or Hold keeps it open."
     >
       <span className="min-w-0 flex-1 truncate">

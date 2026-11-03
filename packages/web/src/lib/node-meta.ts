@@ -11,14 +11,14 @@ export interface NodeTypeMeta {
 }
 
 const META: Record<NodeType, Omit<NodeTypeMeta, "phase2">> = {
-  prompt: { title: "Prompt", description: "Claude Code session with a prompt", accent: "bg-orange-500/15 text-orange-300" },
-  command: { title: "Command", description: "Run a slash command or skill", accent: "bg-amber-500/15 text-amber-300" },
-  shell: { title: "Shell", description: "Run a shell command in the lane", accent: "bg-emerald-500/15 text-emerald-300" },
-  commit: { title: "Commit", description: "Commit the lane's changes", accent: "bg-sky-500/15 text-sky-300" },
-  pr: { title: "Pull request", description: "Push and open a PR (gated)", accent: "bg-indigo-500/15 text-indigo-300" },
-  approval: { title: "Approval", description: "Pause until you approve", accent: "bg-violet-500/15 text-violet-300" },
-  merge: { title: "Merge", description: "Merge parallel lanes", accent: "bg-pink-500/15 text-pink-300" },
-  condition: { title: "Condition", description: "Branch on exit code, regex or judge", accent: "bg-teal-500/15 text-teal-300" },
+  prompt: { title: "Prompt", description: "Claude Code session with a prompt", accent: "bg-orange-500/15 text-orange-700" },
+  command: { title: "Command", description: "Run a slash command or skill", accent: "bg-amber-500/15 text-amber-700" },
+  shell: { title: "Shell", description: "Run a shell command in the lane", accent: "bg-emerald-500/15 text-emerald-700" },
+  commit: { title: "Commit", description: "Commit the lane's changes", accent: "bg-sky-500/15 text-sky-700" },
+  pr: { title: "Pull request", description: "Push and open a PR (gated)", accent: "bg-indigo-500/15 text-indigo-700" },
+  approval: { title: "Approval", description: "Pause until you approve", accent: "bg-violet-500/15 text-violet-700" },
+  merge: { title: "Merge", description: "Merge parallel lanes", accent: "bg-pink-500/15 text-pink-700" },
+  condition: { title: "Condition", description: "Branch on exit code, regex or judge", accent: "bg-teal-500/15 text-teal-700" },
 };
 
 export const NODE_TYPE_META = Object.fromEntries(
