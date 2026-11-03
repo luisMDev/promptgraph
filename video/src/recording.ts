@@ -6,6 +6,17 @@ export interface Recording {
   height: number;
   frames: { file: string; t: number }[];
   markers: Record<"editor" | "run" | "fanout" | "terminal" | "review-waiting" | "approval" | "pr" | "report" | "end", number>;
+  /** Seconds at which the pointer clicked. */
+  clicks: number[];
+  /** Regions to spotlight, as fractions of the frame. */
+  boxes: Partial<Record<"lanes" | "terminal", Box>>;
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 export const recording = manifest as Recording;

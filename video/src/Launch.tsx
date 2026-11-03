@@ -1,22 +1,16 @@
 import type { CSSProperties, ReactNode } from "react";
-import { AbsoluteFill, Easing, Img, interpolate, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
-import { frameAt, recording } from "./recording";
+import { AbsoluteFill, Audio, Img, interpolate, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
+import { type Box, frameAt, recording } from "./recording";
 
 export const FPS = 30;
 const W = 1920;
-/** The app window: the 1920x1080 footage scaled to 0.8, below the caption band. */
-const WIN = { w: 1536, h: 864, x: (W - 1536) / 2, y: 182 };
+/** The app window: the whole 1920x1080 footage scaled to 0.85 (never cropped), below the caption band. */
+const WIN = { w: 1632, h: 918, x: (W - 1632) / 2, y: 150 };
 const FONT = "Geist, ui-sans-serif, system-ui, sans-serif";
 const MONO = "'Geist Mono', ui-monospace, monospace";
 const INK = "#f4f4f5";
 const DIM = "#8b8b94";
 
-/** A point of the footage to zoom into (fractions of the window) and how much. */
-interface Zoom {
-  x: number;
-  y: number;
-  scale: number;
-}
 
 interface ClipShot {
   /** Footage span (seconds, from the recording markers). */
@@ -26,7 +20,8 @@ interface ClipShot {
   seconds: number;
   title: string;
   subtitle: string;
-  zoom?: Zoom;
+  /** A region (from the recording) to spotlight: the rest of the window dims, nothing is cropped. */
+  focus?: keyof typeof recording.boxes;
 }
 
 const m = recording.markers;
@@ -40,23 +35,22 @@ const SHOTS: ClipShot[] = [
     seconds: Math.min(4.2, m.run + 0.6 - m.editor),
     title: "Draw your workflow.",
     subtitle: "Prompts, slash commands, shell steps, approvals and PRs.",
-    zoom: { x: 0.45, y: 0.6, scale: 1.06 },
   },
   {
     from: m.run + 0.4,
     to: m.fanout + 2.2,
     seconds: 4.6,
     title: "Hit run.",
+    focus: "lanes",
     subtitle: "Independent steps fan out, each in its own git worktree.",
-    zoom: { x: 0.33, y: 0.5, scale: 1.32 },
   },
   {
     from: m.terminal - 0.5,
     to: Math.min(m.terminal + 6, m["review-waiting"] - 1),
     seconds: 5,
     title: "Every step is a real Claude Code session.",
+    focus: "terminal",
     subtitle: "Watch it work, or jump in and type.",
-    zoom: { x: 0, y: 0.95, scale: 1.35 },
   },
   {
     from: Math.min(m.terminal + 6, m["review-waiting"] - 1),
@@ -71,7 +65,6 @@ const SHOTS: ClipShot[] = [
     seconds: 6.6,
     title: "Nothing ships without you.",
     subtitle: "Review the exact diff. Approve the pull request.",
-    zoom: { x: 0.5, y: 0.5, scale: 1.12 },
   },
   {
     from: m.report - 0.2,
@@ -79,7 +72,6 @@ const SHOTS: ClipShot[] = [
     seconds: Math.min(4.6, m.end - m.report + 0.2),
     title: "Know exactly what happened.",
     subtitle: "Every step's result, diff, timing and cost.",
-    zoom: { x: 0.4, y: 0.25, scale: 1.12 },
   },
 ];
 
@@ -88,14 +80,28 @@ const shotFrames = SHOTS.map((s) => f(s.seconds));
 const CLIPS_FRAMES = shotFrames.reduce((a, b) => a + b, 0);
 export const DURATION = f(INTRO_S) + CLIPS_FRAMES + f(OUTRO_S);
 
-export function Launch() {
-  const clipsStart = f(INTRO_S);
-  let at = clipsStart;
-  const starts = shotFrames.map((d) => {
+const CLIPS_START = f(INTRO_S);
+const STARTS = (() => {
+  let at = CLIPS_START;
+  return shotFrames.map((d) => {
     const s = at;
     at += d;
     return s;
   });
+})();
+
+/** Output frame showing the footage at recording time `t`, if a shot covers it. */
+function frameOfRecording(t: number): number | null {
+  for (let i = 0; i < SHOTS.length; i++) {
+    const s = SHOTS[i]!;
+    if (t >= s.from && t < s.to) return STARTS[i]! + Math.round(((t - s.from) / (s.to - s.from)) * shotFrames[i]!);
+  }
+  return null;
+}
+
+export function Launch() {
+  const clipsStart = CLIPS_START;
+  const starts = STARTS;
   return (
     <AbsoluteFill style={{ backgroundColor: "#0a0a0b", fontFamily: FONT, color: INK }}>
       <Backdrop />
@@ -113,6 +119,7 @@ export function Launch() {
       <Sequence from={clipsStart + CLIPS_FRAMES - 6} name="Outro">
         <Outro />
       </Sequence>
+      <Soundtrack />
     </AbsoluteFill>
   );
 }
@@ -145,12 +152,11 @@ function AppWindow({ starts }: { starts: number[] }) {
   const enter = spring({ frame, fps, config: { damping: 200 }, durationInFrames: 22 });
   const exit = interpolate(frame, [CLIPS_FRAMES - 10, CLIPS_FRAMES], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
 
-  // Zoom in during the first third of the shot, hold, and back out over its last frames.
-  const z = shot.zoom;
-  const zin = interpolate(local, [0, Math.min(24, len * 0.35)], [0, 1], { extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) });
-  const zout = interpolate(local, [len - 12, len], [1, 0], { extrapolateLeft: "clamp", easing: Easing.inOut(Easing.cubic) });
-  const amount = z ? Math.min(zin, zout) : 0;
-  const scale = 1 + ((z?.scale ?? 1) - 1) * amount;
+  const focus = shot.focus ? recording.boxes[shot.focus] : undefined;
+  const spot = Math.min(
+    interpolate(local, [8, 20], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+    interpolate(local, [len - 10, len], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+  );
 
   return (
     <div
@@ -168,18 +174,31 @@ function AppWindow({ starts }: { starts: number[] }) {
         transform: `translateY(${(1 - enter) * 60}px) scale(${0.96 + 0.04 * enter})`,
       }}
     >
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          transformOrigin: `${(z?.x ?? 0.5) * 100}% ${(z?.y ?? 0.5) * 100}%`,
-          transform: `scale(${scale})`,
-        }}
-      >
-        <Img src={staticFile(`recording/${frameAt(t)}`)} style={{ width: "100%", height: "100%", display: "block" }} />
-      </div>
+      <Img src={staticFile(`recording/${frameAt(t)}`)} style={{ width: "100%", height: "100%", display: "block" }} />
+      {focus && <Spotlight box={focus} amount={spot} />}
       {speed > 1.6 && <SpeedChip speed={speed} />}
     </div>
+  );
+}
+
+/** Dims the window around `box` and outlines it; the footage stays whole. */
+function Spotlight({ box, amount }: { box: Box; amount: number }) {
+  const pad = 10;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: box.x * WIN.w - pad,
+        top: box.y * WIN.h - pad,
+        width: box.w * WIN.w + pad * 2,
+        height: box.h * WIN.h + pad * 2,
+        borderRadius: 16,
+        opacity: amount,
+        border: "2px solid rgb(255 255 255 / 0.85)",
+        boxShadow: "0 0 0 4000px rgb(5 5 6 / 0.55), 0 0 40px rgb(255 255 255 / 0.25)",
+        pointerEvents: "none",
+      }}
+    />
   );
 }
 
@@ -214,9 +233,9 @@ function Caption({ title, subtitle }: { title: string; subtitle: string }) {
   const out = interpolate(frame, [durationInFrames - 7, durationInFrames], [1, 0], { extrapolateLeft: "clamp" });
   const line = (p: number): CSSProperties => ({ opacity: p * out, transform: `translateY(${(1 - p) * 18}px)` });
   return (
-    <div style={{ position: "absolute", top: 46, left: 0, right: 0, textAlign: "center" }}>
-      <div style={{ fontSize: 58, fontWeight: 500, letterSpacing: "-0.035em", lineHeight: 1.05, ...line(inT) }}>{title}</div>
-      <div style={{ marginTop: 10, fontSize: 30, color: DIM, letterSpacing: "-0.01em", ...line(inS) }}>{subtitle}</div>
+    <div style={{ position: "absolute", top: 26, left: 0, right: 0, textAlign: "center" }}>
+      <div style={{ fontSize: 54, fontWeight: 500, letterSpacing: "-0.035em", lineHeight: 1.05, ...line(inT) }}>{title}</div>
+      <div style={{ marginTop: 8, fontSize: 28, color: DIM, letterSpacing: "-0.01em", ...line(inS) }}>{subtitle}</div>
     </div>
   );
 }
@@ -304,5 +323,36 @@ function Outro() {
         </Reveal>
       </AbsoluteFill>
     </AbsoluteFill>
+  );
+}
+
+// ------------------------------------------------------------------------------------------------ sound
+
+/** Music bed (fades in and out), a whoosh on every cut, the pointer's clicks and an accent on the outro. */
+function Soundtrack() {
+  const outro = CLIPS_START + CLIPS_FRAMES - 6;
+  const clickFrames = recording.clicks.map(frameOfRecording).filter((x): x is number => x !== null);
+  return (
+    <>
+      <Audio
+        src={staticFile("audio/music.wav")}
+        volume={(fr) =>
+          interpolate(fr, [0, 12, DURATION - 40, DURATION - 2], [0, 0.75, 0.75, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
+        }
+      />
+      {[...STARTS, outro].map((at, i) => (
+        <Sequence key={`whoosh-${i}`} from={Math.max(0, at - 8)} durationInFrames={24} name="whoosh">
+          <Audio src={staticFile("audio/whoosh.wav")} volume={0.32} />
+        </Sequence>
+      ))}
+      {clickFrames.map((at, i) => (
+        <Sequence key={`click-${i}`} from={at} durationInFrames={6} name="click">
+          <Audio src={staticFile("audio/click.wav")} volume={0.45} />
+        </Sequence>
+      ))}
+      <Sequence from={outro + 4} durationInFrames={66} name="impact">
+        <Audio src={staticFile("audio/impact.wav")} volume={0.55} />
+      </Sequence>
+    </>
   );
 }

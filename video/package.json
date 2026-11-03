@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "record": "node scripts/record.mjs",
-    "studio": "remotion studio src/index.ts",
-    "render": "remotion render src/index.ts launch out/promptgraph-launch.mp4 --codec h264 --crf 18 --pixel-format yuv420p",
+    "audio": "node scripts/make-audio.mjs",
+    "studio": "node scripts/make-audio.mjs && remotion studio src/index.ts",
+    "render": "node scripts/make-audio.mjs && remotion render src/index.ts launch out/promptgraph-launch.mp4 --codec h264 --crf 18 --pixel-format yuv420p --audio-codec aac",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

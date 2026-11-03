@@ -196,6 +196,19 @@ async function main() {
     });
     await cdp.send("Page.startScreencast", { format: "jpeg", quality: 92, maxWidth: 1920, maxHeight: 1080, everyNthFrame: 1 });
     const markers = {};
+    /** Pointer clicks (for the click sounds) and boxes of the regions the video spotlights. */
+    const clicks = [];
+    const boxes = {};
+    /** Records the CSS-pixel box of `locators` (their union) under `name`, as fractions of the viewport. */
+    async function saveBox(name, ...locators) {
+      const bs = (await Promise.all(locators.map((l) => l.boundingBox()))).filter(Boolean);
+      if (!bs.length) return;
+      const x = Math.min(...bs.map((b) => b.x));
+      const y = Math.min(...bs.map((b) => b.y));
+      const r = Math.max(...bs.map((b) => b.x + b.width));
+      const btm = Math.max(...bs.map((b) => b.y + b.height));
+      boxes[name] = { x: x / VIEWPORT.width, y: y / VIEWPORT.height, w: (r - x) / VIEWPORT.width, h: (btm - y) / VIEWPORT.height };
+    }
     const mark = (name) => {
       markers[name] = Date.now() / 1000;
       log("marker", name);
@@ -234,6 +247,7 @@ async function main() {
         await glide(t.x, t.y, 220);
       }
       await sleep(120);
+      clicks.push(Date.now() / 1000);
       await page.mouse.down();
       await sleep(90);
       await page.mouse.up();
@@ -281,12 +295,15 @@ async function main() {
       return ["impl", "tests", "docs"].every((id) => currentNodeRun(d, id)?.status === "running");
     }, RUN_TIMEOUT_MS, 200);
     mark("fanout");
+    await saveBox("lanes", node("impl"), node("tests"), node("docs"));
     await sleep(400);
 
     // "Update docs" reads, then edits: the longest lane, so its live session is still working on screen.
     await clickOn(node("docs"), { dy: 0.35 });
     await page.locator(".xterm").first().waitFor();
     mark("terminal");
+    await sleep(600); // The drawer opens and the canvas refits.
+    await saveBox("terminal", page.locator(".pg-terminal").first(), page.getByText("Live — you can type").first());
     await sleep(1000);
     await glide(VIEWPORT.width * 0.45, VIEWPORT.height * 0.8, 600);
 
@@ -351,6 +368,8 @@ async function main() {
       claude: fakeClaude ? "fake" : "real (haiku)",
       frames: frames.map((f) => ({ file: f.file, t: Number((f.t - t0).toFixed(3)) })),
       markers: Object.fromEntries(Object.entries(markers).map(([k, v]) => [k, Number((v - t0).toFixed(3))])),
+      clicks: clicks.map((c) => Number((c - t0).toFixed(3))),
+      boxes,
     };
     fs.writeFileSync(path.join(OUT, "manifest.json"), `${JSON.stringify(manifest, null, 1)}\n`);
     log(`${frames.length} frames, ${manifest.frames.at(-1)?.t.toFixed(1)}s`, manifest.markers);
