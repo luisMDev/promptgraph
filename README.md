@@ -69,6 +69,40 @@ Press **Ctrl-C** to stop. Running Claude sessions are asked to exit (up to 5 sec
 are marked **interrupted**. When you start promptgraph again, the run is shown as paused: retry or
 skip the interrupted steps to continue.
 
+## Use it from Claude Code (MCP server and plugin)
+
+promptgraph includes an MCP server, so Claude Code can design graphs, run them and supervise them
+for you: "split this refactor into parallel steps and run it", "add a test-fix loop to the release
+graph", "what happened in the last run?".
+
+```bash
+promptgraph mcp          # MCP server on stdio (Claude Code starts it; you do not run it by hand)
+```
+
+The easiest way to set it up is the **plugin** in this repository. It registers the MCP server and
+adds three skills: `design-graph`, `run-graph` and `review-run`.
+
+```text
+/plugin marketplace add /path/to/promptgraph
+/plugin install promptgraph@promptgraph
+```
+
+The plugin runs `promptgraph mcp`, so `promptgraph` must be on your `PATH` (see
+[Install and build](#install-and-build)). Otherwise set `PROMPTGRAPH_BIN` to
+`/path/to/promptgraph/packages/server/dist/cli/index.js`. Without the plugin, you can register the
+server by hand: `claude mcp add promptgraph -- promptgraph mcp`.
+
+How it works:
+
+- The MCP server talks to the promptgraph server of the repository Claude Code runs in. It finds the
+  server's port and token in `~/.promptgraph/servers/`. If no server is running, Claude can start one
+  in the background (`start_server`, no browser). That server keeps running after the session ends;
+  stop it with `kill <pid>` (`server_status` shows the pid).
+- Claude can save and validate graphs, start and cancel runs, wait for them, read outputs, diffs and
+  reports, and mark steps done, retried or skipped.
+- **Approvals stay with you.** Claude can show you what an approval or PR step asks for, but only you
+  approve or reject it, in the UI. `open_ui` opens the canvas already signed in.
+
 ## A quick tour
 
 ![The graph editor with the node palette and the inspector](docs/screenshots/m6-editor.png)
@@ -208,6 +242,8 @@ conditions are counted too. The cost is an estimate from public per-model prices
 | `~/.promptgraph/worktrees/` | Lane worktrees |
 | `~/.promptgraph/settings.json` | App settings (notifications) |
 | `~/.promptgraph/locks/` | One pid file per repository with a running promptgraph |
+| `~/.promptgraph/servers/` | Port and session token of each running server, for the MCP server (mode 0600) |
+| `~/.promptgraph/logs/` | Output of servers started in the background by the MCP server |
 | `~/.promptgraph/bin/` | The `pg-hook` helper that Claude Code's hooks call |
 
 `~/.promptgraph` is created readable by you only (mode 0700), because it holds prompts, outputs and
@@ -260,6 +296,7 @@ The repository is a pnpm workspace:
 - `packages/shared`: graph schema, validation, topology, API and WebSocket types
 - `packages/server`: CLI, HTTP/WS server, execution engine, runners, git worktrees, SQLite store
 - `packages/web`: React UI (React Flow canvas, xterm.js terminals)
+- `plugins/promptgraph`: the Claude Code plugin (MCP registration and skills); the MCP server itself is `packages/server/src/mcp`
 
 ### Tests
 

@@ -102,6 +102,8 @@ promptgraph [repo-dir] [--port 4777] [--no-open]
 
 One server instance manages **one repository**.
 
+`promptgraph mcp` runs the MCP server for Claude Code instead (§19.2).
+
 ---
 
 ## 5. Core concepts
@@ -536,7 +538,7 @@ A page that answers "what happened while I was away". It replaces the editor vie
 ## 14. Security
 
 - Bind to `127.0.0.1` only; reject requests whose `Host`/`Origin` is not localhost (DNS-rebinding protection).
-- Random per-start token required by REST, WS and hook endpoints.
+- Random per-start token required by REST, WS and hook endpoints. Local clients (the MCP server, §19) read it from the server-info record, a mode-0600 file under `~/.promptgraph`, the same trust boundary as the state DB.
 - No `bypassPermissions` by default; nothing is pushed without an approval gate.
 - Shell nodes run arbitrary commands by design: graph files are trusted like any script in the repo. The UI shows a warning when opening a graph modified outside the app since the last run (hash comparison).
 
@@ -646,3 +648,47 @@ In the test-fix loop the `shell → condition` edge is `always` (the editor's de
 2. Desktop notifications (`Notification` → OS toast via `notify-send`/WSL) when a node needs input — in M2 or later?
 3. Per-node cost/token display: the transcript contains usage; worth showing from M2?
 4. Should `merge` support an octopus merge of N lanes in one step, or always sequential pairwise merges? (Proposal: sequential, in canvas order, so conflicts are resolved one branch at a time.)
+
+---
+
+## 19. MCP server and Claude Code plugin
+
+Claude Code can design, run and supervise graphs itself: `promptgraph mcp` is an MCP server (stdio) that drives a running promptgraph server through its REST API (§12.1), and a Claude Code plugin installs it together with skills that teach the workflow. The MCP server is a client like the web UI. It never touches the engine, the state DB or graph files directly, so every rule enforced by the server (validation, the write guard during runs, approvals) applies unchanged.
+
+```
+Claude Code ──stdio──► promptgraph mcp ──REST + Bearer token──► promptgraph server (127.0.0.1) ◄── browser UI
+                           │ reads ~/.promptgraph/servers/<repo-key>.json
+```
+
+### 19.1 Server discovery
+
+Once listening, the server writes `~/.promptgraph/servers/<repo-key>.json` (`ServerInfo`: pid, repo path, port, token, version; mode 0600; atomic) and removes it on shutdown. `<repo-key>` is the hash also used by the instance lock. A record whose pid is dead is stale and ignored. The MCP server re-reads the record on every tool call, so a restarted server (new port and token) is picked up without restarting Claude Code. The token never appears in tool results: `open_ui` opens the browser with it, and returns the URL only if no browser could be opened.
+
+### 19.2 `promptgraph mcp`
+
+- Started by Claude Code with the project directory as `cwd`; the repository is its git top level (`PROMPTGRAPH_REPO` or a tool's `repo` argument override it).
+- stdout carries only the protocol. When the client disconnects (stdin ends), nothing keeps the process alive but calls in flight: they answer, then it exits.
+- `start_server` spawns `promptgraph <repo> --no-open --port 0` **detached**, with output appended to `~/.promptgraph/logs/server-<repo-key>.log`, and waits up to 20 s for its record. The server outlives the Claude session on purpose, because runs take longer than one conversation. It stops like any server (Ctrl-C in a terminal, or `kill <pid>`).
+
+### 19.3 Tools
+
+| Group | Tools |
+|---|---|
+| Server | `server_status`, `start_server`, `open_ui` |
+| Graphs | `graph_reference` (markdown guide or JSON Schema), `list_graphs`, `get_graph`, `save_graph`, `validate_graph`, `delete_graph`, `list_commands` |
+| Runs | `start_run`, `list_runs`, `get_run`, `wait_for_run`, `get_node_output`, `node_action` (done, fail, retry, skip, hold, release), `get_diff`, `get_run_report`, `cancel_run`, `resume_run`, `cleanup_run` |
+| Approvals | `list_pending`, `get_approval` (read-only) |
+
+- `save_graph` accepts a draft: edge `id`s and node `position`s may be omitted. Missing ids are derived from the endpoints. Missing positions come from a layered layout: the column is the longest path from a root over non-loop edges, and nodes are centred vertically. The draft is then parsed with `GraphSchema`, saved through `PUT /api/graphs/:id`, and validated. The validation result is returned so Claude can fix errors.
+- Run tools return compact views: the latest attempt of each (node, iteration), outputs truncated, a `next` hint, and `attention` (the nodeRunIds of steps that need the user). `get_node_output` returns the full output.
+- `wait_for_run` polls `GET /api/runs/:id` until the run is final or paused, or (by default) a step needs the user (`idle`, `waiting_input`, `waiting_approval`), or the timeout passes (at most 600 s; Claude calls it again).
+- **Approvals are not exposed.** Approving or rejecting an `approval` or `pr` gate stays a human action in the UI (invariant: nothing leaves the machine without approval). An agent must not approve its own pull request. `get_approval` and `get_diff` let Claude summarise what the user is asked to approve.
+- Destructive tools (`delete_graph`, `cancel_run`, `cleanup_run`) carry `destructiveHint`, and the skills ask the user before calling them.
+
+### 19.4 Plugin
+
+`plugins/promptgraph/` is a Claude Code plugin, listed by the repository's `.claude-plugin/marketplace.json`:
+
+- `.mcp.json` registers the server as `${PROMPTGRAPH_BIN:-promptgraph} mcp`. `promptgraph` must be on `PATH`, or `PROMPTGRAPH_BIN` must point to `packages/server/dist/cli/index.js`.
+- Skills: `design-graph` (turn a task into a graph: decomposition, lanes, merge, checks, loops, prompts that work on their own; `references/patterns.md` holds complete graphs, validated by a test), `run-graph` (confirm, start, supervise, handle each attention state, report), `review-run` (explain a run from its report and suggest changes to the graph).
+
