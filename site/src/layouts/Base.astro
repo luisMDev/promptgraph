@@ -8,6 +8,9 @@ interface Props {
   noindex?: boolean;
 }
 
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
+
 const { title, description, jsonLd = [], noindex = false } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -23,8 +26,8 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     <meta name="robots" content={noindex ? 'noindex' : 'index, follow, max-image-preview:large'} />
-    <meta name="theme-color" content="#fcf4f0" />
-    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#0a0a0b" />
+    <meta name="color-scheme" content="dark" />
 
     <link rel="icon" type="image/svg+xml" href={`${base}/favicon.svg`} />
     <link rel="apple-touch-icon" href={`${base}/apple-touch-icon.png`} />
@@ -55,22 +58,24 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
 
 <style is:global>
   :root {
-    --bg: #fcf4f0;
-    --bg-soft: #f5ece6;
-    --surface: #fffdfa;
-    --ink: #0a0a0a;
-    --ink-2: #3d3a36;
-    --muted: #6b665f;
-    --line: #e9dfd7;
-    --blue: #2563eb;
-    --green: #16a34a;
-    --amber: #d97706;
-    --violet: #7c3aed;
+    --bg: #0a0a0b;
+    --bg-2: #111113;
+    --surface: #141416;
+    --surface-2: #1a1a1d;
+    --ink: #f4f4f5;
+    --ink-2: #a1a1aa;
+    --muted: #71717a;
+    --line: #232327;
+    --line-2: #2e2e33;
+    --blue: #60a5fa;
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --violet: #a78bfa;
+    --pink: #f472b6;
     --radius: 14px;
-    --max: 1160px;
-    --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-      sans-serif;
-    --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    --max: 1180px;
+    --font: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
   *,
@@ -82,6 +87,7 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
   html {
     scroll-behavior: smooth;
     -webkit-text-size-adjust: 100%;
+    background: var(--bg);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -101,9 +107,14 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
     background: var(--bg);
     color: var(--ink);
     font-family: var(--font);
-    font-size: 17px;
+    font-size: 16px;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: rgb(255 255 255 / 0.18);
   }
 
   img {
@@ -117,65 +128,72 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
   }
 
   code,
-  pre {
+  pre,
+  kbd {
     font-family: var(--mono);
   }
 
   h1,
   h2,
   h3 {
-    line-height: 1.15;
-    letter-spacing: -0.02em;
     margin: 0;
+    font-weight: 450;
+    letter-spacing: -0.035em;
+    line-height: 1.05;
+  }
+
+  /* Two-tone headings: the second part is dimmed, as in "Draw it. Run it." */
+  .dim {
+    color: var(--muted);
   }
 
   .container {
-    width: min(100% - 40px, var(--max));
+    width: min(100% - 48px, var(--max));
     margin-inline: auto;
   }
 
-  .eyebrow {
+  .label {
     display: inline-block;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
     color: var(--muted);
-    margin-bottom: 14px;
+    margin-bottom: 18px;
   }
 
   .btn {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 12px 20px;
-    border-radius: 10px;
-    font-weight: 600;
-    font-size: 16px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-weight: 500;
+    font-size: 15px;
     text-decoration: none;
     border: 1px solid transparent;
     transition:
-      transform 0.15s ease,
-      background 0.15s ease;
-  }
-
-  .btn:hover {
-    transform: translateY(-1px);
+      background 0.15s ease,
+      border-color 0.15s ease;
   }
 
   .btn-primary {
-    background: var(--ink);
-    color: #fff;
+    background: #fff;
+    color: #0a0a0b;
   }
 
   .btn-primary:hover {
-    background: #262626;
+    background: #e4e4e7;
   }
 
   .btn-ghost {
-    background: var(--surface);
-    border-color: var(--line);
+    background: transparent;
+    border-color: var(--line-2);
     color: var(--ink);
+  }
+
+  .btn-ghost:hover {
+    border-color: #4a4a50;
+    background: rgb(255 255 255 / 0.03);
   }
 
   :focus-visible {
@@ -192,5 +210,20 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     border: 0;
+  }
+
+  .sr-only:focus {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    width: auto;
+    height: auto;
+    padding: 8px 14px;
+    margin: 0;
+    clip: auto;
+    z-index: 100;
+    background: #fff;
+    color: #000;
+    border-radius: 8px;
   }
 </style>

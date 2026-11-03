@@ -7,5 +7,7 @@ export default defineConfig({
   site: 'https://luismdev.github.io',
   base: '/promptgraph',
   trailingSlash: 'always',
+  // The HTML compressor drops the whitespace before inline tags that start a new line.
+  compressHTML: false,
   integrations: [sitemap()],
 });
