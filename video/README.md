@@ -33,8 +33,13 @@ is all generated, so there is nothing to license. `studio` and `render` run it f
 
 ```bash
 pnpm --filter @promptgraph/video studio    # preview and tweak in the browser
-pnpm --filter @promptgraph/video render    # out/promptgraph-launch.mp4
+pnpm --filter @promptgraph/video render             # out/promptgraph-launch.mp4 (16:9, 1920x1080)
+pnpm --filter @promptgraph/video render:vertical    # out/promptgraph-launch-vertical.mp4 (9:16, 1080x1920)
 ```
+
+The vertical cut (`launch-vertical`) is the same composition with the portrait layout: caption on top, the
+whole screen in the middle (never cropped), and under it a magnified card of the region that matters in each
+shot (the lanes, the live terminal, the diff, the report), so the text reads on a phone.
 
 `src/Launch.tsx` holds the storyboard: an intro card, six captioned shots cut from the recording markers
 (sped-up spans show a "▶▶ N×" chip; a spotlight dims the window around the lanes and the terminal, the

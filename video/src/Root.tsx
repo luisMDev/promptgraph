@@ -7,5 +7,18 @@ loadFont({ family: "Geist", url: staticFile("fonts/geist.woff2"), weight: "100 9
 loadFont({ family: "Geist Mono", url: staticFile("fonts/geist-mono.woff2"), weight: "100 900" });
 
 export function Root() {
-  return <Composition id="launch" component={Launch} durationInFrames={DURATION} fps={FPS} width={1920} height={1080} />;
+  return (
+    <>
+      <Composition id="launch" component={Launch} durationInFrames={DURATION} fps={FPS} width={1920} height={1080} />
+      <Composition
+        id="launch-vertical"
+        component={Launch}
+        defaultProps={{ orientation: "portrait" as const }}
+        durationInFrames={DURATION}
+        fps={FPS}
+        width={1080}
+        height={1920}
+      />
+    </>
+  );
 }

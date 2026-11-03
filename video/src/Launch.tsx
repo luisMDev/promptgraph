@@ -1,11 +1,43 @@
-import type { CSSProperties, ReactNode } from "react";
+import { type CSSProperties, createContext, type ReactNode, useContext } from "react";
 import { AbsoluteFill, Audio, Img, interpolate, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import { type Box, frameAt, recording } from "./recording";
 
 export const FPS = 30;
-const W = 1920;
-/** The app window: the whole 1920x1080 footage scaled to 0.85 (never cropped), below the caption band. */
-const WIN = { w: 1632, h: 918, x: (W - 1632) / 2, y: 150 };
+/** Size of the recorded frames. */
+const SRC = { w: 1920, h: 1080 };
+
+export type Orientation = "landscape" | "portrait";
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface Layout {
+  portrait: boolean;
+  /** The app window: always the whole footage, scaled (never cropped). */
+  win: Rect;
+  caption: { top: number; title: number; subtitle: number; width: number };
+  /** Portrait only: the area under the window where the magnified detail of each shot goes. */
+  detail?: Rect;
+}
+
+const LAYOUTS: Record<Orientation, Layout> = {
+  // 1920x1080: the window at 0.85, below the caption band.
+  landscape: { portrait: false, win: { w: 1632, h: 918, x: 144, y: 150 }, caption: { top: 26, title: 54, subtitle: 28, width: 1800 } },
+  // 1080x1920: caption on top, the whole window, then a magnified detail of the region that matters.
+  portrait: {
+    portrait: true,
+    win: { w: 1000, h: 563, x: 40, y: 340 },
+    caption: { top: 120, title: 64, subtitle: 34, width: 960 },
+    detail: { x: 40, y: 950, w: 1000, h: 790 },
+  },
+};
+
+const LayoutContext = createContext<Layout>(LAYOUTS.landscape);
+const useLayout = () => useContext(LayoutContext);
 const FONT = "Geist, ui-sans-serif, system-ui, sans-serif";
 const MONO = "'Geist Mono', ui-monospace, monospace";
 const INK = "#f4f4f5";
@@ -22,6 +54,16 @@ interface ClipShot {
   subtitle: string;
   /** A region (from the recording) to spotlight: the rest of the window dims, nothing is cropped. */
   focus?: keyof typeof recording.boxes;
+  /** Portrait: the region shown magnified under the window (fractions of the frame). */
+  detail: Box;
+}
+
+/** Grows a box by `dx`/`dy` on each side (fractions), clamped to the frame. */
+function grow(b: Box | undefined, dx: number, dy: number, fallback: Box): Box {
+  if (!b) return fallback;
+  const x = Math.max(0, b.x - dx);
+  const y = Math.max(0, b.y - dy);
+  return { x, y, w: Math.min(1 - x, b.w + 2 * dx), h: Math.min(1 - y, b.h + 2 * dy) };
 }
 
 const m = recording.markers;
@@ -35,6 +77,7 @@ const SHOTS: ClipShot[] = [
     seconds: Math.min(4.2, m.run + 0.6 - m.editor),
     title: "Draw your workflow.",
     subtitle: "Prompts, slash commands, shell steps, approvals and PRs.",
+    detail: { x: 0.18, y: 0.3, w: 0.5, h: 0.48 },
   },
   {
     from: m.run + 0.4,
@@ -43,6 +86,7 @@ const SHOTS: ClipShot[] = [
     title: "Hit run.",
     focus: "lanes",
     subtitle: "Independent steps fan out, each in its own git worktree.",
+    detail: grow(recording.boxes.lanes, 0.04, 0.04, { x: 0.12, y: 0.28, w: 0.4, h: 0.5 }),
   },
   {
     from: m.terminal - 0.5,
@@ -51,6 +95,7 @@ const SHOTS: ClipShot[] = [
     title: "Every step is a real Claude Code session.",
     focus: "terminal",
     subtitle: "Watch it work, or jump in and type.",
+    detail: { x: 0, y: 0.62, w: 0.62, h: 0.38 },
   },
   {
     from: Math.min(m.terminal + 6, m["review-waiting"] - 1),
@@ -58,6 +103,7 @@ const SHOTS: ClipShot[] = [
     seconds: 2.8,
     title: "Lanes merge, Claude commits.",
     subtitle: "Then the run stops where you want a say.",
+    detail: { x: 0.02, y: 0.28, w: 0.72, h: 0.5 },
   },
   {
     from: m.approval,
@@ -65,6 +111,7 @@ const SHOTS: ClipShot[] = [
     seconds: 6.6,
     title: "Nothing ships without you.",
     subtitle: "Review the exact diff. Approve the pull request.",
+    detail: { x: 0.05, y: 0.32, w: 0.6, h: 0.64 },
   },
   {
     from: m.report - 0.2,
@@ -72,6 +119,7 @@ const SHOTS: ClipShot[] = [
     seconds: Math.min(4.6, m.end - m.report + 0.2),
     title: "Know exactly what happened.",
     subtitle: "Every step's result, diff, timing and cost.",
+    detail: { x: 0.05, y: 0.1, w: 0.6, h: 0.62 },
   },
 ];
 
@@ -99,10 +147,12 @@ function frameOfRecording(t: number): number | null {
   return null;
 }
 
-export function Launch() {
+export function Launch({ orientation = "landscape" }: { orientation?: Orientation }) {
   const clipsStart = CLIPS_START;
   const starts = STARTS;
+  const layout = LAYOUTS[orientation];
   return (
+    <LayoutContext.Provider value={layout}>
     <AbsoluteFill style={{ backgroundColor: "#0a0a0b", fontFamily: FONT, color: INK }}>
       <Backdrop />
       <Sequence durationInFrames={f(INTRO_S) + 8} name="Intro">
@@ -119,8 +169,14 @@ export function Launch() {
       <Sequence from={clipsStart + CLIPS_FRAMES - 6} name="Outro">
         <Outro />
       </Sequence>
+      {layout.portrait && (
+        <Sequence from={clipsStart} durationInFrames={CLIPS_FRAMES} name="Footer">
+          <Footer />
+        </Sequence>
+      )}
       <Soundtrack />
     </AbsoluteFill>
+    </LayoutContext.Provider>
   );
 }
 
@@ -140,6 +196,7 @@ function Backdrop() {
 function AppWindow({ starts }: { starts: number[] }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+  const { win, detail } = useLayout();
   // Which shot is on, and where inside it.
   let i = starts.findLastIndex((s) => s <= frame);
   if (i < 0) i = 0;
@@ -158,40 +215,97 @@ function AppWindow({ starts }: { starts: number[] }) {
     interpolate(local, [len - 10, len], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
   );
 
+  const src = staticFile(`recording/${frameAt(t)}`);
+  const shown = Math.min(enter, exit);
   return (
+    <>
     <div
       style={{
         position: "absolute",
-        left: WIN.x,
-        top: WIN.y,
-        width: WIN.w,
-        height: WIN.h,
+        left: win.x,
+        top: win.y,
+        width: win.w,
+        height: win.h,
         borderRadius: 18,
         overflow: "hidden",
         border: "1px solid #2e2e33",
         boxShadow: "0 50px 140px -30px rgb(0 0 0 / 0.95), 0 0 120px -30px rgb(255 255 255 / 0.10)",
-        opacity: Math.min(enter, exit),
+        opacity: shown,
         transform: `translateY(${(1 - enter) * 60}px) scale(${0.96 + 0.04 * enter})`,
       }}
     >
-      <Img src={staticFile(`recording/${frameAt(t)}`)} style={{ width: "100%", height: "100%", display: "block" }} />
-      {focus && <Spotlight box={focus} amount={spot} />}
+      <Img src={src} style={{ width: "100%", height: "100%", display: "block" }} />
+      {focus && <Spotlight box={focus} amount={spot} win={win} />}
       {speed > 1.6 && <SpeedChip speed={speed} />}
+    </div>
+    {detail && <Detail area={detail} region={shot.detail} src={src} shown={shown} local={local} />}
+    </>
+  );
+}
+
+/**
+ * Portrait: the shot's region of the footage, magnified to fit `area` (aspect kept, nothing stretched), so the
+ * text that matters reads on a phone. The whole screen stays visible in the window above.
+ */
+function Detail({ area, region, src, shown, local }: { area: Rect; region: Box; src: string; shown: number; local: number }) {
+  const rw = region.w * SRC.w;
+  const rh = region.h * SRC.h;
+  const scale = Math.min(area.w / rw, area.h / rh);
+  const w = rw * scale;
+  const h = rh * scale;
+  const fade = interpolate(local, [0, 8], [0, 1], { extrapolateRight: "clamp" });
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: area.x + (area.w - w) / 2,
+        top: area.y + (area.h - h) / 2,
+        width: w,
+        height: h,
+        overflow: "hidden",
+        borderRadius: 18,
+        border: "1px solid #3f3f46",
+        boxShadow: "0 40px 100px -30px rgb(0 0 0 / 0.95)",
+        opacity: shown * fade,
+      }}
+    >
+      <Img
+        src={src}
+        style={{
+          position: "absolute",
+          left: -region.x * SRC.w * scale,
+          top: -region.y * SRC.h * scale,
+          width: SRC.w * scale,
+          height: SRC.h * scale,
+          maxWidth: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+function Footer() {
+  const frame = useCurrentFrame();
+  const o = interpolate(frame, [0, 15], [0, 1], { extrapolateRight: "clamp" });
+  return (
+    <div style={{ position: "absolute", bottom: 70, left: 0, right: 0, display: "flex", justifyContent: "center", alignItems: "center", gap: 14, opacity: o * 0.9 }}>
+      <Logo size={40} />
+      <span style={{ fontSize: 32, fontWeight: 600, letterSpacing: "-0.02em" }}>promptgraph</span>
     </div>
   );
 }
 
 /** Dims the window around `box` and outlines it; the footage stays whole. */
-function Spotlight({ box, amount }: { box: Box; amount: number }) {
+function Spotlight({ box, amount, win }: { box: Box; amount: number; win: Rect }) {
   const pad = 10;
   return (
     <div
       style={{
         position: "absolute",
-        left: box.x * WIN.w - pad,
-        top: box.y * WIN.h - pad,
-        width: box.w * WIN.w + pad * 2,
-        height: box.h * WIN.h + pad * 2,
+        left: box.x * win.w - pad,
+        top: box.y * win.h - pad,
+        width: box.w * win.w + pad * 2,
+        height: box.h * win.h + pad * 2,
         borderRadius: 16,
         opacity: amount,
         border: "2px solid rgb(255 255 255 / 0.85)",
@@ -227,15 +341,18 @@ function SpeedChip({ speed }: { speed: number }) {
 
 function Caption({ title, subtitle }: { title: string; subtitle: string }) {
   const frame = useCurrentFrame();
+  const { caption } = useLayout();
   const { fps, durationInFrames } = useVideoConfig();
   const inT = spring({ frame, fps, config: { damping: 200 }, durationInFrames: 16 });
   const inS = spring({ frame: frame - 5, fps, config: { damping: 200 }, durationInFrames: 16 });
   const out = interpolate(frame, [durationInFrames - 7, durationInFrames], [1, 0], { extrapolateLeft: "clamp" });
   const line = (p: number): CSSProperties => ({ opacity: p * out, transform: `translateY(${(1 - p) * 18}px)` });
   return (
-    <div style={{ position: "absolute", top: 26, left: 0, right: 0, textAlign: "center" }}>
-      <div style={{ fontSize: 54, fontWeight: 500, letterSpacing: "-0.035em", lineHeight: 1.05, ...line(inT) }}>{title}</div>
-      <div style={{ marginTop: 8, fontSize: 28, color: DIM, letterSpacing: "-0.01em", ...line(inS) }}>{subtitle}</div>
+    <div style={{ position: "absolute", top: caption.top, left: 0, right: 0, margin: "0 auto", width: caption.width, textAlign: "center" }}>
+      <div style={{ fontSize: caption.title, fontWeight: 500, letterSpacing: "-0.035em", lineHeight: 1.05, textWrap: "balance", ...line(inT) }}>{title}</div>
+      <div style={{ marginTop: 10, fontSize: caption.subtitle, color: DIM, letterSpacing: "-0.01em", lineHeight: 1.25, textWrap: "balance", ...line(inS) }}>
+        {subtitle}
+      </div>
     </div>
   );
 }
@@ -256,6 +373,8 @@ function Reveal({ delay, children, style }: { delay: number; children: ReactNode
 /** The headline is on screen from frame 0: X can use the first frame as the poster. */
 function Intro() {
   const frame = useCurrentFrame();
+  const { portrait } = useLayout();
+  const big: CSSProperties = { fontSize: portrait ? 118 : 112, fontWeight: 450, letterSpacing: "-0.05em", maxWidth: portrait ? 900 : undefined, textWrap: "balance" };
   const { durationInFrames } = useVideoConfig();
   const out = interpolate(frame, [durationInFrames - 12, durationInFrames], [1, 0], { extrapolateLeft: "clamp" });
   const drift = interpolate(frame, [0, durationInFrames], [1.04, 1.12]);
@@ -267,15 +386,15 @@ function Intro() {
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7, transform: `scale(${drift})` }}
       />
       <AbsoluteFill style={{ background: "radial-gradient(55% 60% at 50% 50%, rgb(10 10 11 / 0.82), rgb(10 10 11 / 0.35))" }} />
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", textAlign: "center" }}>
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", textAlign: "center", padding: portrait ? 60 : 0 }}>
         <Reveal delay={-30} style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 40 }}>
           <Logo size={56} />
           <span style={{ fontSize: 40, fontWeight: 600, letterSpacing: "-0.02em" }}>promptgraph</span>
         </Reveal>
-        <Reveal delay={-30} style={{ fontSize: 112, fontWeight: 450, letterSpacing: "-0.05em", lineHeight: 1 }}>
+        <Reveal delay={-30} style={{ ...big, lineHeight: 1 }}>
           Claude Code, in parallel.
         </Reveal>
-        <Reveal delay={4} style={{ fontSize: 112, fontWeight: 450, letterSpacing: "-0.05em", lineHeight: 1.1, color: DIM }}>
+        <Reveal delay={4} style={{ ...big, lineHeight: 1.1, marginTop: portrait ? 24 : 0, color: DIM }}>
           Drawn as a graph.
         </Reveal>
       </AbsoluteFill>
@@ -285,6 +404,7 @@ function Intro() {
 
 function Outro() {
   const frame = useCurrentFrame();
+  const { portrait } = useLayout();
   const fadeIn = interpolate(frame, [0, 10], [0, 1], { extrapolateRight: "clamp" });
   return (
     <AbsoluteFill style={{ opacity: fadeIn }}>
@@ -293,8 +413,20 @@ function Outro() {
         src={staticFile("brand/dark-waves.webp")}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.8 }}
       />
-      <AbsoluteFill style={{ background: "linear-gradient(90deg, rgb(10 10 11 / 0.96) 0%, rgb(10 10 11 / 0.6) 60%, rgb(10 10 11 / 0.2) 100%)" }} />
-      <AbsoluteFill style={{ justifyContent: "center", paddingLeft: 160 }}>
+      <AbsoluteFill
+        style={{
+          background: portrait
+            ? "linear-gradient(180deg, rgb(10 10 11 / 0.25) 0%, rgb(10 10 11 / 0.92) 45%, rgb(10 10 11 / 0.92) 75%, rgb(10 10 11 / 0.4) 100%)"
+            : "linear-gradient(90deg, rgb(10 10 11 / 0.96) 0%, rgb(10 10 11 / 0.6) 60%, rgb(10 10 11 / 0.2) 100%)",
+        }}
+      />
+      <AbsoluteFill
+        style={
+          portrait
+            ? { justifyContent: "center", alignItems: "center", textAlign: "center", padding: "0 60px" }
+            : { justifyContent: "center", paddingLeft: 160 }
+        }
+      >
         <Reveal delay={4} style={{ display: "flex", alignItems: "center", gap: 22 }}>
           <Logo size={84} />
           <span style={{ fontSize: 76, fontWeight: 600, letterSpacing: "-0.035em" }}>promptgraph</span>
