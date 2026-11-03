@@ -72,7 +72,7 @@ Phase 0 (the original "list of prompts run one after another") is **not a separa
 | PTY | `node-pty` | Real TTY so Claude Code runs its interactive TUI |
 | DB | `better-sqlite3` | Synchronous, zero-config, crash-safe enough for one user |
 | Validation | `zod` | Single schema for graph files, API and WS messages |
-| UI | React 19, Vite, `@xyflow/react`, `@xterm/xterm` (+ fit, web-links addons), `zustand`, Tailwind | Standard; React Flow covers nodes/ports/edges/minimap |
+| UI | React 19, Vite, `@xyflow/react`, `@xterm/xterm` (+ fit, web-links addons), `zustand`, Tailwind v4, shadcn/ui (Radix primitives) | Standard; React Flow covers nodes/ports/edges/minimap; shadcn/Radix give accessible dialogs, menus, tabs and form controls (focus trap/restore, keyboard navigation) |
 | Diff view | `react-diff-view` or `diff2html` | Approval dialog |
 
 ### 3.2 Repository layout

@@ -16,7 +16,7 @@ Design phase. No code yet. Next milestone is **M0 — spike** (`docs/DESIGN.md` 
 
 - Node 22, TypeScript (strict), pnpm workspace
 - Server: Hono + `ws`, `node-pty`, `better-sqlite3`, `zod`
-- Web: React 19, Vite, `@xyflow/react`, `@xterm/xterm`, `zustand`, Tailwind
+- Web: React 19, Vite, `@xyflow/react`, `@xterm/xterm`, `zustand`, Tailwind v4, shadcn/ui (Radix primitives via `radix-ui`; vendored in `packages/web/src/components/ui`, app-level wrappers in `components/common/ui.tsx`)
 
 ## Layout (planned)
 
