@@ -10,6 +10,8 @@ import {
   type Lane,
   type MergeConfig,
   type PlannedLane,
+  type ReportCommit,
+  type ReportLane,
   type Run,
 } from "@promptgraph/shared";
 import type { EventBus } from "../events/bus.js";
@@ -17,7 +19,8 @@ import { worktreePath, type PgPaths } from "../config/paths.js";
 import { git, GitError, gitOk } from "../git/exec.js";
 import { gitPath, mergeInProgress, unmergedFiles } from "../git/merge-state.js";
 import { revParse } from "../git/repo.js";
-import { checkpointIfDirty, squashMergeMessage } from "../runners/git/checkpoint.js";
+import { changeStats, deleteSnapshotRefs, snapshotRef, snapshotRunIds, snapshotWorktree, type SnapshotPoint } from "../git/snapshot.js";
+import { checkpointIfDirty, isCheckpointMessage, squashMergeMessage } from "../runners/git/checkpoint.js";
 import type { Store } from "../store/store.js";
 
 export interface RepoRef {
@@ -119,22 +122,94 @@ export class LaneManager {
     const cwd = lane.worktreePath;
     const maxBytes = opts.maxBytes ?? DEFAULT_DIFF_MAX_BYTES;
     const head = await revParse(cwd, "HEAD");
-    const mergeBase = await git(cwd, ["merge-base", baseBranch, "HEAD"]);
-    const base = mergeBase.code === 0 ? mergeBase.stdout.trim() : lane.baseRef;
+    const base = await this.laneBase(lane, baseBranch);
     if (opts.committedOnly) {
       return lanePatch(cwd, ["diff", ...DIFF_FLAGS, base, head], {}, base, head, maxBytes);
     }
-    // A throwaway index (HEAD + every worktree change) lets `diff --cached` show untracked files
-    // without touching the lane's real index.
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pg-diff-"));
-    try {
-      const env = { GIT_INDEX_FILE: path.join(tmp, "index") };
-      await gitOk(cwd, ["read-tree", "HEAD"], { env });
-      await gitOk(cwd, ["add", "-A"], { env });
-      return await lanePatch(cwd, ["diff", "--cached", ...DIFF_FLAGS, base], env, base, head, maxBytes);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+    return worktreePatch(cwd, base, head, maxBytes);
+  }
+
+  /**
+   * Merge base of `tip` (default: the worktree's HEAD) with `baseBranch`, or the lane's baseRef when
+   * there is none. With a `tip` it runs in the main checkout, so it works after cleanup.
+   */
+  private async laneBase(lane: Lane, baseBranch: string, tip?: string): Promise<string> {
+    const cwd = tip === undefined ? lane.worktreePath : this.deps.repo.path;
+    const mergeBase = await git(cwd, ["merge-base", baseBranch, tip ?? "HEAD"]);
+    return mergeBase.code === 0 ? mergeBase.stdout.trim() : lane.baseRef;
+  }
+
+  /**
+   * §9.7: snapshots the lane's worktree for a node run (hidden ref, see git/snapshot.ts) and returns the
+   * commit sha. Taken under the lane lock, so it never interleaves with a checkpoint or merge.
+   */
+  snapshot(lane: Lane, nodeRunId: string, point: SnapshotPoint, label: string): Promise<string> {
+    return this.withLaneLock(lane, () =>
+      snapshotWorktree(lane.worktreePath, snapshotRef(lane.runId, nodeRunId, point), `pg: snapshot ${point} of ${label}`),
+    );
+  }
+
+  /** Diff between two commits (snapshots); runs in the main checkout, so it works after cleanup. */
+  diffCommits(from: string, to: string, maxBytes = DEFAULT_DIFF_MAX_BYTES): Promise<DiffResponse> {
+    return lanePatch(this.deps.repo.path, ["diff", ...DIFF_FLAGS, from, to], {}, from, to, maxBytes);
+  }
+
+  /** Diff from a commit to the lane's live worktree (uncommitted and untracked changes included). */
+  async diffToWorktree(lane: Lane, from: string, maxBytes = DEFAULT_DIFF_MAX_BYTES): Promise<DiffResponse> {
+    const head = await revParse(lane.worktreePath, "HEAD");
+    return worktreePatch(lane.worktreePath, from, head, maxBytes);
+  }
+
+  /** Whether the lane's worktree is still on disk (it is removed by cleanup, §9.6). */
+  hasWorktree(lane: Lane): boolean {
+    return lane.status !== "removed" && fs.existsSync(lane.worktreePath);
+  }
+
+  /** Lines/files changed between two commits. */
+  changeStats(from: string, to: string): Promise<{ files: number; additions: number; deletions: number }> {
+    return changeStats(this.deps.repo.path, from, to);
+  }
+
+  /**
+   * Report summary of a lane (§13.1): changes and commits since its base. With a live worktree the
+   * worktree is the end point (uncommitted changes included); after cleanup, `lastSnapshot` (the latest
+   * end snapshot of a node in the lane) is, since its parent keeps the lane's commits reachable.
+   */
+  async summarize(lane: Lane, baseBranch: string, lastSnapshot: string | null): Promise<ReportLane> {
+    if (this.hasWorktree(lane)) {
+      const diff = await this.diff(lane, baseBranch, { maxBytes: 0 });
+      const base = diff.base;
+      const changes = {
+        files: diff.files.length,
+        additions: diff.files.reduce((n, f) => n + f.additions, 0),
+        deletions: diff.files.reduce((n, f) => n + f.deletions, 0),
+      };
+      return { lane, base, head: diff.head, changes, commits: await this.commits(lane.worktreePath, base, "HEAD") };
     }
+    if (!lastSnapshot) return { lane, base: lane.baseRef, head: null, changes: { files: 0, additions: 0, deletions: 0 }, commits: [] };
+    const { repo } = this.deps;
+    const base = await this.laneBase(lane, baseBranch, lastSnapshot);
+    return { lane, base, head: lastSnapshot, changes: await this.changeStats(base, lastSnapshot), commits: await this.commits(repo.path, base, `${lastSnapshot}^`) };
+  }
+
+  /** First-parent commits in `base..tip`, newest first. Empty when the range cannot be read. */
+  private async commits(cwd: string, base: string, tip: string): Promise<ReportCommit[]> {
+    const res = await git(cwd, ["log", "--first-parent", "--format=%H%x00%s", `${base}..${tip}`]);
+    if (res.code !== 0) return [];
+    return res.stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [sha = "", subject = ""] = line.split("\0");
+        return { sha, subject, checkpoint: isCheckpointMessage(subject) };
+      });
+  }
+
+  /** Deletes the snapshot refs of runs `keep` rejects (unknown runs included). Server start. */
+  async pruneSnapshots(keep: (runId: string) => boolean): Promise<void> {
+    const { repo } = this.deps;
+    const stale = (await snapshotRunIds(repo.path)).filter((id) => !keep(id));
+    await this.withLaneLock(REPO_LOCK, () => deleteSnapshotRefs(repo.path, stale));
   }
 
   /**
@@ -272,6 +347,22 @@ const STATUS_BY_LETTER: Record<string, DiffFile["status"]> = {
 const DIFF_FLAGS = ["-M", "--no-color", "--no-ext-diff"];
 /** Files above this size are diffed as binary (no line counts, no textual patch): keeps huge generated files cheap. */
 const BIG_FILE_THRESHOLD = "-c core.bigFileThreshold=8m".split(" ");
+
+/**
+ * Diff from `base` to the worktree at `cwd`: a throwaway index (HEAD + every worktree change) lets
+ * `diff --cached` show untracked files without touching the lane's real index.
+ */
+async function worktreePatch(cwd: string, base: string, head: string, maxBytes: number): Promise<DiffResponse> {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pg-diff-"));
+  try {
+    const env = { GIT_INDEX_FILE: path.join(tmp, "index") };
+    await gitOk(cwd, ["read-tree", "HEAD"], { env });
+    await gitOk(cwd, ["add", "-A"], { env });
+    return await lanePatch(cwd, ["diff", "--cached", ...DIFF_FLAGS, base], env, base, head, maxBytes);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 /**
  * Patch (read until maxBytes, then git is stopped), file list and line counts. base/head are known

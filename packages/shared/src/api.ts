@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { GraphSchema, NodeTypeSchema } from "./graph.js";
-import { NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
+import { LaneSchema, NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
 import { ValidationResultSchema } from "./validation/types.js";
 
 /**
@@ -173,9 +173,17 @@ export const DiffFileSchema = z.object({
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 
 /**
- * GET /api/node-runs/:id/diff — lane diff vs base branch (merge-base), including uncommitted changes;
- * pr nodes: vs the PR's base, committed changes only (what gets pushed: `head`).
+ * GET /api/node-runs/:id/diff?scope=lane|node
+ * - lane (default): lane diff vs base branch (merge-base), including uncommitted changes; pr nodes: vs
+ *   the PR's base, committed changes only (what gets pushed: `head`).
+ * - node (§9.7): what this node changed, between its start and end snapshots (or the live worktree while
+ *   it runs). 409 invalid_state when the node has no snapshot.
  */
+export const DiffScopeSchema = z.enum(["lane", "node"]);
+export type DiffScope = z.infer<typeof DiffScopeSchema>;
+export const DiffQuerySchema = z.object({ scope: DiffScopeSchema.default("lane") });
+export type DiffQuery = z.infer<typeof DiffQuerySchema>;
+
 export const DiffResponseSchema = z.object({
   base: z.string(),
   head: z.string(),
@@ -185,6 +193,74 @@ export const DiffResponseSchema = z.object({
   truncated: z.boolean(),
 });
 export type DiffResponse = z.infer<typeof DiffResponseSchema>;
+
+// --- Run report (§13.1) ----------------------------------------------------
+
+export const ChangeStatsSchema = z.object({
+  files: z.number().int(),
+  additions: z.number().int(),
+  deletions: z.number().int(),
+});
+export type ChangeStats = z.infer<typeof ChangeStatsSchema>;
+
+/** One (node, iteration) of the run: its latest attempt. */
+export const ReportNodeSchema = z.object({
+  nodeRun: NodeRunSchema,
+  label: z.string(),
+  type: NodeTypeSchema,
+  /** Attempts of this (node, iteration), retries included. */
+  attempts: z.number().int(),
+  durationMs: z.number().nullable(),
+  /** Time spent waiting for the user (idle, waiting_input, waiting_approval), all attempts. */
+  waitingMs: z.number(),
+  /** What the node changed (§9.7); null without snapshots. */
+  changes: ChangeStatsSchema.nullable(),
+});
+export type ReportNode = z.infer<typeof ReportNodeSchema>;
+
+export const ReportCommitSchema = z.object({
+  sha: z.string(),
+  subject: z.string(),
+  /** A promptgraph checkpoint (§9.3) rather than a commit node's commit. */
+  checkpoint: z.boolean(),
+});
+export type ReportCommit = z.infer<typeof ReportCommitSchema>;
+
+export const ReportLaneSchema = z.object({
+  lane: LaneSchema,
+  /** Commit the lane diff starts from (merge base with the base branch, or the lane's baseRef). */
+  base: z.string(),
+  /** End of the lane diff: the live worktree's HEAD, or the last snapshot after cleanup. Null: nothing ran. */
+  head: z.string().nullable(),
+  changes: ChangeStatsSchema,
+  /** Commits on the lane after `base`, newest first (first parent). */
+  commits: z.array(ReportCommitSchema),
+});
+export type ReportLane = z.infer<typeof ReportLaneSchema>;
+
+/** Where the run stopped or lost time: unhandled failures, nodes waiting for the user, long waits. */
+export const ReportStallSchema = z.object({
+  nodeRunId: z.string(),
+  label: z.string(),
+  kind: z.enum(["failed", "interrupted", "cancelled", "waiting", "slow_wait"]),
+  message: z.string(),
+  waitingMs: z.number(),
+});
+export type ReportStall = z.infer<typeof ReportStallSchema>;
+
+/** GET /api/runs/:id/report */
+export const RunReportResponseSchema = z.object({
+  run: RunSummarySchema,
+  durationMs: z.number(),
+  /** Execution order (startedAt; never-started nodes last, in canvas order). */
+  nodes: z.array(ReportNodeSchema),
+  lanes: z.array(ReportLaneSchema),
+  prs: z.array(z.object({ url: z.string(), nodeRunId: z.string(), label: z.string() })),
+  stalls: z.array(ReportStallSchema),
+});
+export type RunReportResponse = z.infer<typeof RunReportResponseSchema>;
+
+/** GET /api/runs/:id/lanes/:laneId/diff → DiffResponse (lane vs its base; works after cleanup via snapshots). */
 
 /**
  * POST /api/node-runs/:id/reopen — spawns `claude --resume <session>` (not part of the run), or returns
@@ -230,11 +306,13 @@ export const API = {
   cancelRun: (id: string) => `/api/runs/${encodeURIComponent(id)}/cancel`,
   cleanupRun: (id: string) => `/api/runs/${encodeURIComponent(id)}/cleanup`,
   resumeRun: (id: string) => `/api/runs/${encodeURIComponent(id)}/resume`,
+  runReport: (id: string) => `/api/runs/${encodeURIComponent(id)}/report`,
+  laneDiff: (runId: string, laneId: string) => `/api/runs/${encodeURIComponent(runId)}/lanes/${encodeURIComponent(laneId)}/diff`,
   pending: "/api/pending",
   nodeRunAction: (id: string, action: "done" | "fail" | "retry" | "skip" | "hold") =>
     `/api/node-runs/${encodeURIComponent(id)}/${action}`,
   approval: (id: string) => `/api/node-runs/${encodeURIComponent(id)}/approval`,
-  diff: (id: string) => `/api/node-runs/${encodeURIComponent(id)}/diff`,
+  diff: (id: string, scope: DiffScope = "lane") => `/api/node-runs/${encodeURIComponent(id)}/diff${scope === "lane" ? "" : `?scope=${scope}`}`,
   reopen: (id: string) => `/api/node-runs/${encodeURIComponent(id)}/reopen`,
   /** DELETE: ends a "Reopen session" PTY (the only PTYs not owned by a run). */
   pty: (id: string) => `/api/ptys/${encodeURIComponent(id)}`,

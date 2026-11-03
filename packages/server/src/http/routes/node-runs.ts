@@ -1,5 +1,6 @@
 import {
   ApprovalRequestSchema,
+  DiffQuerySchema,
   FailNodeRequestSchema,
   HoldNodeRequestSchema,
   type NodeRun,
@@ -12,7 +13,7 @@ import { readBody } from "../errors.js";
 
 /**
  * POST /api/node-runs/:id/{done,fail,retry,skip,hold} · GET|POST /api/node-runs/:id/approval ·
- * GET /api/node-runs/:id/diff · POST /api/node-runs/:id/reopen · DELETE /api/ptys/:ptyId (reopened sessions)
+ * GET /api/node-runs/:id/diff?scope=lane|node · POST /api/node-runs/:id/reopen · DELETE /api/ptys/:ptyId (reopened sessions)
  */
 export function registerNodeRunRoutes(app: Hono, ctx: AppContext): void {
   const { engine } = ctx;
@@ -36,7 +37,10 @@ export function registerNodeRunRoutes(app: Hono, ctx: AppContext): void {
     return respond(c, await engine.submitApproval(c.req.param("id"), req));
   });
 
-  app.get("/api/node-runs/:id/diff", async (c) => c.json(await engine.getDiff(c.req.param("id"))));
+  app.get("/api/node-runs/:id/diff", async (c) => {
+    const { scope } = DiffQuerySchema.parse(c.req.query());
+    return c.json(await engine.getDiff(c.req.param("id"), scope));
+  });
   app.post("/api/node-runs/:id/reopen", async (c) => c.json(await engine.reopenSession(c.req.param("id"))));
   app.delete("/api/ptys/:ptyId", (c) => {
     engine.closeReopenedSession(c.req.param("ptyId"));

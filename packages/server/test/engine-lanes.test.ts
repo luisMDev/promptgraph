@@ -105,7 +105,7 @@ function setup(keepWorktrees: KeepWorktrees, workspaceSetup?: string) {
     }),
   );
   const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-  return { repo, store, engine, git, home: home.dir };
+  return { repo, store, engine, lanes, git, home: home.dir };
 }
 
 describe("Engine lanes with real git worktrees", () => {
@@ -140,6 +140,46 @@ describe("Engine lanes with real git worktrees", () => {
     expect(s.git(s.repo, "log", "--format=%s", main)).toBe(
       [`Merge pg/flow/${run.shortId}/l2`, "pg: checkpoint after B", "pg: checkpoint after C", "pg: checkpoint after A", "init"].join("\n"),
     );
+  });
+
+  it("snapshots each node (§9.7): per-node diffs and the run report survive cleanup", async () => {
+    const s = setup("never");
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => s.store.getRun(run.id)!.cleanedUp, 10_000);
+    const byNode = new Map(s.store.listNodeRuns(run.id).map((nr) => [nr.nodeId, nr]));
+    for (const nr of byNode.values()) expect([nr.snapshotStart, nr.snapshotEnd].every(Boolean)).toBe(true);
+
+    // Each node's diff holds only its own change; the merge brings C's file into the main lane.
+    const files = async (nodeId: string) => (await s.engine.getDiff(byNode.get(nodeId)!.id, "node")).files.map((f) => f.path);
+    expect(await files("a")).toEqual(["a.txt"]);
+    expect(await files("b")).toEqual(["b.txt"]);
+    expect(await files("c")).toEqual(["c.txt"]);
+    expect(await files("m")).toEqual(["c.txt"]);
+    // Hidden refs only: no extra branches, and the snapshot commits never land on a lane branch.
+    expect(s.git(s.repo, "for-each-ref", "--format=%(refname)", `refs/promptgraph/${run.id}/`).split("\n")).toHaveLength(8);
+    expect(s.git(s.repo, "log", "--format=%s", s.engine.getRun(run.id).lanes[0]!.branch)).not.toContain("snapshot");
+
+    const report = await s.engine.getReport(run.id);
+    expect(report.nodes[0]!.label).toBe("A");
+    expect(report.nodes.at(-1)!.label).toBe("M");
+    expect(report.nodes.map((n) => [n.label, n.nodeRun.status, n.changes?.files]).sort()).toEqual([
+      ["A", "succeeded", 1],
+      ["B", "succeeded", 1],
+      ["C", "succeeded", 1],
+      ["M", "succeeded", 1],
+    ]);
+    expect(report.stalls).toEqual([]);
+    const [main, l2] = report.lanes;
+    expect(main!.changes).toMatchObject({ files: 3 });
+    expect(main!.commits[0]!.subject).toMatch(/^Merge /);
+    expect(main!.commits.filter((c) => c.checkpoint).map((c) => c.subject)).toEqual(["pg: checkpoint after B", "pg: checkpoint after A"]);
+    expect(l2!.changes).toMatchObject({ files: 2 });
+    expect((await s.engine.getLaneDiff(run.id, "main")).files.map((f) => f.path).sort()).toEqual(["a.txt", "b.txt", "c.txt"]);
+    // A node's whole-lane diff after cleanup comes from the snapshots too.
+    expect((await s.engine.getDiff(byNode.get("b")!.id)).files.map((f) => f.path).sort()).toEqual(["a.txt", "b.txt", "c.txt"]);
+
+    await s.lanes.pruneSnapshots(() => false);
+    expect(s.git(s.repo, "for-each-ref", `refs/promptgraph/`)).toBe("");
   });
 
   it("keeps worktrees per policy and cleans them up on demand", async () => {

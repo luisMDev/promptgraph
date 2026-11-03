@@ -11,6 +11,7 @@ import {
   type ApprovalInfoResponse,
   type ApprovalRequest,
   type DiffResponse,
+  type DiffScope,
   type Graph,
   type GraphEdge,
   type GraphNode,
@@ -27,6 +28,7 @@ import {
   type ReopenResponse,
   type Run,
   type RunDetail,
+  type RunReportResponse,
   type RunStatus,
   type Topology,
   nodeDisplayLabel,
@@ -44,6 +46,7 @@ import type { LaneManager, RepoRef } from "../workspace/lane-manager.js";
 import { runWorkspaceSetup } from "../workspace/setup.js";
 import { ActivationTracker, type LoopIteration } from "./activation.js";
 import { markInterrupted } from "./recovery.js";
+import { buildRunReport, laneDiff } from "./report.js";
 import { Scheduler, type SchedulerItem } from "./scheduler.js";
 import { assertTransition, RUN_TRANSITIONS } from "./state.js";
 import { errorMessage } from "../util/text.js";
@@ -103,6 +106,8 @@ interface LoopIterationEvent {
   body: string[];
 }
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
+/** §9.7: how long per-node snapshots (and so per-node diffs) are kept after a run finishes. */
+const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** A started node: `controls` is set once its runner has started (lane/setup steps come first). */
 interface LiveExecution {
@@ -455,15 +460,38 @@ export class Engine {
     };
   }
 
-  /** Lane diff; for pr nodes against the PR's base and committed changes only (what the push publishes). */
-  async getDiff(nodeRunId: string): Promise<DiffResponse> {
+  /**
+   * scope "lane": lane diff; for pr nodes against the PR's base and committed changes only (what the push
+   * publishes). scope "node" (§9.7): what the node changed, between its snapshots (or start → live worktree).
+   */
+  async getDiff(nodeRunId: string, scope: DiffScope = "lane"): Promise<DiffResponse> {
     const nr = this.requireNodeRun(nodeRunId);
     const graph = this.requireRun(nr.runId).graphSnapshot;
     const lane = nr.laneId ? this.deps.store.getLane(nr.runId, nr.laneId) : undefined;
+    if (scope === "node") {
+      if (nr.snapshotStart && nr.snapshotEnd) return this.deps.lanes.diffCommits(nr.snapshotStart, nr.snapshotEnd);
+      if (nr.snapshotStart && lane && this.deps.lanes.hasWorktree(lane)) return this.deps.lanes.diffToWorktree(lane, nr.snapshotStart);
+      throw new EngineError("invalid_state", "No snapshot of this node's workspace: it did not run, or ran before per-node diffs were recorded");
+    }
     if (!lane) throw new EngineError("invalid_state", "This node has no workspace yet");
+    // After cleanup the worktree is gone: the lane's snapshots still hold its changes (§9.7).
+    if (lane.status === "removed") return this.getLaneDiff(nr.runId, lane.id);
     const node = graph.nodes.find((n) => n.id === nr.nodeId);
     if (node?.type === "pr") return this.deps.lanes.diff(lane, prBase(node, graph.settings.baseBranch), { committedOnly: true });
     return this.deps.lanes.diff(lane, graph.settings.baseBranch);
+  }
+
+  /** §13.1 run report. */
+  getReport(runId: string): Promise<RunReportResponse> {
+    return buildRunReport({ store: this.deps.store, lanes: this.deps.lanes, now: this.now }, this.requireRun(runId));
+  }
+
+  /** Lane diff vs its base, for the report (after cleanup: from the lane's last snapshot). */
+  getLaneDiff(runId: string, laneId: string): Promise<DiffResponse> {
+    const run = this.requireRun(runId);
+    const lane = this.deps.store.getLane(runId, laneId);
+    if (!lane) throw new EngineError("not_found", `Lane ${laneId} not found in run ${runId}`);
+    return laneDiff({ store: this.deps.store, lanes: this.deps.lanes, now: this.now }, run, lane);
   }
 
   async reopenSession(nodeRunId: string): Promise<ReopenResponse> {
@@ -501,6 +529,20 @@ export class Engine {
   async recover(): Promise<void> {
     markInterrupted(this.deps.store, { repoPath: this.deps.repo.path }, this.now());
     await this.deps.lanes.prune();
+    await this.pruneSnapshots();
+  }
+
+  /** §9.7: snapshot refs of runs that finished over SNAPSHOT_RETENTION_MS ago, or are unknown, are deleted. */
+  private async pruneSnapshots(): Promise<void> {
+    const cutoff = this.now() - SNAPSHOT_RETENTION_MS;
+    try {
+      await this.deps.lanes.pruneSnapshots((runId) => {
+        const run = this.deps.store.getRunSummary(runId);
+        return !!run && (run.finishedAt === null || run.finishedAt >= cutoff);
+      });
+    } catch {
+      // Best effort: stale refs only cost a little disk space.
+    }
   }
 
   /** SIGINT (§4.5): cancel-gracefully every live execution (≤5s), node runs → interrupted, runs → paused. */
@@ -667,6 +709,9 @@ export class Engine {
     if (signal.aborted) return { status: "cancelled" };
     const settings = live.graph.settings;
 
+    await this.snapshotNode(live, nodeRun.id, "start");
+    if (signal.aborted) return { status: "cancelled" };
+
     const ownRuns = store.listNodeRuns(live.runId).filter((r) => r.nodeId === nodeRun.nodeId);
     const previousAttempt = ownRuns.filter((r) => r.iteration === nodeRun.iteration && r.attempt < nodeRun.attempt).at(-1) ?? null;
     // The latest earlier iteration that ran (a dead-path skip in between has no session to continue).
@@ -709,6 +754,8 @@ export class Engine {
     // Stamped before the release starts the next queued node, so finishedAt <= its startedAt.
     const finishedAt = this.now();
     live.executions.delete(exec.nodeRunId);
+    // Before the release: the next node of the lane must not change the worktree first.
+    await this.snapshotNode(live, exec.nodeRunId, "end");
     live.scheduler.release(exec.nodeRunId);
     try {
       const nr = this.requireNodeRun(exec.nodeRunId);
@@ -762,6 +809,23 @@ export class Engine {
       this.patchNodeRun(nr.id, { status: "cancelled", finishedAt, ...(result.output ? { output: { ...nr.output, ...result.output } } : {}) });
     }
     if (!live.terminating) this.persistLoops(live);
+  }
+
+  /**
+   * §9.7: snapshots the node's worktree when it starts / finishes, for its per-node diff. Best effort: a
+   * failure only loses that diff (logged as an event). No end snapshot without a start one.
+   */
+  private async snapshotNode(live: LiveRun, nodeRunId: string, point: "start" | "end"): Promise<void> {
+    const nr = this.requireNodeRun(nodeRunId);
+    const lane = nr.laneId ? this.deps.store.getLane(live.runId, nr.laneId) : undefined;
+    if (!lane || !this.deps.lanes.hasWorktree(lane) || (point === "end" && !nr.snapshotStart)) return;
+    const node = live.nodes.get(nr.nodeId);
+    try {
+      const sha = await this.deps.lanes.snapshot(lane, nr.id, point, node ? labelOf(node) : nr.nodeId);
+      this.patchNodeRun(nr.id, point === "start" ? { snapshotStart: sha, snapshotEnd: null } : { snapshotEnd: sha });
+    } catch (err) {
+      this.deps.store.appendEvent(live.runId, nr.id, "snapshot.failed", { point, error: errorMessage(err) });
+    }
   }
 
   /** Error of a loop source whose loop back-edge reached its limit (§15.4), counted in loop-backs. */
@@ -1017,7 +1081,13 @@ export class Engine {
     if (statusChanged) assertTransition(before.status, patch.status!);
     // A waiting reason only describes waiting_input; leaving that status clears it.
     const leavesWaiting = statusChanged && patch.status !== "waiting_input" && patch.waitingReason === undefined && before.waitingReason;
-    const after = store.updateNodeRun(nodeRunId, leavesWaiting ? { ...patch, waitingReason: null } : patch);
+    // The auto-completion countdown only runs while the node is running (§7.4).
+    const leavesGrace = statusChanged && patch.status !== "running" && patch.graceUntil === undefined && before.graceUntil !== null;
+    const after = store.updateNodeRun(nodeRunId, {
+      ...patch,
+      ...(leavesWaiting ? { waitingReason: null } : {}),
+      ...(leavesGrace ? { graceUntil: null } : {}),
+    });
     if (statusChanged) {
       store.appendEvent(after.runId, after.id, "node.status", { status: after.status, from: before.status, error: after.error });
     }

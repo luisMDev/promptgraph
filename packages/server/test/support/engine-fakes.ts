@@ -126,6 +126,11 @@ export class FakeLanes {
   async prune(): Promise<void> {
     this.calls.push("prune");
   }
+  /** No real worktrees: the engine takes no snapshots (§9.7). */
+  hasWorktree(): boolean {
+    return false;
+  }
+  async pruneSnapshots(): Promise<void> {}
   async shortIdHasBranches(): Promise<boolean> {
     return false;
   }

@@ -2,7 +2,7 @@ import { ListRunsQuerySchema, type ListRunsResponse, type OkResponse, type Pendi
 import type { Hono } from "hono";
 import type { AppContext } from "../../app/context.js";
 
-/** GET /api/runs · GET /api/runs/:id · POST /api/runs/:id/cancel · POST /api/runs/:id/resume · POST /api/runs/:id/cleanup · GET /api/pending */
+/** GET /api/runs · GET /api/runs/:id · GET /api/runs/:id/report · GET /api/runs/:id/lanes/:laneId/diff · POST /api/runs/:id/cancel · POST /api/runs/:id/resume · POST /api/runs/:id/cleanup · GET /api/pending */
 export function registerRunRoutes(app: Hono, ctx: AppContext): void {
   app.get("/api/runs", (c) => {
     const query = ListRunsQuerySchema.parse(c.req.query());
@@ -11,6 +11,8 @@ export function registerRunRoutes(app: Hono, ctx: AppContext): void {
   });
 
   app.get("/api/runs/:id", (c) => c.json(ctx.engine.getRun(c.req.param("id"))));
+  app.get("/api/runs/:id/report", async (c) => c.json(await ctx.engine.getReport(c.req.param("id"))));
+  app.get("/api/runs/:id/lanes/:laneId/diff", async (c) => c.json(await ctx.engine.getLaneDiff(c.req.param("id"), c.req.param("laneId"))));
 
   app.post("/api/runs/:id/cancel", async (c) => {
     await ctx.engine.cancelRun(c.req.param("id"));
