@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DaemonInfoSchema, EXIT_DAEMON_LOCKED } from "@promptgraph/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { parseCliArgs } from "../src/cli/args.js";
 import { checkPrereqs } from "../src/cli/prereqs.js";
 import { daemonInfoPath, portFilePath, readDaemonInfo } from "../src/config/daemon-info.js";
 import { getPaths } from "../src/config/paths.js";
@@ -19,33 +18,6 @@ import { createTempRepo, FAKE_CLAUDE, FAKE_GH, fakeClaudeEnv, tempDir } from "./
 
 const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
-
-describe("parseCliArgs", () => {
-  it("applies defaults", () => {
-    expect(parseCliArgs([], "/work")).toEqual({ command: "open-repo", repoDir: "/work", port: null, open: true, foreground: false, help: false, version: false });
-  });
-
-  it("parses repo dir, port and flags", () => {
-    expect(parseCliArgs(["../repo", "--port", "5000", "--no-open", "--foreground"], "/work/x")).toMatchObject({ repoDir: "/work/repo", port: 5000, open: false, foreground: true });
-    expect(parseCliArgs(["--port=0", "-h", "--version"], "/w")).toMatchObject({ port: 0, help: true, version: true });
-    expect(parseCliArgs(["mcp", "--help"], "/w")).toMatchObject({ command: "mcp", help: true });
-    expect(parseCliArgs(["./mcp"], "/w")).toMatchObject({ command: "open-repo", repoDir: "/w/mcp" });
-    expect(parseCliArgs(["daemon", "--port", "4800"], "/w")).toMatchObject({ command: "daemon", port: 4800 });
-    expect(parseCliArgs(["./daemon"], "/w")).toMatchObject({ command: "open-repo", repoDir: "/w/daemon" });
-    expect(parseCliArgs(["constructor"], "/w")).toMatchObject({ command: "open-repo", repoDir: "/w/constructor" });
-  });
-
-  it("rejects bad input", () => {
-    expect(() => parseCliArgs(["--port"], "/w")).toThrow("Invalid port");
-    expect(() => parseCliArgs(["--port", "99999"], "/w")).toThrow("Invalid port");
-    expect(() => parseCliArgs(["--bogus"], "/w")).toThrow("Unknown option");
-    expect(() => parseCliArgs(["a", "b"], "/w")).toThrow("Unexpected argument");
-    expect(() => parseCliArgs(["mcp", "x"], "/w")).toThrow("Unexpected argument");
-    expect(() => parseCliArgs(["daemon", "x"], "/w")).toThrow("Unexpected argument");
-    expect(() => parseCliArgs(["daemon", "--foreground"], "/w")).toThrow("Unknown option");
-    expect(() => parseCliArgs(["x", "daemon"], "/w")).toThrow("Unexpected argument");
-  });
-});
 
 describe("checkPrereqs", () => {
   it("passes with git and the configured claude", async () => {

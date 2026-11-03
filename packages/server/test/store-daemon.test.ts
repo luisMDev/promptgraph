@@ -2,6 +2,9 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { GraphSchema } from "@promptgraph/shared";
+import { syncTokenFingerprint, TOKEN_FINGERPRINT_KEY, tokenFingerprint } from "../src/daemon/context.js";
+import { Sessions } from "../src/daemon/sessions.js";
+import { EventBus } from "../src/events/bus.js";
 import { MIGRATIONS } from "../src/store/schema.js";
 import { openDatabase, Store } from "../src/store/store.js";
 import { tempDir } from "./helpers.js";
@@ -167,5 +170,31 @@ describe("Store: repository paths and counters", () => {
     expect(store.getKnownGraphHash("/real/a", "fresh")).toBe("f-link");
     expect(store.getKnownGraphHash("/link/a", "demo")).toBeUndefined();
     expect(store.repoStatusCounts().get("/real/a")).toMatchObject({ running: 2, lastRunAt: 2 });
+  });
+});
+
+describe("syncTokenFingerprint (DESIGN §14)", () => {
+  it("keeps sessions under the same token and deletes them all when the token changed", () => {
+    const store = newStore();
+    const bus = new EventBus();
+    const revoked: string[][] = [];
+    bus.on("session:revoked", (e) => revoked.push(e.idHashes));
+    const sessions = new Sessions(store, bus, () => 1000);
+    // No record yet: nothing to keep, the fingerprint is recorded (never the token itself).
+    sessions.create("first");
+    expect(syncTokenFingerprint(store, sessions, "token-a")).toBe(1);
+    expect(store.getMeta(TOKEN_FINGERPRINT_KEY)).toBe(tokenFingerprint("token-a"));
+    expect(store.getMeta(TOKEN_FINGERPRINT_KEY)).not.toContain("token-a");
+
+    sessions.create("one");
+    sessions.create("two");
+    expect(syncTokenFingerprint(store, sessions, "token-a")).toBe(0);
+    expect(store.listSessions()).toHaveLength(2);
+
+    // Rotated offline (or replaced by hand): every session goes.
+    expect(syncTokenFingerprint(store, sessions, "token-b")).toBe(2);
+    expect(store.listSessions()).toEqual([]);
+    expect(store.getMeta(TOKEN_FINGERPRINT_KEY)).toBe(tokenFingerprint("token-b"));
+    expect(revoked.map((r) => r.length)).toEqual([1, 2]);
   });
 });

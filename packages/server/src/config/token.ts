@@ -11,7 +11,8 @@ export function tokenPath(paths: PgPaths): string {
   return path.join(paths.home, "token");
 }
 
-function newToken(): string {
+/** A fresh token value (32 random bytes, base64url). */
+export function newToken(): string {
   return randomBytes(TOKEN_BYTES).toString("base64url");
 }
 

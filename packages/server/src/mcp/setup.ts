@@ -25,7 +25,7 @@ export function bundledMarketplaceRoot(serverPackageDir: string = SERVER_PACKAGE
 
 export interface SetupInputs {
   repoPath: string;
-  /** Entry point of the running promptgraph CLI (process.argv[1]). */
+  /** Entry point of the daemon's promptgraph CLI (process.argv[1]); `promptgraph mcp` re-runs it. */
   cliEntry: string;
   /** Node binary running the CLI. */
   nodePath: string;
@@ -33,7 +33,7 @@ export interface SetupInputs {
   version?: string;
 }
 
-/** Everything the setup wizard shows, derived from this running server (no side effects). */
+/** Everything the setup wizard shows, derived from the running daemon (no side effects). */
 export function buildClaudeSetup(input: SetupInputs): ClaudeSetupResponse {
   const { cliEntry, nodePath, marketplaceRoot } = input;
   const mcpAddCommand = ["claude", "mcp", "add", "promptgraph", "--", nodePath, cliEntry, "mcp"].map(shellQuote).join(" ");

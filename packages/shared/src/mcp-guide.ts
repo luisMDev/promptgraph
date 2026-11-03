@@ -58,8 +58,8 @@ export const MCP_TOOL_GROUPS: readonly McpToolGroup[] = [
   {
     title: "Server",
     tools: [
-      { name: "server_status", summary: "Whether the daemon runs and this repository is registered, with its counters." },
-      { name: "start_server", summary: "Starts the daemon in the background (no browser) and registers the repository." },
+      { name: "server_status", summary: "Whether the daemon runs (pid, version, port) and this repository is registered, with its counters." },
+      { name: "start_server", summary: "Starts the daemon if needed (it keeps running; promptgraph stop stops it) and registers the repository." },
       { name: "open_ui", summary: "Opens this repository in the browser, already signed in." },
     ],
   },

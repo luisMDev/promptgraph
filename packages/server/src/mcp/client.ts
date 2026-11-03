@@ -13,8 +13,8 @@ export class ApiRequestError extends Error {
 }
 
 /**
- * Minimal REST client for a running promptgraph server (§12.1). Every request carries the per-start
- * token as a Bearer header; nothing is cached, so a restarted server is picked up on the next call.
+ * Minimal REST client for the promptgraph daemon (§12.1). Every request carries the token as a Bearer
+ * header; only build it from a verified DaemonConnection (findDaemon checks the daemon first, §4.1 item 3).
  */
 export class PromptgraphClient {
   constructor(
@@ -51,7 +51,7 @@ export class PromptgraphClient {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
-      throw new Error(`promptgraph server at ${this.baseUrl} is not reachable: ${(err as Error).message}`);
+      throw new Error(`the promptgraph daemon at ${this.baseUrl} is not reachable: ${(err as Error).message}`);
     }
     const text = await res.text();
     let data: unknown = undefined;

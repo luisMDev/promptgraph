@@ -49,25 +49,31 @@ cd packages/server && pnpm link --global
 ## Usage
 
 ```bash
-promptgraph [repo-dir] [--port 4777] [--no-open]
+promptgraph [repo-dir] [--port 4777] [--no-open] [--foreground]   # register a repository and open it
+promptgraph ls [--json]                                           # the daemon and its repositories
+promptgraph open [repo-dir|repo-id] [--print-url]                 # open the UI, signed in
+promptgraph rm <repo-dir|repo-id> [--force]                       # forget a repository (alias: close)
+promptgraph stop                                                  # stop the daemon
+promptgraph token rotate                                          # every window signs in again
+promptgraph sessions [--json] | sessions revoke <id>|--all        # signed-in browsers and windows
 ```
 
-- `repo-dir`: any directory inside the git repository to work on (default: the current directory).
-  promptgraph uses the repository's top level.
-- `--port`: the port on `127.0.0.1` (default `4777`). Use another port to run promptgraph for
-  another repository at the same time.
-- `--no-open`: print the URL but do not open a browser.
+One background process, the **daemon**, manages every repository you open. `promptgraph [repo-dir]`
+starts it if it is not running, registers the repository (any directory inside it; the default is
+the current directory), opens the browser already signed in and returns. It prints a line like
+`Opened my-repo: http://127.0.0.1:4777/r/my-repo-3f9a1c2e`; that URL holds no secret, so open it
+again from any signed-in browser.
 
-The command prints a URL like `http://127.0.0.1:4777/?t=<token>`. The token is new on every start: a
-browser tab from an earlier start shows "The promptgraph server was restarted" until you open the
-new URL.
+- `--port`: the port on `127.0.0.1`, used only when this command starts the daemon. Without it the
+  daemon reuses the port it had last time, else `4777`, else any free port.
+- `--no-open`: register and print only.
+- `--foreground`: run the daemon in this terminal instead; Ctrl-C (or closing the terminal) stops it.
 
-One promptgraph process manages one repository. Starting a second one for the same repository is
-refused (it would interfere with the first one's runs).
-
-Press **Ctrl-C** to stop. Running Claude sessions are asked to exit (up to 5 seconds), and their steps
-are marked **interrupted**. When you start promptgraph again, the run is shown as paused: retry or
-skip the interrupted steps to continue.
+The daemon keeps running after the terminal closes, so long runs are not tied to a window.
+`promptgraph stop` stops it: running Claude sessions are asked to exit (up to 5 seconds), their steps
+are marked **interrupted** and the runs are paused. Start promptgraph again and retry or skip the
+interrupted steps to continue. A different promptgraph version refuses to talk to a running daemon:
+run `promptgraph stop`, then retry.
 
 ## Use it from Claude Code (MCP server and plugin)
 
@@ -294,11 +300,15 @@ there.
 
 ```bash
 pnpm install
-pnpm dev                 # server (tsx watch, port 4777) + vite dev server; open the vite URL with ?t=<token>
+pnpm dev                 # daemon (tsx watch) + vite dev server; sign in with: promptgraph open --print-url --web-port 5173
 pnpm -r typecheck
 pnpm test                # all tests (vitest)
 pnpm -r build
 ```
+
+The dev daemon uses `PG_HOME` (default `~/.promptgraph`) like an installed one, and only one daemon
+runs per `PG_HOME`: if you already run promptgraph, set `PG_HOME` to another directory for development
+(and for the `promptgraph open` above) or stop that daemon first (`promptgraph stop`).
 
 The repository is a pnpm workspace:
 

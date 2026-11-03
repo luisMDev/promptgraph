@@ -32,6 +32,8 @@ export class DaemonVersionMismatch extends Error {
 /** A verified daemon: its record, the token and a Bearer client on its origin. */
 export interface DaemonConnection {
   info: DaemonInfo;
+  /** Version the daemon reported in its verified hello (the record's copy is informational). */
+  serverVersion: string;
   token: string;
   /** http://127.0.0.1:<port> */
   origin: string;
@@ -94,7 +96,7 @@ export async function findDaemon(paths: PgPaths, opts: FindDaemonOptions = {}): 
   if (opts.version !== undefined && hello.data.serverVersion !== opts.version) {
     throw new DaemonVersionMismatch(hello.data.serverVersion, opts.version);
   }
-  return { info, token, origin, client: new PromptgraphClient(origin, token, opts.fetchImpl) };
+  return { info, serverVersion: hello.data.serverVersion, token, origin, client: new PromptgraphClient(origin, token, opts.fetchImpl) };
 }
 
 export interface EnsureDaemonOptions {
@@ -207,4 +209,13 @@ export async function mintLoginUrl(conn: DaemonConnection, next: string, opts: M
   const { code } = LoginCodeResponseSchema.parse(await conn.client.post(API.loginCodes, body));
   const origin = opts.webPort !== undefined ? `http://127.0.0.1:${opts.webPort}` : conn.origin;
   return loginUrl(origin, code, next);
+}
+
+/**
+ * argv that re-runs this promptgraph CLI ([node, ...execArgv, entry]): what ensureDaemon spawns as
+ * `<argv> daemon`. Works from dist and from tsx in development (its loader is in execArgv); the entry is
+ * absolute because the detached daemon runs with cwd PG_HOME.
+ */
+export function currentCliCommand(): string[] {
+  return [process.execPath, ...process.execArgv, path.resolve(process.argv[1] ?? "promptgraph")];
 }

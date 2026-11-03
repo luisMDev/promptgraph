@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { MCP_TOOL_NAMES, validateGraph } from "@promptgraph/shared";
+import { MCP_TOOL_NAMES, RepoSummarySchema, validateGraph } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { daemonLogPath, readDaemonInfo } from "../src/config/daemon-info.js";
 import { getPaths } from "../src/config/paths.js";
@@ -13,8 +13,7 @@ import { startDaemon } from "../src/daemon/start.js";
 import type { McpEnvironment } from "../src/mcp/connection.js";
 import { GraphDraftError, LAYOUT_DX, normalizeGraphDraft } from "../src/mcp/draft.js";
 import { createMcpServer } from "../src/mcp/server.js";
-import { isProcessAlive } from "../src/util/process.js";
-import { createTempRepo, fakeClaudeEnv, tempDir, waitFor } from "./helpers.js";
+import { createTempRepo, fakeClaudeEnv, stopDaemonOf, tempDir } from "./helpers.js";
 
 const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Absolute tsx loader: the detached daemon is spawned with PG_HOME as cwd. */
@@ -146,7 +145,7 @@ describe("promptgraph MCP server", () => {
     );
     // Approvals stay a human action in the UI (invariant 4).
     expect(tools.map((t) => t.name).some((n) => /approve/.test(n))).toBe(false);
-    expect((await call("server_status")).data).toMatchObject({ running: false, repoPath: repo, registered: false });
+    expect((await call("server_status")).data).toEqual({ running: false, repoPath: repo, registered: false, hint: expect.stringContaining("start_server") });
     const res = await call("list_graphs");
     expect(res.isError).toBe(true);
     expect(res.text).toBe("promptgraph is not running; call start_server");
@@ -159,7 +158,16 @@ describe("promptgraph MCP server", () => {
     cleanups.push(() => daemon.close());
     const token = daemon.ctx.getToken();
 
-    expect((await call("server_status")).data).toMatchObject({ running: true, pid: process.pid, version: VERSION, port: daemon.port, repoPath: repo, registered: false });
+    // server_status: {running, pid?, version?, port?, repoPath, repoId?, registered, status?, versionMismatch?} (+ hint).
+    expect((await call("server_status")).data).toEqual({
+      running: true,
+      pid: process.pid,
+      version: VERSION,
+      port: daemon.port,
+      repoPath: repo,
+      registered: false,
+      hint: expect.any(String),
+    });
 
     const invalid = await call("save_graph", { graph: { id: "broken", name: "Broken", nodes: [{ id: "m", type: "merge" }] } });
     expect(invalid.data).toMatchObject({ saved: true, runnable: false });
@@ -207,7 +215,17 @@ describe("promptgraph MCP server", () => {
     expect((await call("list_runs", { graphId: "hello" })).data[0]).toMatchObject({ runId, status: "succeeded" });
 
     const status = (await call("server_status")).data;
-    expect(status).toMatchObject({ registered: true, repoId: expect.any(String), status: { path: repo, active: true, runs: { running: 0, paused: 0 } } });
+    expect(status).toEqual({
+      running: true,
+      pid: process.pid,
+      version: VERSION,
+      port: daemon.port,
+      repoPath: repo,
+      registered: true,
+      repoId: expect.any(String),
+      status: expect.objectContaining({ id: status.repoId, path: repo, active: true, runs: { running: 0, paused: 0 } }),
+    });
+    expect(RepoSummarySchema.safeParse(status.status).success).toBe(true);
     expect(daemon.ctx.registry.list().map((r) => r.id)).toEqual([status.repoId]);
 
     const ui = await call("open_ui");
@@ -246,31 +264,35 @@ describe("promptgraph MCP server", () => {
   });
 
   it("refuses a daemon of another version with the documented message", async () => {
-    const { env, call } = await setup({ version: "0.0.0-other" });
+    const { env, call, repo } = await setup({ version: "0.0.0-other" });
     const daemon = await startDaemon({ port: 0, env });
     cleanups.push(() => daemon.close());
     const message = `promptgraph ${VERSION} is running (this is 0.0.0-other); run promptgraph stop, then retry`;
     const res = await call("list_graphs");
     expect(res).toMatchObject({ isError: true, text: message });
-    expect((await call("server_status")).data).toMatchObject({ running: true, versionMismatch: message, registered: false });
+    expect((await call("server_status")).data).toEqual({
+      running: true,
+      pid: process.pid,
+      version: VERSION,
+      port: daemon.port,
+      repoPath: repo,
+      registered: false,
+      versionMismatch: message,
+    });
+    const started = await call("start_server");
+    expect(started).toMatchObject({ isError: true, text: message });
     expect(daemon.ctx.registry.list()).toEqual([]);
   });
 
   it("start_server spawns a detached daemon, registers the repository and is a no-op once it runs", { timeout: 40_000 }, async () => {
     const { repo, env, call } = await setup();
     const paths = getPaths(env);
+    // Registered before the call and any assertion: a failure must not leave the detached daemon running.
+    cleanups.push(() => stopDaemonOf(paths));
     const first = await call("start_server");
     expect(first.isError, first.text).toBe(false);
     expect(first.data).toMatchObject({ started: true, repoPath: repo, repoId: expect.any(String), logFile: daemonLogPath(paths) });
     const pid = first.data.pid as number;
-    cleanups.push(async () => {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        return;
-      }
-      await waitFor(() => !isProcessAlive(pid), 15_000, 100).catch(() => {});
-    });
     expect(pid).not.toBe(process.pid);
     expect(first.data.url).toBe(`http://127.0.0.1:${first.data.port}/r/${first.data.repoId}`);
     expect(readDaemonInfo(paths)?.pid).toBe(pid);

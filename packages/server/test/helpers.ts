@@ -3,6 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readDaemonInfo } from "../src/config/daemon-info.js";
+import type { PgPaths } from "../src/config/paths.js";
+import { isSameProcess } from "../src/util/process.js";
 
 /** Absolute path of the fake claude CLI (set PG_CLAUDE_BIN to it). */
 export const FAKE_CLAUDE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-claude");
@@ -75,4 +78,22 @@ export async function waitFor<T>(fn: () => T | undefined | null | false, timeout
     if (Date.now() > end) throw new Error(`waitFor timed out after ${timeoutMs}ms`);
     await new Promise((r) => setTimeout(r, stepMs));
   }
+}
+
+/**
+ * Stops the detached daemon recorded in this PG_HOME (always one the test started, never this process),
+ * SIGKILL as a last resort. Reads daemon.json when it runs, so it can be registered before the daemon is
+ * spawned and before any assertion that could fail.
+ */
+export async function stopDaemonOf(paths: PgPaths): Promise<void> {
+  const info = readDaemonInfo(paths);
+  if (!info || info.pid === process.pid) return;
+  try {
+    process.kill(info.pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  await waitFor(() => !isSameProcess(info.pid, info.pidStart), 15_000, 100).catch(() => {
+    if (isSameProcess(info.pid, info.pidStart)) process.kill(info.pid, "SIGKILL");
+  });
 }

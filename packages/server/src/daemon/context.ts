@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { AppSettingsStore } from "../config/app-settings.js";
 import { LegacyRepoLocks } from "../config/instance-lock.js";
@@ -60,8 +60,9 @@ export interface CreateDaemonContextOptions {
 /**
  * Composition root of the daemon: paths (home 0700) → Store (state.db, 0600) → EventBus →
  * AppSettingsStore → PtyManager (log resolver) → HookRouter → installPgHook → Notifier →
- * LegacyRepoLocks → RepoRegistry → LoginCodes → Sessions (expired sessions deleted). Opens and migrates
- * the DB; does not listen and touches no repository.
+ * LegacyRepoLocks → RepoRegistry → LoginCodes → Sessions (expired sessions deleted; every session
+ * deleted when the token is not the one they were issued under, see syncTokenFingerprint). Opens and
+ * migrates the DB; does not listen and touches no repository.
  */
 export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonContext {
   const env = opts.env ?? process.env;
@@ -80,6 +81,7 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
   const legacyLocks = new LegacyRepoLocks(paths);
   const sessions = new Sessions(store, bus);
   sessions.deleteExpired();
+  syncTokenFingerprint(store, sessions, opts.token);
   let token = opts.token;
   let warnings: Promise<string[]> | null = opts.warnings ? Promise.resolve(opts.warnings) : null;
   const ctx: DaemonContext = {
@@ -124,7 +126,30 @@ export function rotateToken(ctx: DaemonContext): void {
   ctx.setToken(token);
   ctx.loginCodes.clear();
   ctx.sessions.revokeAll();
+  ctx.store.setMeta(TOKEN_FINGERPRINT_KEY, tokenFingerprint(token));
   ctx.bus.emit("token:rotated", {});
+}
+
+/** `meta` key of the fingerprint of the token the stored sessions were issued under (DESIGN §14). */
+export const TOKEN_FINGERPRINT_KEY = "token_fingerprint";
+
+/** SHA-256 hex of a domain-separated token: identifies a token without storing it. */
+export function tokenFingerprint(token: string): string {
+  return createHash("sha256").update(`promptgraph-token-fingerprint:${token}`).digest("hex");
+}
+
+/**
+ * At daemon start (DESIGN §14): when the token differs from the one recorded in `meta` (rotated
+ * offline by `promptgraph token rotate`, replaced or deleted by hand, or no record yet), every session
+ * is deleted before the first request, then the current fingerprint is recorded. Sessions issued under
+ * an old token never outlive it. Returns how many sessions were deleted.
+ */
+export function syncTokenFingerprint(store: Store, sessions: Sessions, token: string): number {
+  const fingerprint = tokenFingerprint(token);
+  if (store.getMeta(TOKEN_FINGERPRINT_KEY) === fingerprint) return 0;
+  const deleted = sessions.revokeAll();
+  store.setMeta(TOKEN_FINGERPRINT_KEY, fingerprint);
+  return deleted;
 }
 
 const PTY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;

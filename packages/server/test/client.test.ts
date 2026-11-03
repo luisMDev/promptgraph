@@ -12,8 +12,8 @@ import { writeToken } from "../src/config/token.js";
 import { VERSION } from "../src/config/version.js";
 import { DaemonVersionMismatch, ensureDaemon, findDaemon, registerRepo } from "../src/daemon/client.js";
 import { startDaemon } from "../src/daemon/start.js";
-import { isProcessAlive, processStartTime } from "../src/util/process.js";
-import { createTempRepo, fakeClaudeEnv, tempDir, waitFor } from "./helpers.js";
+import { processStartTime } from "../src/util/process.js";
+import { createTempRepo, fakeClaudeEnv, stopDaemonOf, tempDir, waitFor } from "./helpers.js";
 
 const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
@@ -125,11 +125,8 @@ describe("daemon client (DESIGN §4.1 items 3 and 4)", () => {
   it("starts a real detached daemon even when PG_PORT_DEFAULT is taken", { timeout: 40_000 }, async () => {
     const { env, paths } = home();
     const busy = await listen(net.createServer());
+    cleanups.push(() => stopDaemonOf(paths));
     const conn = await ensureDaemon({ paths, serverCommand: CLI_COMMAND, env: { ...env, PG_PORT_DEFAULT: String(busy) }, version: VERSION });
-    cleanups.push(async () => {
-      process.kill(conn.info.pid, "SIGTERM");
-      await waitFor(() => !isProcessAlive(conn.info.pid), 15_000, 100);
-    });
     expect(conn.started).toBe(true);
     expect(conn.info.pid).not.toBe(process.pid);
     expect(conn.info.port).not.toBe(busy);

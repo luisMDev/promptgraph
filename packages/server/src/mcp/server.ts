@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import open from "open";
 import { getPaths } from "../config/paths.js";
 import { VERSION } from "../config/version.js";
+import { currentCliCommand } from "../daemon/client.js";
 import type { McpEnvironment } from "./connection.js";
 import { GRAPH_REFERENCE } from "./reference.js";
 import { registerTools, type ToolDeps } from "./tools.js";
@@ -34,8 +35,7 @@ export async function runMcpStdio(opts: { cwd?: string; env?: NodeJS.ProcessEnv 
     cwd: opts.cwd ?? process.cwd(),
     env,
     paths: getPaths(env),
-    // Re-run this same CLI (works from dist and from tsx in development).
-    serverCommand: [process.execPath, ...process.execArgv, process.argv[1]!],
+    serverCommand: currentCliCommand(),
   };
   const server = createMcpServer({
     mcpEnv,

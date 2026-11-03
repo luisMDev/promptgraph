@@ -11,6 +11,7 @@ import {
   type NodeRunResponse,
   type PendingResponse,
   type ListReposResponse,
+  type RepoSummary,
   type RunDetail,
   type RunReportResponse,
   type SaveGraphResponse,
@@ -27,6 +28,23 @@ import { connect, resolveRepo, startDaemonFor, type Connection, type McpEnvironm
 import { GraphDraftError, normalizeGraphDraft } from "./draft.js";
 import { compactDiff, compactNodeRun, compactReport, compactRunDetail, compactRunSummary, latestAttempts, needsAttention } from "./format.js";
 import { GRAPH_REFERENCE, graphJsonSchema } from "./reference.js";
+
+/** server_status result (DESIGN §19.2). */
+export interface ServerStatusResult {
+  running: boolean;
+  pid?: number;
+  /** The daemon's version (from its verified hello). */
+  version?: string;
+  port?: number;
+  repoPath: string;
+  repoId?: string;
+  registered: boolean;
+  status?: RepoSummary;
+  /** The §4.1 item 4 message when the daemon has another version than this MCP server. */
+  versionMismatch?: string;
+  /** What to call next. */
+  hint?: string;
+}
 
 export interface ToolDeps {
   mcpEnv: McpEnvironment;
@@ -71,8 +89,9 @@ const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: fals
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: false } as const;
 
 /**
- * Registers the promptgraph tools (§19.3). Every call re-reads the server-info record, so a restarted
- * server (new port and token) is picked up transparently. Approvals are read-only here: approving or
+ * Registers the promptgraph tools (§19.3). Every call re-reads the daemon record and the token file and
+ * verifies the daemon before sending the token (§19.1), so a restarted daemon (possibly on another port)
+ * or a rotated token is picked up transparently. Approvals are read-only here: approving or
  * rejecting a gate stays a human action in the UI (invariant 4).
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
@@ -100,16 +119,20 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           repoPath,
           registered: false,
           hint: "Call start_server to start the promptgraph daemon in the background (no browser opens), then open_ui if the user wants to watch.",
-        });
+        } satisfies ServerStatusResult);
       }
       const version = mcpEnv.version ?? VERSION;
-      const base = { running: true, pid: found.info.pid, version: found.info.serverVersion, port: found.info.port, url: found.origin, repoPath };
-      if (found.info.serverVersion !== version) {
-        return json({ ...base, registered: false, versionMismatch: new DaemonVersionMismatch(found.info.serverVersion, version).message });
+      const base = { running: true, pid: found.info.pid, version: found.serverVersion, port: found.info.port, repoPath } as const;
+      if (found.serverVersion !== version) {
+        return json({ ...base, registered: false, versionMismatch: new DaemonVersionMismatch(found.serverVersion, version).message } satisfies ServerStatusResult);
       }
       const { repos } = await found.client.get<ListReposResponse>(API.repos);
       const status = repos.find((r) => r.path === repoPath);
-      return json(status ? { ...base, registered: true, repoId: status.id, status } : { ...base, registered: false, hint: "Any other tool registers this repository." });
+      return json(
+        (status
+          ? { ...base, registered: true, repoId: status.id, status }
+          : { ...base, registered: false, hint: "Any other tool registers this repository." }) satisfies ServerStatusResult,
+      );
     }),
   );
 
@@ -118,7 +141,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Start promptgraph",
       description:
-        "Starts the promptgraph daemon in the background when none runs (it keeps running after this session ends, for every repository; stop it with `promptgraph stop`), and registers this repository with it.",
+        "Starts the promptgraph daemon if needed (it keeps running after this session; stop it with `promptgraph stop`) and registers this repository. No browser opens.",
       inputSchema: {
         ...repoArg,
         port: z.number().int().min(0).max(65535).optional().describe("Port on 127.0.0.1, only used when this call starts the daemon. Default: its last port, else 4777, else any free port."),
