@@ -1,9 +1,13 @@
 import type { Context, Hono } from "hono";
 import type { DaemonContext } from "../daemon/context.js";
 import type { RepoContext } from "../daemon/repo-context.js";
+import type { Credential } from "./credentials.js";
 
-/** Hono environment of the daemon app: repository routes find their RepoContext in `c.get("repo")`. */
-export type AppEnv = { Variables: { repo: RepoContext } };
+/**
+ * Hono environment of the daemon app: repository routes find their RepoContext in `c.get("repo")`;
+ * tokenAuth stores how the request authenticated in `c.get("credential")` (unset on public routes).
+ */
+export type AppEnv = { Variables: { repo: RepoContext; credential: Credential } };
 export type App = Hono<AppEnv>;
 
 /** Prefix of every repository route (DESIGN §12.1). */

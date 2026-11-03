@@ -102,7 +102,7 @@ describe("Store: repositories, meta and sessions", () => {
     expect(() => store.deleteSessions("a%")).toThrow(/Invalid session id/);
     expect(store.deleteSessions("cccc")).toEqual([]);
     expect(store.deleteSessions("aaaa2").sort()).toEqual(["aaaa2222"]);
-    expect(store.deleteExpiredSessions(10)).toBe(1);
+    expect(store.deleteExpiredSessions(10)).toHaveLength(1);
     expect(store.listSessions().map((r) => r.idHash)).toEqual(["aaaa1111"]);
     store.insertSession(s("cccc4444", 4));
     expect(store.deleteSessions("all").sort()).toEqual(["aaaa1111", "cccc4444"]);

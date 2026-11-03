@@ -652,9 +652,10 @@ export class Store {
     });
   }
 
-  /** Drops sessions that expired before `now`; returns how many. */
-  deleteExpiredSessions(now: number = this.now()): number {
-    return this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(now).changes;
+  /** Drops sessions that expired before `now`; returns their id hashes. */
+  deleteExpiredSessions(now: number = this.now()): string[] {
+    const rows = this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ? RETURNING id_hash`).all(now) as Array<{ id_hash: string }>;
+    return rows.map((r) => r.id_hash);
   }
 
   /** Runs `fn` in a transaction (nested calls become savepoints). */

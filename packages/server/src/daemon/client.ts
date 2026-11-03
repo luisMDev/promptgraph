@@ -2,7 +2,16 @@ import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { API, DaemonHelloResponseSchema, EXIT_DAEMON_LOCKED, type DaemonInfo, type RepoSummary } from "@promptgraph/shared";
+import {
+  API,
+  DaemonHelloResponseSchema,
+  EXIT_DAEMON_LOCKED,
+  LoginCodeResponseSchema,
+  loginUrl,
+  type DaemonInfo,
+  type LoginCodeRequest,
+  type RepoSummary,
+} from "@promptgraph/shared";
 import { daemonLogPath, readDaemonInfo, rotateDaemonLog } from "../config/daemon-info.js";
 import type { PgPaths } from "../config/paths.js";
 import { helloProof, tokenPath } from "../config/token.js";
@@ -179,4 +188,23 @@ function tailOf(file: string, offset: number): string {
 /** POST /api/repos (idempotent): registers and activates the repository. */
 export function registerRepo(client: PromptgraphClient, repoPath: string): Promise<RepoSummary> {
   return client.post<RepoSummary>(API.repos, { path: repoPath });
+}
+
+export interface MintLoginUrlOptions {
+  /** Build the URL on `http://127.0.0.1:<webPort>` (the vite dev server, DESIGN §14 Development). */
+  webPort?: number;
+  /** The session it creates is labelled "promptgraph desktop". */
+  desktop?: boolean;
+}
+
+/**
+ * A one-time login URL (DESIGN §14): mints a code over Bearer (`POST /api/daemon/login-codes`) and
+ * returns `<origin>/login?code=<code>&next=<next>`. The URL holds no token; it signs one browser in
+ * once, within 30 s. Never put it in a tool result or a log.
+ */
+export async function mintLoginUrl(conn: DaemonConnection, next: string, opts: MintLoginUrlOptions = {}): Promise<string> {
+  const body: LoginCodeRequest = opts.desktop ? { desktop: true } : {};
+  const { code } = LoginCodeResponseSchema.parse(await conn.client.post(API.loginCodes, body));
+  const origin = opts.webPort !== undefined ? `http://127.0.0.1:${opts.webPort}` : conn.origin;
+  return loginUrl(origin, code, next);
 }

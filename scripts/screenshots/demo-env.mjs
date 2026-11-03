@@ -127,7 +127,9 @@ export function removeCredentials(claudeConfig) {
 /**
  * Runs `promptgraph <repo> --foreground --no-open --port <port>` (the daemon in a child process, with the
  * isolated PG_HOME of `env`), waits for `Open: http://127.0.0.1:<port>/r/<repoId>` and reads the token
- * from `<PG_HOME>/token`. `url` signs the browser in with the temporary `?t=` page flow.
+ * from `<PG_HOME>/token` (sent only as a Bearer header, never logged or put in a URL). `loginUrl()`
+ * mints a one-time login URL for `/r/<repoId>` (over Bearer, valid 30 s): call it right before
+ * `page.goto`, never ahead of slow setup steps.
  */
 export async function startServer(repo, env, port) {
   const child = spawn(process.execPath, [SERVER_CLI, repo, "--foreground", "--no-open", "--port", String(port)], {
@@ -145,16 +147,33 @@ export async function startServer(repo, env, port) {
     },
     30_000,
   );
-  const [, openUrl, boundPort, repoId] = match;
+  const [, , boundPort, repoId] = match;
   const token = fs.readFileSync(path.join(env.PG_HOME, "token"), "utf8").trim();
+  const base = `http://127.0.0.1:${boundPort}`;
+  const loginUrl = (next = `/r/${encodeURIComponent(repoId)}`) => mintLoginUrl(base, token, next);
   return {
     child,
-    url: `${openUrl}?t=${encodeURIComponent(token)}`,
+    loginUrl,
     token,
     repoId,
-    base: `http://127.0.0.1:${boundPort}`,
+    base,
     output: () => output,
   };
+}
+
+/**
+ * One-time login URL (DESIGN §14): `POST /api/daemon/login-codes` with the Bearer token, then
+ * `<base>/login?code=<code>&next=<next>`, which signs a browser in once (302 + the pg_session cookie).
+ */
+export async function mintLoginUrl(base, token, next) {
+  const res = await fetch(`${base}/api/daemon/login-codes`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(`POST /api/daemon/login-codes → ${res.status}`);
+  const { code } = await res.json();
+  return `${base}/login?code=${encodeURIComponent(code)}&next=${encodeURIComponent(next)}`;
 }
 
 export async function stopServer(server) {

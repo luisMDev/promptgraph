@@ -6,7 +6,8 @@ export type AttentionKind = "waiting_input" | "waiting_approval" | "idle";
 
 /**
  * In-process events. Producers: engine (run/node/lane/attention/repo:changed), PtyManager (pty:*),
- * GraphStore (graphs:changed), the repository registry and sessions (repo:*, session:revoked).
+ * GraphStore (graphs:changed), the repository registry and sessions (repo:*, session:revoked,
+ * token:rotated).
  * Consumers: WsHub (all but attention), Notifier (attention).
  */
 export interface BusEvents {
@@ -37,6 +38,8 @@ export interface BusEvents {
   "repo:removed": { repoId: string };
   /** Browser sessions were revoked (or every session, on token rotation): their sockets are closed. */
   "session:revoked": { idHashes: string[] };
+  /** The token was rotated: every socket is closed (Bearer ones included), DESIGN §14. */
+  "token:rotated": Record<string, never>;
 }
 
 export type BusEventName = keyof BusEvents;

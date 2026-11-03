@@ -1,38 +1,14 @@
-import { timingSafeEqual } from "node:crypto";
-import { TOKEN_COOKIE, type ApiError } from "@promptgraph/shared";
+import { SESSION_COOKIE, SESSION_IDLE_MS, type ApiError } from "@promptgraph/shared";
 import type { MiddlewareHandler } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
-import { hookToken, sessionCookieValue } from "../hooks/hook-token.js";
+import type { Sessions } from "../daemon/sessions.js";
+import { hookToken } from "../hooks/hook-token.js";
+import { authenticate, bearer, cookieValue, tokenMatches } from "./credentials.js";
+import type { AppEnv } from "./repo-scope.js";
+import { signedOutPage } from "./signed-out-page.js";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
-/** Paths that never get the `?t=` cookie flow (API clients send the Bearer header). */
-const NON_PAGE_PREFIXES = ["/api/", "/hooks/", "/ws"];
-
-function tokenMatches(token: string, candidate: string | null | undefined): boolean {
-  if (!candidate) return false;
-  const a = Buffer.from(token);
-  const b = Buffer.from(candidate);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function bearer(header: string | null | undefined): string | null {
-  const m = header ? /^Bearer\s+(\S+)$/i.exec(header) : null;
-  return m?.[1] ?? null;
-}
-
-function cookieValue(header: string | null | undefined, name: string): string | null {
-  for (const part of (header ?? "").split(";")) {
-    const eq = part.indexOf("=");
-    if (eq > 0 && part.slice(0, eq).trim() === name) {
-      try {
-        return decodeURIComponent(part.slice(eq + 1).trim());
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
-}
+/** Paths that are never pages: an unauthenticated request gets the JSON 401, not the signed-out page. */
+const NON_PAGE_PREFIXES = ["/api/", "/hooks/"];
 
 function parseHost(host: string): URL | null {
   try {
@@ -65,33 +41,49 @@ const deny = (error: string, code: string): ApiError => ({ error, code });
 const HOOK_PATH = /^\/hooks\/([^/]+)\//;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-/** Routes that need no credential: the daemon's identity check (DESIGN §4.1 item 3). */
-const PUBLIC_ROUTES = new Set(["GET /api/daemon/hello", "HEAD /api/daemon/hello"]);
+/** Routes that need no credential: the daemon's identity check (§4.1 item 3) and the sign-in page (§14). */
+const PUBLIC_ROUTES = new Set(["GET /api/daemon/hello", "HEAD /api/daemon/hello", "GET /login"]);
+/** Routes a session cookie must not reach (DESIGN §12.1 "Bearer only"): minting codes, rotation, sessions. */
+const BEARER_ONLY = /^\/api\/daemon\/(login-codes|token\/rotate|sessions)(\/|$)/;
+
+/** `Set-Cookie` value of a session (DESIGN §14); also renews it on page loads. */
+export function sessionCookieHeader(value: string): string {
+  return `${SESSION_COOKIE}=${value}; Max-Age=${SESSION_IDLE_MS / 1000}; Path=/; HttpOnly; SameSite=Strict`;
+}
+
+const isPagePath = (pathname: string) => pathname !== "/ws" && !pathname.startsWith("/ws/") && !NON_PAGE_PREFIXES.some((p) => pathname.startsWith(p));
 
 export interface TokenAuthOptions {
-  /** The current token (read per request: `token rotate` swaps it in memory). */
+  /** The current token (read per request: rotation swaps it in memory). */
   getToken: () => string;
   /** Per-start secret of the hook tokens (hookToken). */
   hookSecret: string;
+  sessions: Sessions;
 }
 
 /**
- * Requires `Authorization: Bearer <token>` or the `pg_token` cookie, except on PUBLIC_ROUTES. A request
- * to `/` (or any non-API page) with `?t=<token>` sets the cookie (HttpOnly, SameSite=Strict, Path=/) and
- * redirects to drop `t` (temporary page flow, replaced by one-time login codes, DESIGN §14).
- * The cookie holds sessionCookieValue(token), never the token: other local servers receive it too.
- * `/hooks/<nodeRunId>/*` accepts the Bearer token or that node run's hookToken(hookSecret, nodeRunId)
- * (the only credential Claude PTYs get; derived from the per-start hook secret, never from the token).
- * Cookie-authenticated API writes must be `application/json` so a cross-origin form/`text/plain` POST
- * cannot pass without a CORS preflight. 401/403 ApiError otherwise. Constant-time comparison.
+ * Authentication of every HTTP request (DESIGN §14), after localhostOnly and fetchMetadata:
+ * - PUBLIC_ROUTES (`GET /api/daemon/hello`, `GET /login`) need nothing.
+ * - `/hooks/<nodeRunId>/*` accepts that node run's hookToken(hookSecret, nodeRunId) or the Bearer token
+ *   (the hook token is the only credential Claude PTYs get, and it is refused everywhere else).
+ * - Everything else needs `Authorization: Bearer <token>` (compared per request with getToken(), in
+ *   constant time) or a live `pg_session` cookie (Sessions.verify, sliding expiry); a request with an
+ *   Authorization header is judged by that header alone.
+ * - Cookie requests: BEARER_ONLY routes → 403 `forbidden_cookie_auth`; API writes that are not
+ *   `application/json` → 403 `forbidden_content_type` (a cross-origin form or `text/plain` POST cannot
+ *   pass without a CORS preflight); HTML page responses renew the cookie (Max-Age reset).
+ * - Unauthenticated: a page (GET/HEAD outside /api, /hooks and /ws) gets signedOutPage(), anything else
+ *   the JSON 401 `unauthorized`. No URL query parameter is a credential (the token never travels in a URL).
+ * The credential is stored in `c.var.credential`.
  */
-export function tokenAuth({ getToken, hookSecret }: TokenAuthOptions): MiddlewareHandler {
+export function tokenAuth({ getToken, hookSecret, sessions }: TokenAuthOptions): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const token = getToken();
-    const cookieSecret = sessionCookieValue(token);
-    const url = new URL(c.req.url);
-    if (PUBLIC_ROUTES.has(`${c.req.method} ${url.pathname}`)) return next();
-    const hook = HOOK_PATH.exec(url.pathname);
+    // Every rule below decides on c.req.path, the percent-decoded path the router matches: on the raw
+    // pathname, `/api/daemon/login%2Dcodes` or `/ap%69/...` would skip BEARER_ONLY or the content-type
+    // rule and still reach those routes.
+    const pathname = c.req.path;
+    if (PUBLIC_ROUTES.has(`${c.req.method} ${pathname}`)) return next();
+    const hook = HOOK_PATH.exec(pathname);
     if (hook) {
       let nodeRunId: string;
       try {
@@ -100,26 +92,30 @@ export function tokenAuth({ getToken, hookSecret }: TokenAuthOptions): Middlewar
         nodeRunId = "";
       }
       const presented = bearer(c.req.header("authorization"));
-      if (tokenMatches(token, presented) || (nodeRunId && tokenMatches(hookToken(hookSecret, nodeRunId), presented))) return next();
+      if (tokenMatches(getToken(), presented) || (nodeRunId && tokenMatches(hookToken(hookSecret, nodeRunId), presented))) return next();
       return c.json(deny("Unauthorized: missing or invalid hook token", "unauthorized"), 401);
     }
-    const t = url.searchParams.get("t");
-    const isPage = c.req.method === "GET" && !NON_PAGE_PREFIXES.some((p) => url.pathname.startsWith(p));
-    if (isPage && t !== null && tokenMatches(token, t)) {
-      setCookie(c, TOKEN_COOKIE, cookieSecret, { httpOnly: true, sameSite: "Strict", path: "/" });
-      url.searchParams.delete("t");
-      return c.redirect(`${url.pathname}${url.search}`, 302);
+    const isPage = (c.req.method === "GET" || c.req.method === "HEAD") && isPagePath(pathname);
+    const credential = authenticate({ getToken, sessions }, { authorization: c.req.header("authorization"), cookie: c.req.header("cookie") });
+    if (!credential) {
+      if (isPage) return signedOutPage(c.req.method);
+      return c.json(deny("Unauthorized: missing or invalid token", "unauthorized"), 401);
     }
-    if (tokenMatches(token, bearer(c.req.header("authorization")))) return next();
-    if (tokenMatches(cookieSecret, getCookie(c, TOKEN_COOKIE))) {
-      const contentType = c.req.header("content-type") ?? "";
-      if (url.pathname.startsWith("/api/") && !SAFE_METHODS.has(c.req.method) && !/^application\/json\b/i.test(contentType)) {
-        return c.json(deny("Forbidden: API writes must send Content-Type: application/json", "forbidden_content_type"), 403);
-      }
-      return next();
+    c.set("credential", credential);
+    if (credential.kind === "bearer") return next();
+
+    if (BEARER_ONLY.test(pathname)) {
+      return c.json(deny("Forbidden: this route accepts the token only (run the promptgraph CLI)", "forbidden_cookie_auth"), 403);
     }
-    if (isPage) return c.text("promptgraph: unauthorized. Open the URL printed by the promptgraph command.", 401);
-    return c.json(deny("Unauthorized: missing or invalid token", "unauthorized"), 401);
+    const contentType = c.req.header("content-type") ?? "";
+    if (pathname.startsWith("/api/") && !SAFE_METHODS.has(c.req.method) && !/^application\/json\b/i.test(contentType)) {
+      return c.json(deny("Forbidden: API writes must send Content-Type: application/json", "forbidden_content_type"), 403);
+    }
+    await next();
+    if (isPage && c.res.status === 200 && /^text\/html\b/i.test(c.res.headers.get("content-type") ?? "")) {
+      const value = cookieValue(c.req.header("cookie"), SESSION_COOKIE);
+      if (value) c.res.headers.append("set-cookie", sessionCookieHeader(value));
+    }
   };
 }
 
@@ -132,16 +128,4 @@ export function localhostOnly(port: () => number): MiddlewareHandler {
     if (isLocalRequest(c.req.header("host"), c.req.header("origin"), port())) return next();
     return c.json(deny("Forbidden: requests must target localhost", "forbidden_host"), 403);
   };
-}
-
-/** Shared by the WS upgrade: validates the Bearer header, the cookie header or the `t` query param. */
-export function isAuthorized(token: string, req: { headers: Record<string, string | string[] | undefined>; url?: string }): boolean {
-  const header = (name: string): string | undefined => {
-    const v = req.headers[name];
-    return Array.isArray(v) ? v[0] : v;
-  };
-  if (tokenMatches(token, bearer(header("authorization")))) return true;
-  if (tokenMatches(sessionCookieValue(token), cookieValue(header("cookie"), TOKEN_COOKIE))) return true;
-  const t = req.url ? new URL(req.url, "http://localhost").searchParams.get("t") : null;
-  return tokenMatches(token, t);
 }

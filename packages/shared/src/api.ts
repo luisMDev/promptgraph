@@ -7,8 +7,9 @@ import { ValidationResultSchema } from "./validation/types.js";
 /**
  * REST API (DESIGN §12.1). Daemon routes live under `/api/daemon`, `/api/repos` and `/api/settings`;
  * every repository route lives under `/api/repos/:repoId` (the paths in the comments below are relative
- * to that prefix, see `API.repo(repoId)`). Every route except `GET /api/daemon/hello` and the hook
- * receiver requires the token (`Authorization: Bearer <t>` or the `pg_token` cookie set from `/?t=`).
+ * to that prefix, see `API.repo(repoId)`). Every route except `GET /api/daemon/hello`, `GET /login` and the
+ * hook receiver requires the token (`Authorization: Bearer <t>`) or a session cookie (`pg_session`, DESIGN
+ * §14); the login-code, token-rotation and session routes accept the Bearer token only.
  * Errors are `ApiError` with a 4xx/5xx status.
  * Naming: `<Name>Request` = JSON body, `<Name>Response` = JSON response.
  */
@@ -59,6 +60,13 @@ export const LoginCodeResponseSchema = z.object({
   expiresAt: z.number(),
 });
 export type LoginCodeResponse = z.infer<typeof LoginCodeResponseSchema>;
+
+/**
+ * POST /api/daemon/login-codes body (optional): `desktop` labels the session the code creates as
+ * "promptgraph desktop" (the desktop window's user agent does not say so).
+ */
+export const LoginCodeRequestSchema = z.object({ desktop: z.boolean().optional() });
+export type LoginCodeRequest = z.infer<typeof LoginCodeRequestSchema>;
 
 /** App-wide settings stored in ~/.promptgraph/settings.json. */
 export const AppSettingsSchema = z.object({
@@ -366,6 +374,3 @@ export const API = {
   hook: (nodeRunId: string, event: string) => `/hooks/${enc(nodeRunId)}/${event}`,
   repo: repoApi,
 } as const;
-
-/** Cookie set by the server when the page is opened with ?t=<token>. */
-export const TOKEN_COOKIE = "pg_token";

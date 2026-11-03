@@ -55,7 +55,7 @@ export interface RunningDaemon {
  * Starts the daemon in this process, in the order of DESIGN §4.1 item 1: daemon lock (held →
  * DaemonLockedError) → refuse while a legacy server runs, delete stale legacy records → token → DB +
  * DaemonContext + HTTP app → bind 127.0.0.1 → mark interrupted every run left running → backfill →
- * legacy locks of the registered repositories → notifier and WebSocket hub → `port` file and daemon
+ * legacy locks of the registered repositories → notifier, expired-session sweep and WebSocket hub → `port` file and daemon
  * record. Installs no process handlers (installProcessHandlers does, for the CLI).
  */
 export async function startDaemon(opts: StartDaemonOptions = {}): Promise<RunningDaemon> {
@@ -103,6 +103,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Runnin
   const daemon = ctx;
   const http = server;
   const stopNotifier = daemon.notifier.start();
+  const stopSessionSweep = daemon.sessions.startSweep();
   const hub = new WsHub(daemon);
   hub.attach(http);
   writeStickyPort(paths, daemon.port);
@@ -123,6 +124,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Runnin
     await daemon.ptys.killAll();
     daemon.legacyLocks.releaseAll();
     stopNotifier();
+    stopSessionSweep();
     await hub.close();
     await new Promise<void>((resolve) => {
       http.close(() => resolve());

@@ -178,7 +178,7 @@ async function main() {
     await context.addInitScript(installCursor);
     const page = await context.newPage();
     page.on("pageerror", (e) => log("page error:", e.message));
-    await page.goto(server.url);
+    await page.goto(await server.loginUrl());
     await page.getByRole("tab", { name: "Nodes" }).click();
     await page.locator('.react-flow__node[data-id="pr"]').waitFor();
     await page.evaluate(() => document.activeElement?.blur());

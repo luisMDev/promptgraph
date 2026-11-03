@@ -10,8 +10,11 @@ import { PtyManager } from "../pty/pty-manager.js";
 import { installPgHook } from "../runners/claude/pg-hook.js";
 import { openDatabase, Store } from "../store/store.js";
 import { checkPrereqs } from "../cli/prereqs.js";
+import { writeToken } from "../config/token.js";
+import { LoginCodes } from "./login-codes.js";
 import { createRepoContext } from "./repo-context.js";
 import { RepoRegistry } from "./registry.js";
+import { Sessions } from "./sessions.js";
 
 /**
  * Everything daemon-wide (DESIGN §4.1): one DB, bus, PTY manager, hook router and notifier shared by
@@ -41,6 +44,10 @@ export interface DaemonContext {
   prereqWarnings(): Promise<string[]>;
   legacyLocks: LegacyRepoLocks;
   registry: RepoRegistry;
+  /** One-time login codes (memory only, DESIGN §14). */
+  loginCodes: LoginCodes;
+  /** Browser and desktop sessions (`sessions` table, DESIGN §14). */
+  sessions: Sessions;
 }
 
 export interface CreateDaemonContextOptions {
@@ -53,7 +60,8 @@ export interface CreateDaemonContextOptions {
 /**
  * Composition root of the daemon: paths (home 0700) → Store (state.db, 0600) → EventBus →
  * AppSettingsStore → PtyManager (log resolver) → HookRouter → installPgHook → Notifier →
- * LegacyRepoLocks → RepoRegistry. Opens and migrates the DB; does not listen and touches no repository.
+ * LegacyRepoLocks → RepoRegistry → LoginCodes → Sessions (expired sessions deleted). Opens and migrates
+ * the DB; does not listen and touches no repository.
  */
 export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonContext {
   const env = opts.env ?? process.env;
@@ -70,6 +78,8 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
   const pgHookPath = installPgHook(paths);
   const notifier = new Notifier({ bus, settings });
   const legacyLocks = new LegacyRepoLocks(paths);
+  const sessions = new Sessions(store, bus);
+  sessions.deleteExpired();
   let token = opts.token;
   let warnings: Promise<string[]> | null = opts.warnings ? Promise.resolve(opts.warnings) : null;
   const ctx: DaemonContext = {
@@ -96,8 +106,25 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
       )),
     legacyLocks,
     registry: new RepoRegistry({ store, bus, env, legacyLocks, createContext: (row) => createRepoContext(ctx, row) }),
+    loginCodes: new LoginCodes(),
+    sessions,
   };
   return ctx;
+}
+
+/**
+ * `POST /api/daemon/token/rotate` (DESIGN §14): a new token in the file (atomic, 0600) and then in
+ * memory, every session deleted, every outstanding login code dropped and every WebSocket closed with
+ * 4401 (`token:rotated`). Hook tokens derive from the per-start hook secret, so live Claude sessions
+ * keep reporting.
+ */
+export function rotateToken(ctx: DaemonContext): void {
+  const token = randomBytes(32).toString("base64url");
+  writeToken(ctx.paths, token);
+  ctx.setToken(token);
+  ctx.loginCodes.clear();
+  ctx.sessions.revokeAll();
+  ctx.bus.emit("token:rotated", {});
 }
 
 const PTY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;

@@ -1,13 +1,13 @@
+import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import path from "node:path";
 import type { NodeRun, RunSummary, ServerMessage } from "@promptgraph/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { WsHub } from "../src/ws/hub.js";
+import { SIGN_OUT_TERMINATE_MS, WsHub } from "../src/ws/hub.js";
 import { createTempRepo, tempDir, waitFor } from "./helpers.js";
-import { createTestDaemon, TEST_TOKEN, type TestDaemon } from "./support/test-daemon.js";
-import { sessionCookieValue } from "../src/hooks/hook-token.js";
+import { createTestDaemon, sessionCookie, TEST_TOKEN, type TestDaemon } from "./support/test-daemon.js";
 
 interface TestClient {
   ws: WebSocket;
@@ -50,7 +50,9 @@ afterEach(async () => {
   for (const c of cleanups) c();
 });
 
-function connect(query = `?t=${TEST_TOKEN}`, headers: Record<string, string> = {}): Promise<TestClient> {
+const BEARER = { authorization: `Bearer ${TEST_TOKEN}` };
+
+function connect(headers: Record<string, string> = BEARER, query = ""): Promise<TestClient> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws${query}`, { headers });
   clients.push(ws);
   const messages: ServerMessage[] = [];
@@ -68,21 +70,128 @@ function connect(query = `?t=${TEST_TOKEN}`, headers: Record<string, string> = {
   });
 }
 
+/**
+ * A raw TCP WebSocket client that never answers the close frame (the `ws` client always does), as a
+ * non-browser peer replaying a stolen cookie could. Sends masked text frames; resolves once upgraded.
+ */
+async function rawConnect(headers: Record<string, string>): Promise<{ socket: net.Socket; send(msg: unknown): void; closed: Promise<void>; received: () => Buffer }> {
+  const socket = net.connect(port, "127.0.0.1");
+  let buf = Buffer.alloc(0);
+  socket.on("data", (d: Buffer) => (buf = Buffer.concat([buf, d])));
+  const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+  socket.on("error", () => {});
+  await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+  const lines = [
+    "GET /ws HTTP/1.1",
+    `Host: 127.0.0.1:${port}`,
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+    "Sec-WebSocket-Version: 13",
+    ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+  ];
+  socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+  await waitFor(() => buf.includes("\r\n\r\n"), 5000);
+  expect(buf.toString("latin1").split("\r\n")[0]).toContain("101");
+  const send = (msg: unknown) => {
+    const payload = Buffer.from(JSON.stringify(msg));
+    expect(payload.length).toBeLessThan(126);
+    const mask = randomBytes(4);
+    const masked = Buffer.from(payload.map((b, i) => b ^ mask[i % 4]!));
+    socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]));
+  };
+  return { socket, send, closed, received: () => buf };
+}
+
 const summary = (id: string) => ({ id }) as RunSummary;
 const nodeRun = (id: string, runId: string) => ({ id, runId }) as NodeRun;
 
 describe("WsHub", () => {
   it("rejects unauthenticated and non-local upgrades", async () => {
-    await expect(connect("")).rejects.toThrow("HTTP 401");
-    await expect(connect("?t=wrong")).rejects.toThrow("HTTP 401");
-    await expect(connect(`?t=${TEST_TOKEN}`, { origin: "http://evil.example" })).rejects.toThrow("HTTP 403");
+    await expect(connect({})).rejects.toThrow("HTTP 401");
+    await expect(connect({ authorization: "Bearer wrong" })).rejects.toThrow("HTTP 401");
+    await expect(connect({ ...BEARER, origin: "http://evil.example" })).rejects.toThrow("HTTP 403");
+    // The URL carries no credential: ?t= is ignored.
+    await expect(connect({}, `?t=${TEST_TOKEN}`)).rejects.toThrow("HTTP 401");
     setup.ctx.port = port;
+    const cookie = sessionCookie(setup.ctx);
     // Another app on a different localhost port must not reach the PTYs with the user's cookie.
-    await expect(connect("", { cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}`, origin: "http://127.0.0.1:3000" })).rejects.toThrow("HTTP 403");
-    const sameOrigin = await connect("", { cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}`, origin: `http://127.0.0.1:${port}` });
+    await expect(connect({ cookie, origin: "http://127.0.0.1:3000" })).rejects.toThrow("HTTP 403");
+    const sameOrigin = await connect({ cookie, origin: `http://127.0.0.1:${port}` });
     expect((await sameOrigin.next((m) => m.type === "hello")).type).toBe("hello");
-    const viaCookie = await connect("", { cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}` });
+    const viaCookie = await connect({ cookie });
     expect((await viaCookie.next((m) => m.type === "hello")).type).toBe("hello");
+    // A wrong Authorization header is not rescued by a valid cookie.
+    await expect(connect({ cookie, authorization: "Bearer wrong" })).rejects.toThrow("HTTP 401");
+    await expect(connect({ cookie: "pg_session=not-a-session" })).rejects.toThrow("HTTP 401");
+  });
+
+  it("applies the Fetch Metadata rule to cookie upgrades only", async () => {
+    const cookie = sessionCookie(setup.ctx);
+    await expect(connect({ cookie, "sec-fetch-site": "same-site" })).rejects.toThrow("HTTP 403");
+    await expect(connect({ cookie, "sec-fetch-site": "cross-site" })).rejects.toThrow("HTTP 403");
+    const same = await connect({ cookie, "sec-fetch-site": "same-origin", "sec-fetch-mode": "websocket" });
+    expect((await same.next((m) => m.type === "hello")).type).toBe("hello");
+    // Bearer clients are not browsers: no Fetch Metadata check.
+    const bearer = await connect({ ...BEARER, "sec-fetch-site": "cross-site" });
+    expect((await bearer.next((m) => m.type === "hello")).type).toBe("hello");
+  });
+
+  it("closes a revoked session's sockets with 4401 and keeps the others", async () => {
+    const one = sessionCookie(setup.ctx, "one");
+    const two = sessionCookie(setup.ctx, "two");
+    const a = await connect({ cookie: one });
+    const a2 = await connect({ cookie: one });
+    const b = await connect({ cookie: two });
+    const c = await connect();
+    const closes = [a, a2, b, c].map((x) => new Promise<number>((resolve) => x.ws.once("close", (code) => resolve(code))));
+    const [listed] = setup.ctx.sessions.list().filter((s) => s.label === "one");
+    expect(setup.ctx.sessions.revoke(listed!.id)).toBe(1);
+    expect(await closes[0]).toBe(4401);
+    expect(await closes[1]).toBe(4401);
+    b.send({ type: "ping" });
+    await b.next((m) => m.type === "pong");
+    c.send({ type: "ping" });
+    await c.next((m) => m.type === "pong");
+    expect(b.ws.readyState).toBe(WebSocket.OPEN);
+    // The other session still upgrades; the revoked one no longer does.
+    await expect(connect({ cookie: one })).rejects.toThrow("HTTP 401");
+    expect((await (await connect({ cookie: two })).next((m) => m.type === "hello")).type).toBe("hello");
+  });
+
+  it("ignores what a signed-out peer sends while it withholds the close handshake, then terminates it", async () => {
+    const { ptys, paths } = setup.ctx;
+    ptys.spawn({ id: "p1", file: "sh", args: ["-c", "cat"], cwd: paths.home, env: { PATH: process.env.PATH ?? "" }, logPath: path.join(paths.home, "p1.log") });
+    const userInput = vi.spyOn(ptys, "userInput");
+    const resize = vi.spyOn(ptys, "resize");
+    const activate = vi.spyOn(setup.ctx.registry, "activate");
+    const cookie = sessionCookie(setup.ctx, "stolen");
+    const raw = await rawConnect({ Cookie: cookie });
+    // Proves the socket acts before the revocation.
+    raw.send({ type: "pty:input", ptyId: "p1", data: "before\r" });
+    await waitFor(() => userInput.mock.calls.length === 1, 5000);
+
+    const [listed] = setup.ctx.sessions.list().filter((s) => s.label === "stolen");
+    setup.ctx.sessions.revoke(listed!.id);
+    // The server's close frame (opcode 0x8, code 4401) arrives; the peer does not answer it.
+    await waitFor(() => raw.received().includes(Buffer.from([0x88, 0x0c, 0x11, 0x31])), 5000);
+    raw.send({ type: "pty:input", ptyId: "p1", data: "after\r" });
+    raw.send({ type: "pty:resize", ptyId: "p1", cols: 10, rows: 5 });
+    raw.send({ type: "repo:subscribe", repoId: REPO_ID });
+    const started = Date.now();
+    await raw.closed;
+    expect(Date.now() - started).toBeLessThan(SIGN_OUT_TERMINATE_MS + 2000);
+    expect(userInput).toHaveBeenCalledTimes(1);
+    expect(resize).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("closes every socket, Bearer ones included, with 4401 on token rotation", async () => {
+    const a = await connect({ cookie: sessionCookie(setup.ctx) });
+    const b = await connect();
+    const closes = [a, b].map((x) => new Promise<number>((resolve) => x.ws.once("close", (code) => resolve(code))));
+    setup.ctx.bus.emit("token:rotated", {});
+    expect(await Promise.all(closes)).toEqual([4401, 4401]);
   });
 
   it("sends run and graph updates to repository subscribers and node updates to run subscribers", async () => {

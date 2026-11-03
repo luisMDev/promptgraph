@@ -23,3 +23,16 @@ export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 
 export const ListSessionsResponseSchema = z.object({ sessions: z.array(SessionSummarySchema) });
 export type ListSessionsResponse = z.infer<typeof ListSessionsResponseSchema>;
+
+/** DELETE /api/daemon/sessions/:id (an id prefix of at least 8 hex digits, or `all`; Bearer only). */
+export const RevokeSessionsResponseSchema = z.object({ ok: z.literal(true), revoked: z.number().int().nonnegative() });
+export type RevokeSessionsResponse = z.infer<typeof RevokeSessionsResponseSchema>;
+
+/**
+ * `:id` of DELETE /api/daemon/sessions/:id: `all` or an id prefix of 8–64 hex digits. Case-insensitive:
+ * the input is lowercased before it is checked, so the output is always lowercase.
+ */
+export const SessionIdPrefixSchema = z
+  .string()
+  .transform((s) => s.toLowerCase())
+  .pipe(z.union([z.literal("all"), z.string().regex(/^[0-9a-f]{8,64}$/)]));

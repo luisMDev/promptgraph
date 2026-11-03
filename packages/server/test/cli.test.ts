@@ -13,7 +13,6 @@ import { daemonInfoPath, portFilePath, readDaemonInfo } from "../src/config/daem
 import { getPaths } from "../src/config/paths.js";
 import { tokenPath } from "../src/config/token.js";
 import { portCandidates, startDaemon } from "../src/daemon/start.js";
-import { sessionCookieValue } from "../src/hooks/hook-token.js";
 import { LaneManager } from "../src/workspace/lane-manager.js";
 import { processStartTime } from "../src/util/process.js";
 import { createTempRepo, FAKE_CLAUDE, FAKE_GH, fakeClaudeEnv, tempDir } from "./helpers.js";
@@ -119,10 +118,15 @@ describe("startDaemon", () => {
     const res = await fetch(`${base}/api/repos/${added.id}/graphs`, { headers: auth });
     expect(await res.json()).toEqual({ graphs: [] });
 
-    const opened = await fetch(`${base}/r/${added.id}?t=${token}`, { redirect: "manual" });
+    // No ?t= page flow: a browser signs in with a one-time login code minted over Bearer.
+    expect((await fetch(`${base}/r/${added.id}?t=${token}`, { redirect: "manual" })).status).toBe(401);
+    const { code } = (await (await fetch(`${base}/api/daemon/login-codes`, { method: "POST", headers: auth, body: "{}" })).json()) as { code: string };
+    const opened = await fetch(`${base}/login?code=${encodeURIComponent(code)}&next=${encodeURIComponent(`/r/${added.id}`)}`, { redirect: "manual" });
     expect(opened.status).toBe(302);
     expect(opened.headers.get("location")).toBe(`/r/${added.id}`);
-    expect(opened.headers.get("set-cookie")).toContain(`pg_token=${sessionCookieValue(token)}`);
+    const cookie = (opened.headers.get("set-cookie") ?? "").split(";")[0]!;
+    expect(cookie).toMatch(/^pg_session=[A-Za-z0-9_-]{43}$/);
+    expect((await fetch(`${base}/api/repos`, { headers: { cookie } })).status).toBe(200);
 
     const hello = await new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/ws`, { headers: { authorization: `Bearer ${token}` } });

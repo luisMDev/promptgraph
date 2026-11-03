@@ -48,6 +48,11 @@ export function mockEngine(): EngineMock {
   return engine;
 }
 
+/** A new browser session of `ctx`: the Cookie header value `pg_session=<value>`. */
+export function sessionCookie(ctx: DaemonContext, label = "Test"): string {
+  return `pg_session=${ctx.sessions.create(label)}`;
+}
+
 export interface TestDaemon {
   ctx: DaemonContext;
   /** repoId of each `repos` entry, in order. */

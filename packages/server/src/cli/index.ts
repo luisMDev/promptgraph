@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { EXIT_DAEMON_LOCKED, webRoutes } from "@promptgraph/shared";
+import { EXIT_DAEMON_LOCKED, loginUrl, webRoutes } from "@promptgraph/shared";
 import open from "open";
 import { VERSION } from "../config/version.js";
 import { DaemonLockedError, installProcessHandlers, startDaemon, type RunningDaemon } from "../daemon/start.js";
@@ -93,9 +93,10 @@ async function runForeground(opts: CliOptions): Promise<number> {
   }
   const url = `${daemon.origin}${webRoutes.repo(repoId)}`;
   console.log(`Open: ${url}`);
-  // Temporary page flow: the browser signs in with ?t= (replaced by one-time login codes, DESIGN §14).
+  // The browser signs in with a one-time login code (DESIGN §14); the printed URL holds no credential.
   if (opts.open) {
-    open(`${url}?t=${encodeURIComponent(daemon.ctx.getToken())}`).catch(() => console.warn("warning: could not open a browser; open the URL above"));
+    const { code } = daemon.ctx.loginCodes.mint();
+    open(loginUrl(daemon.origin, code, webRoutes.repo(repoId))).catch(() => console.warn("warning: could not open a browser; open the URL above"));
   }
   return serveUntilStopped(daemon);
 }

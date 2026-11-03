@@ -20,7 +20,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { errorMessage, truncate } from "../util/text.js";
-import { DaemonVersionMismatch, findDaemon } from "../daemon/client.js";
+import { DaemonVersionMismatch, findDaemon, mintLoginUrl } from "../daemon/client.js";
 import { VERSION } from "../config/version.js";
 import { ApiRequestError } from "./client.js";
 import { connect, resolveRepo, startDaemonFor, type Connection, type McpEnvironment } from "./connection.js";
@@ -152,12 +152,16 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     guarded(async ({ repo }) => {
       const c = await conn(repo);
       const url = `${c.daemon.origin}${webRoutes.repo(c.repoId)}`;
+      // A one-time login URL signs the browser in (DESIGN §19.1); only the plain URL is returned,
+      // because tool results go to the model provider.
+      let login: string | null = null;
       try {
-        // Temporary page flow (?t=, replaced by one-time login codes): the credential never appears in the result.
-        await deps.openUrl(`${url}?t=${encodeURIComponent(c.daemon.token)}`);
+        login = await mintLoginUrl(c.daemon, webRoutes.repo(c.repoId));
+        await deps.openUrl(login);
         return json({ opened: true, url });
       } catch (err) {
-        return json({ opened: false, url, error: errorMessage(err), hint: "Run `promptgraph open` in a terminal." });
+        const message = login === null ? errorMessage(err) : errorMessage(err).split(login).join("<login URL>");
+        return json({ opened: false, url, error: message, hint: "Run `promptgraph open` in a terminal." });
       }
     }),
   );

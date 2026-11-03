@@ -492,7 +492,7 @@ async function main() {
     await context.addInitScript(() => localStorage.setItem("pg-theme", "dark"));
     const page = await context.newPage();
     page.on("pageerror", (e) => log("page error:", e.message));
-    await page.goto(server.url);
+    await page.goto(await server.loginUrl());
     await page.getByRole("button", { name: "Settings" }).waitFor();
 
     const scenes = makeScenes({ api, page, outDir });

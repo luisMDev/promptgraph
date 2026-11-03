@@ -214,7 +214,20 @@ describe("promptgraph MCP server", () => {
     const url = `${daemon.origin}/r/${status.repoId}`;
     expect(ui.data).toEqual({ opened: true, url });
     expect(ui.text).not.toContain(token);
-    expect(opened).toEqual([`${url}?t=${encodeURIComponent(token)}`]);
+    expect(ui.text).not.toContain("code=");
+    expect(ui.text).not.toContain("/login");
+    // The browser got a one-time login URL for this repository, which signs it in once.
+    expect(opened).toHaveLength(1);
+    const login = new URL(opened[0]!);
+    expect(`${login.origin}${login.pathname}`).toBe(`${daemon.origin}/login`);
+    expect(login.searchParams.get("next")).toBe(`/r/${status.repoId}`);
+    expect(opened[0]).toContain(`&next=%2Fr%2F${status.repoId}`);
+    expect(opened[0]).not.toContain(token);
+    const redeemed = await fetch(opened[0]!, { redirect: "manual" });
+    expect(redeemed.status).toBe(302);
+    expect(redeemed.headers.get("location")).toBe(`/r/${status.repoId}`);
+    expect(redeemed.headers.get("set-cookie")).toMatch(/^pg_session=/);
+    expect((await fetch(opened[0]!, { redirect: "manual" })).status).toBe(401);
   });
 
   it("re-registers a repository removed while the same daemon keeps running", async () => {

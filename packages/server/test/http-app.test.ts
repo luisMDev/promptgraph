@@ -8,8 +8,7 @@ import { EngineError } from "../src/engine/engine.js";
 import { hookToken } from "../src/hooks/hook-token.js";
 import { createHttpApp } from "../src/http/app.js";
 import { createTempRepo, tempDir } from "./helpers.js";
-import { createTestDaemon, TEST_HOOK_SECRET, TEST_TOKEN, type EngineMock, type TestDaemon } from "./support/test-daemon.js";
-import { sessionCookieValue } from "../src/hooks/hook-token.js";
+import { createTestDaemon, sessionCookie, TEST_HOOK_SECRET, TEST_TOKEN, type EngineMock, type TestDaemon } from "./support/test-daemon.js";
 
 vi.mock("../src/git/repo.js", async (orig) => ({
   ...(await orig<typeof import("../src/git/repo.js")>()),
@@ -87,26 +86,21 @@ describe("security middleware", () => {
     expect((await app.request("/", { headers: HOST })).status).toBe(401);
   });
 
-  it("sets the cookie from ?t= and redirects without it", async () => {
-    const res = await app.request(`/runs?x=1&t=${TEST_TOKEN}`, { headers: HOST });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/runs?x=1");
-    const cookie = res.headers.get("set-cookie") ?? "";
-    expect(cookie).toContain(`pg_token=${sessionCookieValue(TEST_TOKEN)}`);
-    expect(cookie).toMatch(/HttpOnly/i);
-    expect(cookie).toMatch(/SameSite=Strict/i);
-    expect(cookie).not.toContain(TEST_TOKEN);
-    const ok = await app.request(`${R}/graphs`, { headers: { ...HOST, cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}` } });
-    expect(ok.status).toBe(200);
+  it("accepts a session cookie, never as a Bearer credential, and has no ?t= page flow", async () => {
+    const cookie = sessionCookie(daemon.ctx);
+    const value = cookie.slice("pg_session=".length);
+    expect((await app.request(`${R}/graphs`, { headers: { ...HOST, cookie } })).status).toBe(200);
     // The cookie value is no Bearer credential, and the raw token is no cookie.
-    expect((await app.request(`${R}/graphs`, { headers: { ...HOST, authorization: `Bearer ${sessionCookieValue(TEST_TOKEN)}` } })).status).toBe(401);
-    expect((await app.request(`${R}/graphs`, { headers: { ...HOST, cookie: `pg_token=${TEST_TOKEN}` } })).status).toBe(401);
-    expect((await app.request("/?t=wrong", { headers: HOST })).status).toBe(401);
+    expect((await app.request(`${R}/graphs`, { headers: { ...HOST, authorization: `Bearer ${value}` } })).status).toBe(401);
+    expect((await app.request(`${R}/graphs`, { headers: { ...HOST, cookie: `pg_session=${TEST_TOKEN}` } })).status).toBe(401);
+    const page = await app.request(`/runs?x=1&t=${TEST_TOKEN}`, { headers: HOST });
+    expect(page.status).toBe(401);
+    expect(page.headers.get("set-cookie")).toBeNull();
   });
 
   it("rejects other localhost ports once listening (cross-port CSRF) and non-JSON cookie writes", async () => {
     setup.ctx.port = 4777;
-    const cookie = { ...HOST, cookie: `pg_token=${sessionCookieValue(TEST_TOKEN)}` };
+    const cookie = { ...HOST, cookie: sessionCookie(daemon.ctx) };
     const crossPort = { ...cookie, origin: "http://127.0.0.1:3000", "content-type": "text/plain" };
     expect((await app.request(`${R}/runs/x/cancel`, { method: "POST", headers: crossPort, body: "{}" })).status).toBe(403);
     expect((await app.request(`${R}/graphs`, { headers: { ...cookie, host: "127.0.0.1:3000" } })).status).toBe(403);

@@ -1,10 +1,12 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { ClientMessageSchema, type ClientMessage, type ServerMessage } from "@promptgraph/shared";
+import { ClientMessageSchema, SESSION_COOKIE, WS_CLOSE_SIGNED_OUT, type ClientMessage, type ServerMessage } from "@promptgraph/shared";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type { DaemonContext } from "../daemon/context.js";
 import { VERSION } from "../config/version.js";
-import { isAuthorized, isLocalRequest } from "../http/auth.js";
+import { isLocalRequest } from "../http/auth.js";
+import { authenticate, cookieValue, type Credential } from "../http/credentials.js";
+import { isCrossSiteCookieRequest } from "../http/fetch-metadata.js";
 import { errorMessage } from "../util/text.js";
 
 /** Replay is sent in chunks of at most this many bytes (before base64). */
@@ -18,6 +20,8 @@ const HEARTBEAT_MS = 30_000;
 /** repo:changed bursts (one per node transition) are coalesced into one repo:status per repository. */
 export const REPO_STATUS_DEBOUNCE_MS = 250;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+/** A signed-out peer that does not finish the closing handshake within this is terminated. */
+export const SIGN_OUT_TERMINATE_MS = 1000;
 
 interface Client {
   ws: WebSocket;
@@ -26,11 +30,15 @@ interface Client {
   runs: Set<string>;
   ptys: Set<string>;
   alive: boolean;
+  /** SHA-256 of the session cookie it connected with; null for a Bearer client. */
+  sessionHash: string | null;
 }
 
 /**
  * WebSocket hub on /ws (DESIGN §12.2, protocol in shared/ws.ts), one per daemon. Upgrade requires
- * localhost Host/Origin and isAuthorized() with the current token. On connect sends `hello`.
+ * localhost Host/Origin and the Bearer token or a live session cookie (with the Fetch Metadata rule of
+ * HTTP; the URL carries no credential). On connect sends `hello`. `session:revoked` closes the sockets
+ * of those sessions and `token:rotated` every socket, with 4401 (WS_CLOSE_SIGNED_OUT).
  * Bus → clients: run:update and graphs:changed to clients subscribed to their repository
  * (`repo:subscribe`, which also activates it); repo:changed debounced per repository into repo:status
  * (RepoSummary) to every client; repo:removed to every client; node:update/lane:update to subscribers
@@ -69,6 +77,11 @@ export class WsHub {
         this.broadcast({ type: "pty:data", ptyId, data: data.toString("base64") }, (c) => c.ptys.has(ptyId)),
       ),
       bus.on("pty:exit", ({ ptyId, code }) => this.broadcast({ type: "pty:exit", ptyId, code }, (c) => c.ptys.has(ptyId))),
+      bus.on("session:revoked", ({ idHashes }) => {
+        const revoked = new Set(idHashes);
+        this.signOut((c) => c.sessionHash !== null && revoked.has(c.sessionHash));
+      }),
+      bus.on("token:rotated", () => this.signOut(() => true)),
     );
     this.heartbeat = setInterval(() => this.checkAlive(), HEARTBEAT_MS);
     this.heartbeat.unref();
@@ -91,12 +104,40 @@ export class WsHub {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     if (pathname !== "/ws") return void rejectUpgrade(socket, 404, "Not Found");
     if (!isLocalRequest(req.headers.host, req.headers.origin, this.ctx.port)) return void rejectUpgrade(socket, 403, "Forbidden");
-    if (!isAuthorized(this.ctx.getToken(), req)) return void rejectUpgrade(socket, 401, "Unauthorized");
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.connect(ws));
+    const header = (name: string): string | undefined => {
+      const v = req.headers[name];
+      return Array.isArray(v) ? v[0] : v;
+    };
+    const authorization = header("authorization");
+    const cookie = header("cookie");
+    if (!authorization && cookieValue(cookie, SESSION_COOKIE) !== null && isCrossSiteCookieRequest(pathname, header)) {
+      return void rejectUpgrade(socket, 403, "Forbidden");
+    }
+    const credential = authenticate({ getToken: () => this.ctx.getToken(), sessions: this.ctx.sessions }, { authorization, cookie });
+    if (!credential) return void rejectUpgrade(socket, 401, "Unauthorized");
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.connect(ws, credential));
   }
 
-  private connect(ws: WebSocket): void {
-    const client: Client = { ws, repos: new Set(), runs: new Set(), ptys: new Set(), alive: true };
+  /**
+   * Closes the matching sockets with 4401: their client stops reconnecting and shows "Signed out".
+   * The client is unregistered first, so `receive` ignores anything it sends while the closing
+   * handshake runs; a peer that never answers the close frame is terminated after a short grace
+   * period instead of holding the socket for the full `ws` close timeout.
+   */
+  private signOut(match: (c: Client) => boolean): void {
+    for (const c of [...this.clients]) {
+      if (!match(c)) continue;
+      this.clients.delete(c);
+      c.ws.close(WS_CLOSE_SIGNED_OUT, "signed out");
+      const kill = setTimeout(() => c.ws.terminate(), SIGN_OUT_TERMINATE_MS);
+      kill.unref();
+      c.ws.once("close", () => clearTimeout(kill));
+    }
+  }
+
+  private connect(ws: WebSocket, credential: Credential): void {
+    const sessionHash = credential.kind === "session" ? credential.session.idHash : null;
+    const client: Client = { ws, repos: new Set(), runs: new Set(), ptys: new Set(), alive: true, sessionHash };
     this.clients.add(client);
     ws.on("pong", () => (client.alive = true));
     ws.on("message", (raw, isBinary) => this.receive(client, raw, isBinary));
@@ -106,6 +147,9 @@ export class WsHub {
   }
 
   private receive(client: Client, raw: RawData, isBinary: boolean): void {
+    // A signed-out (revoked, rotated) or closing socket must not act on the daemon: `ws` still emits
+    // 'message' while CLOSING.
+    if (!this.clients.has(client) || client.ws.readyState !== WebSocket.OPEN) return;
     let data: unknown;
     try {
       data = isBinary ? undefined : JSON.parse(rawToString(raw));
