@@ -7,6 +7,7 @@ import { laneSwatch, type NodeLane } from "../../lib/lanes";
 import { cardNote, type NoteTone } from "../../lib/run-view";
 import { nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
+import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import type { PgFlowNode } from "./types";
@@ -151,6 +152,7 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
         <span className={`font-medium ${style.text}`}>{style.label}</span>
         {time && <span className="ml-auto font-mono text-zinc-400 tabular-nums">{time}</span>}
       </div>
+      <GraceCountdown nodeRun={nodeRun} compact />
       {note && <div className={`rounded px-1.5 py-1 text-[11px] leading-snug ${NOTE_TONE[note.tone]}`}>{note.text}</div>}
       {!note && activity && live && <div className="truncate font-mono text-[11px] text-zinc-400" title={activity}>{activity}</div>}
       {prUrl && (

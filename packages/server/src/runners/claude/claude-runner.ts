@@ -313,6 +313,7 @@ class ClaudeExecution {
           this.hold = false;
           this.update({ hold: false });
         },
+        grace: (ms) => this.update({ graceUntil: ms === null ? null : Date.now() + ms }),
       });
       this.controller.setHold(this.hold);
       this.cleanups.push(() => this.controller?.dispose());

@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useRef, useState, type PointerEvent } from
 import { closeTerminalTab, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
 import { clampDrawerHeight, useUiStore } from "../../store/ui-store";
+import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import type { PtyState } from "./TerminalView";
@@ -107,6 +108,7 @@ function TabStatus({ state, nodeRunId, title }: { state: PtyState | undefined; n
   const canReopen = state?.phase !== "live" && !!nodeRun?.sessionId;
   return (
     <div className="flex shrink-0 items-center gap-2 pl-2 text-[11px]">
+      <GraceCountdown nodeRun={nodeRun} compact />
       {state?.phase === "live" && <span className="text-green-400">Live — you can type</span>}
       {state?.phase === "replay" && <span className="text-zinc-500">Read-only replay</span>}
       {state?.phase === "connecting" && <span className="text-zinc-500">Connecting…</span>}

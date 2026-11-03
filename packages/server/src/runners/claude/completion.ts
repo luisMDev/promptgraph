@@ -9,6 +9,8 @@ export interface CompletionCallbacks {
   resume(): void;
   /** The held turn ended and a new one started: the hold no longer applies (§7.4). */
   holdReleased(): void;
+  /** auto: the grace countdown started (`ms` until it succeeds) or stopped (null), for the visible countdown. */
+  grace(ms: number | null): void;
 }
 
 type Phase = "working" | "grace" | "idle" | "done";
@@ -45,8 +47,10 @@ export class CompletionController {
       return lastAssistantMessage?.includes(this.policy.token) ? this.succeed() : this.toIdle();
     }
     if (this.policy.graceSec <= 0) return this.succeed();
+    const ms = this.policy.graceSec * 1000;
     this.phase = "grace";
-    this.timer = setTimeout(() => this.succeed(), this.policy.graceSec * 1000);
+    this.timer = setTimeout(() => this.succeed(), ms);
+    this.callbacks.grace(ms);
   }
 
   onUserInput(): void {
@@ -97,8 +101,11 @@ export class CompletionController {
     this.callbacks.succeed();
   }
 
+  /** Stops the grace timer; a countdown that was showing is reported as stopped. */
   private clearTimer(): void {
-    if (this.timer) clearTimeout(this.timer);
+    if (!this.timer) return;
+    clearTimeout(this.timer);
     this.timer = null;
+    this.callbacks.grace(null);
   }
 }

@@ -25,7 +25,7 @@ export function markInterrupted(store: Store, scope: InterruptScope, now: number
     const affected = new Set<string>();
     for (const nr of store.listNodeRunsByStatus(ACTIVE_NODE_STATUSES, filter)) {
       if (!inScope(nr.runId)) continue;
-      store.updateNodeRun(nr.id, { status: "interrupted", error: INTERRUPTED_NODE_ERROR, finishedAt: now, waitingReason: null });
+      store.updateNodeRun(nr.id, { status: "interrupted", error: INTERRUPTED_NODE_ERROR, finishedAt: now, waitingReason: null, graceUntil: null });
       store.appendEvent(nr.runId, nr.id, "node.status", { status: "interrupted", from: nr.status });
       affected.add(nr.runId);
     }

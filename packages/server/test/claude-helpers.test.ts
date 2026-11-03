@@ -215,14 +215,42 @@ describe("transcript", () => {
 describe("CompletionController", () => {
   function make(policy: ConstructorParameters<typeof CompletionController>[0]) {
     const calls: string[] = [];
+    const graces: Array<number | null> = [];
     const c = new CompletionController(policy, {
       succeed: () => calls.push("succeed"),
       idle: () => calls.push("idle"),
       resume: () => calls.push("resume"),
       holdReleased: () => calls.push("holdReleased"),
+      grace: (ms) => graces.push(ms),
     });
-    return { c, calls };
+    return { c, calls, graces };
   }
+
+  it("auto: reports the grace countdown when it starts and when it stops", () => {
+    vi.useFakeTimers();
+    const { c, calls, graces } = make({ mode: "auto", graceSec: 5 });
+    c.onStop("x");
+    expect(graces).toEqual([5000]);
+    c.onUserInput();
+    expect(graces).toEqual([5000, null]);
+    c.onStop("y");
+    c.setHold(true);
+    expect(graces).toEqual([5000, null, 5000, null]);
+    expect(calls).toEqual(["resume", "idle"]);
+    c.onActivity();
+    c.onStop("z");
+    vi.advanceTimersByTime(5000);
+    expect(graces).toEqual([5000, null, 5000, null, 5000, null]);
+    expect(calls.at(-1)).toBe("succeed");
+  });
+
+  it("manual and marker never start a countdown", () => {
+    const manual = make({ mode: "manual" });
+    manual.c.onStop("x");
+    const marker = make({ mode: "marker", token: "<<PG_DONE>>" });
+    marker.c.onStop("no token");
+    expect([...manual.graces, ...marker.graces]).toEqual([]);
+  });
 
   it("auto: succeeds after the grace period unless the user types", () => {
     vi.useFakeTimers();
