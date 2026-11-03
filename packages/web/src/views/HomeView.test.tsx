@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TabContext, type TabContextValue } from "../components/tabs/tab-context";
 import { MemoryLocationProvider } from "../lib/router/location";
 import { useDaemonStore } from "../store/daemon-store";
 import { dispatcher } from "../store/live";
@@ -72,6 +73,37 @@ describe("HomeView (DESIGN §13.3)", () => {
     expect((await within(row).findByRole("link", { name: /Ship it/ })).getAttribute("href")).toBe(`/r/${REPO}/graphs/g1`);
     expect(daemon.calls.filter((c) => c.startsWith(`GET /api/repos/${REPO}/`)).length).toBeGreaterThan(0);
     expect(daemon.calls.some((c) => !c.startsWith("GET "))).toBe(false);
+  });
+
+  it("refetches the graph links when its tab becomes visible again and after a reconnect, never while hidden", async () => {
+    const graphOf = (id: string, name: string) => ({ graph: { version: 1, id, name, nodes: [], edges: [], settings: {} } as never, hash: "h", modifiedOutside: false, activeRunId: null });
+    daemon.repos[REPO] = { info: { id: REPO, path: "/work/repo", name: "repo", currentBranch: "main", branches: [] }, graphs: { g1: graphOf("g1", "Ship it") }, runs: {} };
+    const tab = (active: boolean): TabContextValue => ({ tabId: "t", active, setTitle: () => undefined, close: () => undefined, reportEditor: () => undefined });
+    const ui = (active: boolean) => (
+      <MemoryLocationProvider initialPath="/">
+        <TabContext.Provider value={tab(active)}>
+          <HomeView />
+        </TabContext.Provider>
+      </MemoryLocationProvider>
+    );
+    const graphCalls = () => daemon.calls.filter((c) => c === `GET /api/repos/${REPO}/graphs`).length;
+    const view = render(ui(true));
+    const row = () => screen.getByRole("listitem", { name: "repo" });
+    await within(row()).findByRole("link", { name: /Ship it/ });
+
+    // Created elsewhere while Home is hidden: nothing is fetched until it is shown again.
+    daemon.repos[REPO].graphs.g2 = graphOf("g2", "Second graph");
+    const before = graphCalls();
+    view.rerender(ui(false));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(graphCalls()).toBe(before);
+    view.rerender(ui(true));
+    await within(row()).findByRole("link", { name: /Second graph/ });
+
+    daemon.repos[REPO].graphs.g3 = graphOf("g3", "Third graph");
+    act(() => useDaemonStore.setState({ connection: "reconnecting" }));
+    act(() => useDaemonStore.setState({ connection: "open" }));
+    await within(row()).findByRole("link", { name: /Third graph/ });
   });
 
   it("adds a repository by absolute path and opens it; both 422s are explained", async () => {

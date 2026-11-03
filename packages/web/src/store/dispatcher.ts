@@ -57,11 +57,11 @@ export function createDispatcher(): Dispatcher {
     const listedBefore = new Set((daemon.repos ?? []).map((r) => r.id));
     void daemon.loadRepos().then(() => dropReposGoneWhileDisconnected(listedBefore));
     for (const cache of liveRepoCaches()) {
-      void cache
-        .getState()
-        .refreshGraphs()
-        .catch(() => undefined);
-      void cache.getState().refreshPending();
+      const state = cache.getState();
+      // A cache whose first load failed while disconnected (its view shows the error) loads again.
+      if (!state.info || state.infoError) void state.load();
+      else void state.refreshGraphs().catch(() => undefined);
+      void state.refreshPending();
     }
     for (const view of views) {
       const run = view.run.getState();

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -10,7 +11,7 @@ import { daemonLogPath, readDaemonInfo } from "../src/config/daemon-info.js";
 import { getPaths } from "../src/config/paths.js";
 import { VERSION } from "../src/config/version.js";
 import { startDaemon } from "../src/daemon/start.js";
-import type { McpEnvironment } from "../src/mcp/connection.js";
+import { resolveRepo, type McpEnvironment } from "../src/mcp/connection.js";
 import { GraphDraftError, LAYOUT_DX, normalizeGraphDraft } from "../src/mcp/draft.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { createTempRepo, fakeClaudeEnv, stopDaemonOf, tempDir } from "./helpers.js";
@@ -88,6 +89,32 @@ describe("plugin skill patterns", () => {
       const result = validateGraph(normalizeGraphDraft(raw), { phase: 2 });
       expect(result.errors, String(raw.id)).toEqual([]);
     }
+  });
+});
+
+describe("resolveRepo (DESIGN §19.2)", () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups.splice(0).reverse()) c();
+  });
+
+  it("maps a lane worktree (under worktreesDir) to the repository it belongs to", async () => {
+    const { repo, cleanup } = createTempRepo("pg-mcp-lane-repo-");
+    cleanups.push(cleanup);
+    const { dir, cleanup: cleanRoot } = tempDir("pg-mcp-lane-");
+    cleanups.push(cleanRoot);
+    const env: NodeJS.ProcessEnv = { PG_HOME: path.join(dir, "home") };
+    const paths = getPaths(env);
+    const lane = path.join(paths.worktreesDir, "r", "run-1", "main");
+    fs.mkdirSync(path.dirname(lane), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "--detach", lane], { cwd: repo });
+    fs.mkdirSync(path.join(lane, "sub"));
+    const mcpEnv: McpEnvironment = { cwd: path.join(lane, "sub"), env, paths, serverCommand: [] };
+    expect(await resolveRepo(mcpEnv)).toBe(fs.realpathSync(repo));
+    // A linked worktree outside worktreesDir is a repository of its own.
+    const own = path.join(dir, "own-worktree");
+    execFileSync("git", ["worktree", "add", "-q", "--detach", own], { cwd: repo });
+    expect(await resolveRepo({ ...mcpEnv, cwd: own })).toBe(fs.realpathSync(own));
   });
 });
 

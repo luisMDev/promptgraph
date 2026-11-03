@@ -70,7 +70,8 @@ function cookieOf(res: Response): string {
 async function expectSignedOut(res: Response): Promise<void> {
   expect(res.status).toBe(401);
   expect(res.headers.get("content-type")).toMatch(/^text\/html/);
-  expect(res.headers.get("content-security-policy")).toBe("default-src 'none'; style-src 'unsafe-inline'");
+  expect(res.headers.get("content-security-policy")).toBe("default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  expect(res.headers.get("x-frame-options")).toBe("DENY");
   expect(res.headers.get("cache-control")).toBe("no-store");
   expect(res.headers.get("set-cookie")).toBeNull();
   const html = await res.text();
@@ -191,6 +192,34 @@ describe("pages", () => {
     // Bearer page loads and API responses set no cookie.
     expect((await app.request("/", { headers: BEARER })).headers.get("set-cookie")).toBeNull();
     expect((await app.request("/api/repos", { headers: { ...HOST, cookie } })).headers.get("set-cookie")).toBeNull();
+  });
+});
+
+describe("framing (DESIGN §14)", () => {
+  it("every page, asset and API response forbids framing; a framed load is refused", async () => {
+    fs.mkdirSync(path.join(root, "dist", "assets"));
+    fs.writeFileSync(path.join(root, "dist", "assets", "app.js"), "0");
+    const cookie = { ...HOST, cookie: sessionCookie(daemon.ctx) };
+    for (const route of [`/r/${repoId}`, "/assets/app.js", "/api/repos"]) {
+      const res = await app.request(route, { headers: cookie });
+      expect(res.status, route).toBe(200);
+      expect(res.headers.get("x-frame-options"), route).toBe("DENY");
+      expect(res.headers.get("content-security-policy"), route).toBe("frame-ancestors 'none'");
+    }
+    for (const dest of ["iframe", "frame", "embed", "object", "fencedframe"]) {
+      const res = await app.request(`/r/${repoId}`, { headers: { ...cookie, "sec-fetch-site": "same-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": dest } });
+      expect(res.status, dest).toBe(403);
+      expect(await res.json()).toMatchObject({ code: "forbidden_frame" });
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+    }
+    // A top-level navigation (the browser tab, the desktop window) is served.
+    const top = await app.request(`/r/${repoId}`, { headers: { ...cookie, "sec-fetch-site": "none", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" } });
+    expect(top.status).toBe(200);
+    // The page shown when the web UI is not built forbids framing too.
+    fs.rmSync(path.join(root, "dist", "index.html"));
+    const notBuilt = await app.request("/", { headers: cookie });
+    expect(notBuilt.status).toBe(503);
+    expect(notBuilt.headers.get("x-frame-options")).toBe("DENY");
   });
 });
 

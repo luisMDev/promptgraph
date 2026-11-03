@@ -235,10 +235,9 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
         const s = get();
         if (dedupe) {
           const route = parseRoute(path);
-          const existing =
-            route.kind === "repo"
-              ? s.mru.map((id) => s.tabs.find((t) => t.id === id)!).find((t) => repoOf(t.path) === route.repoId)
-              : s.tabs.find((t) => t.path === path);
+          // In MRU order: of two tabs on the same path (or repository), the one used last wins.
+          const byMru = s.mru.map((id) => s.tabs.find((t) => t.id === id)).filter((t): t is Tab => t !== undefined);
+          const existing = byMru.find((t) => (route.kind === "repo" ? repoOf(t.path) === route.repoId : t.path === path));
           if (existing) {
             if (activate) get().activate(existing.id);
             return existing.id;
@@ -321,7 +320,11 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
     };
   });
 
-  if (opts.initialPath !== undefined) store.getState().open(opts.initialPath, { activate: true });
+  // A reload restores the window's tabs: the URL is already the active tab's unless it was changed by hand.
+  if (opts.initialPath !== undefined) {
+    const s = store.getState();
+    if (s.tabs.find((t) => t.id === s.activeId)?.path !== tabPath(opts.initialPath)) s.open(opts.initialPath, { activate: true });
+  }
 
   // Every change is saved to this window's session and mirrored as the seed of the next new window.
   let saved = "";

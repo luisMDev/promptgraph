@@ -367,7 +367,7 @@ describe("Cargo.toml", () => {
     expect(pinned).not.toBeNull();
     expect(Number(pinned![1])).toBeGreaterThanOrEqual(8);
     expect(read("README.md")).toContain(`~2.${pinned![1]}`);
-    for (const dep of [/^tauri-plugin-opener = "2"/m, /^serde = \{ version = "1", features = \["derive"\] \}/m, /^serde_json = "1"/m, /^libc = "0\.2"/m, /^tauri-build = \{ version = "2"/m]) {
+    for (const dep of [/^tauri-plugin-opener = "2"/m, /^serde = \{ version = "1", features = \["derive"\] \}/m, /^serde_json = "1"/m, /^libc = "0\.2"/m, /^tauri-build = \{ version = "~2\.7"/m, /^rust-version = "1\.90"/m]) {
       expect(cargo).toMatch(dep);
     }
   });

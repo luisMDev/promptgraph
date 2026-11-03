@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   API,
   DaemonHelloResponseSchema,
@@ -13,6 +15,7 @@ import {
   type RepoSummary,
 } from "@promptgraph/shared";
 import { daemonLogPath, readDaemonInfo, rotateDaemonLog } from "../config/daemon-info.js";
+import { DaemonLock } from "../config/instance-lock.js";
 import type { PgPaths } from "../config/paths.js";
 import { helloProof, tokenPath } from "../config/token.js";
 import { PromptgraphClient } from "../mcp/client.js";
@@ -125,8 +128,9 @@ export interface EnsuredDaemon extends DaemonConnection {
  * A verified running daemon, or a new detached one (DESIGN §4.1 item 4): spawns `<serverCommand> daemon
  * [--port p]` with cwd PG_HOME, the sanitised daemonEnv and its output appended to logs/daemon.log
  * (rotated first when above 5 MB), then polls findDaemon. A child exiting with code 3 lost the lock to
- * another spawner: polling goes on. Any other early exit, or the timeout, throws with the log's last 20
- * lines.
+ * another daemon: polling goes on while the lock stays held (a daemon starting, or one stopping that has
+ * already removed its record); once it is free and still no daemon answers, a new child is spawned within
+ * the same deadline. Any other early exit, or the timeout, throws with the log's last 20 lines.
  */
 export async function ensureDaemon(opts: EnsureDaemonOptions): Promise<EnsuredDaemon> {
   const { paths } = opts;
@@ -139,41 +143,50 @@ export async function ensureDaemon(opts: EnsureDaemonOptions): Promise<EnsuredDa
   fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
   rotateDaemonLog(paths);
   const logStart = fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
-  const fd = fs.openSync(logFile, "a", 0o600);
-  let exited: { code: number | null } | null = null;
-  try {
-    const [command, ...args] = opts.serverCommand;
-    if (!command) throw new Error("ensureDaemon: empty serverCommand");
-    const child = spawn(command, [...args, "daemon", ...(opts.port !== undefined ? ["--port", String(opts.port)] : [])], {
-      cwd: paths.home,
-      detached: true,
-      stdio: ["ignore", fd, fd],
-      env,
-    });
-    child.once("exit", (code) => {
-      exited = { code };
-    });
-    child.once("error", (err) => {
-      exited = { code: null };
-      fs.appendFileSync(logFile, `spawn failed: ${err.message}\n`);
-    });
-    child.unref();
-  } finally {
-    fs.closeSync(fd);
-  }
+  const [command, ...args] = opts.serverCommand;
+  if (!command) throw new Error("ensureDaemon: empty serverCommand");
+  /** Spawns one detached `daemon` child; the returned object gets its exit code. */
+  const spawnChild = (): { exited: { code: number | null } | null } => {
+    const state: { exited: { code: number | null } | null } = { exited: null };
+    const fd = fs.openSync(logFile, "a", 0o600);
+    try {
+      const child = spawn(command, [...args, "daemon", ...(opts.port !== undefined ? ["--port", String(opts.port)] : [])], {
+        cwd: paths.home,
+        detached: true,
+        stdio: ["ignore", fd, fd],
+        env,
+      });
+      child.once("exit", (code) => {
+        state.exited = { code };
+      });
+      child.once("error", (err) => {
+        state.exited = { code: null };
+        fs.appendFileSync(logFile, `spawn failed: ${err.message}\n`);
+      });
+      child.unref();
+    } finally {
+      fs.closeSync(fd);
+    }
+    return state;
+  };
+  let child = spawnChild();
 
   const deadline = Date.now() + (opts.timeoutMs ?? 20_000);
   const pollMs = opts.pollMs ?? 150;
   for (;;) {
     const conn = await find();
-    const ended = exited as { code: number | null } | null;
-    // A child that exited with 3 lost the lock to another spawner, whose daemon this is.
+    const ended = child.exited;
+    // A child that exited with 3 lost the lock to another daemon: this one is not ours.
     if (conn) return { ...conn, started: ended?.code !== EXIT_DAEMON_LOCKED, logFile };
     if (ended && ended.code !== EXIT_DAEMON_LOCKED) {
       throw new Error(`the promptgraph daemon exited before it was ready (code ${ended.code}). Log (${logFile}):\n${tailOf(logFile, logStart)}`);
     }
     if (Date.now() >= deadline) {
       throw new Error(`the promptgraph daemon did not become ready in time. Log (${logFile}):\n${tailOf(logFile, logStart)}`);
+    }
+    if (ended && !(await DaemonLock.isHeld(paths))) {
+      // The daemon that held it (one stopping) is gone and none took its place: start one.
+      child = spawnChild();
     }
     await new Promise((r) => setTimeout(r, pollMs));
   }
@@ -211,11 +224,46 @@ export async function mintLoginUrl(conn: DaemonConnection, next: string, opts: M
   return loginUrl(origin, code, next);
 }
 
+/** Node flags whose value is a module specifier resolved against the cwd (`--flag value` or `--flag=value`). */
+const LOADER_FLAGS = new Set(["--import", "--require", "-r", "--loader", "--experimental-loader"]);
+
+/**
+ * `execArgv` with the specifiers of --import, --require/-r and --loader made absolute, resolved from `cwd`
+ * (the detached daemon runs with cwd PG_HOME, where a bare `tsx` or a relative `./loader.mjs` resolves to
+ * nothing): a file URL for the ESM flags, a path for --require. URLs (`file:`, `data:`, `node:`), absolute
+ * paths and specifiers that do not resolve are kept as they are.
+ */
+export function absoluteExecArgv(execArgv: readonly string[], cwd: string = process.cwd()): string[] {
+  const require = createRequire(path.join(cwd, "noop.js"));
+  const absolute = (flag: string, spec: string): string => {
+    if (path.isAbsolute(spec) || /^[a-z][a-z0-9+.-]+:/i.test(spec)) return spec;
+    let resolved: string;
+    try {
+      resolved = require.resolve(spec);
+    } catch {
+      return spec;
+    }
+    return flag === "--require" || flag === "-r" ? resolved : pathToFileURL(resolved).href;
+  };
+  const out: string[] = [];
+  for (let i = 0; i < execArgv.length; i++) {
+    const arg = execArgv[i]!;
+    const eq = arg.indexOf("=");
+    const flag = eq === -1 ? arg : arg.slice(0, eq);
+    if (!LOADER_FLAGS.has(flag)) out.push(arg);
+    else if (eq !== -1) out.push(`${flag}=${absolute(flag, arg.slice(eq + 1))}`);
+    else if (i + 1 < execArgv.length) out.push(arg, absolute(flag, execArgv[++i]!));
+    else out.push(arg);
+  }
+  return out;
+}
+
 /**
  * argv that re-runs this promptgraph CLI ([node, ...execArgv, entry]): what ensureDaemon spawns as
- * `<argv> daemon`. Works from dist and from tsx in development (its loader is in execArgv); the entry is
- * absolute because the detached daemon runs with cwd PG_HOME.
+ * `<argv> daemon`. Works from dist and from a loader in development (`node --import tsx …` or the tsx
+ * CLI): the detached daemon runs with cwd PG_HOME, so the entry and the loader specifiers in execArgv are
+ * made absolute (absoluteExecArgv).
  */
 export function currentCliCommand(): string[] {
-  return [process.execPath, ...process.execArgv, path.resolve(process.argv[1] ?? "promptgraph")];
+  return [process.execPath, ...absoluteExecArgv(process.execArgv), path.resolve(process.argv[1] ?? "promptgraph")];
 }

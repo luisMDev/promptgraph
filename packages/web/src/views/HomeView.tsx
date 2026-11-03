@@ -7,6 +7,7 @@ import { ApiRequestError, errorMessage, repoApi } from "../api/rest";
 import { Icons } from "../components/common/icons";
 import { Modal, Button } from "../components/common/ui";
 import { Logo } from "../components/header/Header";
+import { useTabContext } from "../components/tabs/tab-context";
 import { formatDateTime } from "../lib/format";
 import { RUN_STATUS_STYLE } from "../lib/status-style";
 import { Link } from "../lib/router/Link";
@@ -117,17 +118,25 @@ function Counters({ repo }: { repo: RepoSummary }) {
   );
 }
 
-/** Links to the repository's graphs and active runs (loaded with plain GETs, which never activate it). */
+/**
+ * Links to the repository's graphs and active runs (loaded with plain GETs, which never activate it). Home
+ * subscribes to no repository, so they are refetched when its tab becomes visible again and after a
+ * reconnect (DESIGN §13.5), besides on a new run; a hidden Home fetches nothing, a failed refetch keeps
+ * the links it had.
+ */
 function RepoLinks({ repo, active }: { repo: RepoSummary; active: number }) {
   const [graphs, setGraphs] = useState<GraphListItem[] | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const tabActive = useTabContext()?.active ?? true;
+  const online = useDaemonStore((s) => s.connection !== "reconnecting" && s.connection !== "unreachable");
   const version = `${repo.lastRunAt}|${active}`;
   useEffect(() => {
+    if (!tabActive || !online) return;
     let cancelled = false;
     const api = repoApi(repo.id);
     api.listGraphs().then(
       (r) => !cancelled && setGraphs(r.graphs),
-      () => !cancelled && setGraphs([]),
+      () => !cancelled && setGraphs((g) => g ?? []),
     );
     if (active > 0)
       api.listRuns(undefined, 20).then(
@@ -138,7 +147,7 @@ function RepoLinks({ repo, active }: { repo: RepoSummary; active: number }) {
     return () => {
       cancelled = true;
     };
-  }, [repo.id, version, active]);
+  }, [repo.id, version, active, tabActive, online]);
   if (!graphs?.length && !runs.length) return null;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -161,6 +170,7 @@ function RepoLinks({ repo, active }: { repo: RepoSummary; active: number }) {
 const ADD_ERRORS: Record<string, string> = {
   path_not_absolute: "Enter an absolute path (or one starting with ~/).",
   not_a_git_repo: "That directory is not inside a git repository.",
+  lane_worktree: "That is a promptgraph lane worktree; add the repository it belongs to.",
 };
 
 function AddRepository() {

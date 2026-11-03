@@ -57,6 +57,17 @@ describe("DaemonLock (DESIGN §4.1 item 1)", () => {
     expect(isDaemonLock(await acquire(paths))).toBe(true);
   });
 
+  it("isHeld probes the lock without taking it or touching locks/daemon.pid", async () => {
+    const paths = setup();
+    expect(await DaemonLock.isHeld(paths)).toBe(false);
+    expect(fs.existsSync(daemonPidPath(paths))).toBe(false);
+    const lock = await acquire(paths);
+    expect(await DaemonLock.isHeld(paths)).toBe(true);
+    await (lock as DaemonLock).release();
+    expect(await DaemonLock.isHeld(paths)).toBe(false);
+    expect(isDaemonLock(await acquire(paths))).toBe(true);
+  });
+
   it("a locks/daemon.pid naming a live unrelated process does not block acquire", async () => {
     const paths = setup();
     fs.mkdirSync(path.dirname(daemonPidPath(paths)), { recursive: true });

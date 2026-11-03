@@ -4,7 +4,7 @@ import { CLAUDE_HOOK_FOR_EVENT, HOOK_EVENTS } from "@promptgraph/shared";
 
 export interface ClaudeHooksSettings {
   hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: "command"; command: string; timeout?: number }> }>>;
-  permissions: { deny: string[] };
+  permissions: { deny: string[]; blockReadsOutsideWorkingDirectories: true };
 }
 
 export interface HooksSettingsOptions {
@@ -28,18 +28,37 @@ export function shellQuote(value: string): string {
  */
 const DENIED_UNDER_HOME = ["token", "state.db*", "runs/**", "servers/**", "logs/**"];
 
+/** The absolute rule path (`//<path without its leading slash>`) of a directory. */
+const rulePath = (dir: string) => `//${dir.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+
 /**
- * `permissions.deny` rules for promptgraph's own secrets (DESIGN §7.6): `Read` and `Edit` of each path,
- * as absolute rule paths (`//<home without its leading slash>/…`, Claude Code's absolute-path form).
+ * `permissions.deny` rules for promptgraph's own secrets (DESIGN §7.6): `Read` of PG_HOME itself (a
+ * recursive grep or find naming it, `..` from a lane worktree included), and `Read` and `Edit` of each
+ * secret path, as absolute rule paths (`//<home without its leading slash>/…`, Claude Code's
+ * absolute-path form). Written for PG_HOME as given and for its realpath when it is a symlink, so a read
+ * by either spelling matches with any Claude Code version.
  */
 export function secretDenyRules(pgHome: string): string[] {
-  const root = `//${path.resolve(pgHome).replace(/^\/+/, "").replace(/\/+$/, "")}`;
-  return DENIED_UNDER_HOME.flatMap((rel) => [`Read(${root}/${rel})`, `Edit(${root}/${rel})`]);
+  const homes = [path.resolve(pgHome)];
+  try {
+    const real = fs.realpathSync(pgHome);
+    if (real !== homes[0]) homes.push(real);
+  } catch {
+    // Not created yet: only the given path can be read.
+  }
+  return homes.flatMap((home) => {
+    const root = rulePath(home);
+    return [`Read(${root})`, ...DENIED_UNDER_HOME.flatMap((rel) => [`Read(${root}/${rel})`, `Edit(${root}/${rel})`])];
+  });
 }
 
 /**
  * §7.2: one entry per HookEvent (CLAUDE_HOOK_FOR_EVENT), command = `<abs pg-hook path> <event>` (path
- * shell-quoted), plus the §7.6 deny rules for PG_HOME's secrets.
+ * shell-quoted), plus the §7.6 permissions: deny rules for PG_HOME's secrets, and
+ * `blockReadsOutsideWorkingDirectories`, without which Claude Code's built-in read-only Bash commands
+ * (`grep`, `find`, `cat`, …) read any path without a prompt and a command that names no file (`grep -r x
+ * .` from a parent) escapes the deny rules. With it, file tools refuse paths outside the session's working
+ * directory (the lane worktree) and recognised reading commands prompt.
  */
 export function buildHooksSettings(pgHookPath: string, opts: HooksSettingsOptions): ClaudeHooksSettings {
   const hooks: ClaudeHooksSettings["hooks"] = {};
@@ -48,7 +67,7 @@ export function buildHooksSettings(pgHookPath: string, opts: HooksSettingsOption
       { hooks: [{ type: "command", command: `${shellQuote(pgHookPath)} ${event}`, timeout: HOOK_TIMEOUT_SEC }] },
     ];
   }
-  return { hooks, permissions: { deny: secretDenyRules(opts.pgHome) } };
+  return { hooks, permissions: { deny: secretDenyRules(opts.pgHome), blockReadsOutsideWorkingDirectories: true } };
 }
 
 /** Writes hooks.json for a run (idempotent) and returns its path. */

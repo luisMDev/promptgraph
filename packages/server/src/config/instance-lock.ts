@@ -104,6 +104,19 @@ export class DaemonLock {
     });
   }
 
+  /**
+   * Whether a daemon holds the lock right now: binds the socket and closes it at once when it is free,
+   * without touching `locks/daemon.pid`. A daemon may take it right after this answers false.
+   */
+  static isHeld(paths: PgPaths): Promise<boolean> {
+    const name = daemonLockName(paths);
+    return new Promise((resolve, reject) => {
+      const server = net.createServer((socket) => socket.destroy());
+      server.once("error", (err: NodeJS.ErrnoException) => (err.code === "EADDRINUSE" ? resolve(true) : reject(err)));
+      server.listen(name, () => server.close(() => resolve(false)));
+    });
+  }
+
   /** Closes the socket (the next acquire succeeds) and removes `locks/daemon.pid` if it is still ours. */
   async release(): Promise<void> {
     if (readPid(this.pidFile) === this.pid) fs.rmSync(this.pidFile, { force: true });

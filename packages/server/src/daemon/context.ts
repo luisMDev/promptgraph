@@ -107,7 +107,7 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
         () => [],
       )),
     legacyLocks,
-    registry: new RepoRegistry({ store, bus, env, legacyLocks, createContext: (row) => createRepoContext(ctx, row) }),
+    registry: new RepoRegistry({ store, bus, paths, env, legacyLocks, createContext: (row) => createRepoContext(ctx, row) }),
     loginCodes: new LoginCodes(),
     sessions,
   };

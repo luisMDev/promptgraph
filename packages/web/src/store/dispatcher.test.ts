@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import type { RepoInfoResponse } from "@promptgraph/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RepoApi } from "../api/rest";
 import { forkMergeGraph, nodeRunOf, runDetailOf } from "../test-fixtures";
 import { createDispatcher, type Dispatcher } from "./dispatcher";
+import { clearRepoCaches, createRepoCache, setRepoCache } from "./repo-cache";
 import { createRunStore, type RunStoreApi } from "./view/run-store";
 import { createViewUiStore, type ViewUiStoreApi } from "./view/ui-store";
 
@@ -63,5 +66,25 @@ describe("dispatcher: live updates", () => {
     run.getState().showRun(runDetailOf(graph, [running]));
     d.handle({ type: "node:update", nodeRun: paused });
     expect(ui.getState().terminalTabs).toEqual(["shell-nm"]);
+  });
+});
+
+describe("dispatcher: reconnect", () => {
+  afterEach(() => clearRepoCaches());
+
+  it("loads again a repository cache whose first load failed while the daemon was down", async () => {
+    const info = vi.fn<() => Promise<RepoInfoResponse>>().mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    info.mockResolvedValue({ id: REPO, path: "/r", name: "r", currentBranch: "main", branches: ["main"] });
+    const api = { info, listGraphs: async () => ({ graphs: [] }), pending: async () => ({ nodeRuns: [] }) } as unknown as RepoApi;
+    const cache = createRepoCache(REPO, api);
+    setRepoCache(REPO, cache);
+    await cache.getState().load();
+    expect(cache.getState().infoError).not.toBeNull();
+
+    const d = createDispatcher();
+    d.handle({ type: "hello", version: "0" });
+    d.handle({ type: "hello", version: "0" });
+    await vi.waitFor(() => expect(cache.getState().info?.name).toBe("r"));
+    expect(cache.getState().infoError).toBeNull();
   });
 });

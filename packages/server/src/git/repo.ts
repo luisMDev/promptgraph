@@ -1,3 +1,4 @@
+import path from "node:path";
 import { git, gitOk } from "./exec.js";
 
 /** `git rev-parse --show-toplevel` from `dir`. @throws Error("not a git repository") */
@@ -11,6 +12,20 @@ export async function resolveRepoRoot(dir: string): Promise<string> {
   const root = res.stdout.trim();
   if (res.code !== 0 || !root) throw new Error("not a git repository");
   return root;
+}
+
+/**
+ * Main worktree of the repository `dir` belongs to: the parent of `git rev-parse --git-common-dir` (the
+ * same directory for a main worktree, the owning repository for a linked one). @throws when `dir` is not
+ * in a git repository or the common dir is not a `.git` directory (a bare repository).
+ */
+export async function resolveMainWorktree(dir: string): Promise<string> {
+  const res = await git(dir, ["rev-parse", "--git-common-dir"], { readOnly: true });
+  const out = res.stdout.trim();
+  if (res.code !== 0 || !out) throw new Error("not a git repository");
+  const common = path.resolve(dir, out);
+  if (path.basename(common) !== ".git") throw new Error(`${dir} belongs to a repository without a main worktree (${common})`);
+  return path.dirname(common);
 }
 
 export async function currentBranch(repoPath: string): Promise<string | null> {

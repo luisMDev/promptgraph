@@ -274,7 +274,7 @@ fn build_window(app: &AppHandle, shared: Arc<Shared>) -> tauri::Result<()> {
 }
 
 /// `promptgraph-desktop [repo-dir]`, made absolute even when it does not exist, so the CLI never reads it as
-/// an option (`-h` becomes `<cwd>/-h`). Not `std::path::absolute`: that needs Rust 1.79.
+/// an option (`-h` becomes `<cwd>/-h`). Symlinks are resolved when the path exists.
 fn repo_arg(arg: OsString) -> String {
     let path = PathBuf::from(arg);
     std::fs::canonicalize(&path)

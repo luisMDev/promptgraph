@@ -138,7 +138,9 @@ describe("hooks settings and pg-hook", () => {
     const pgHome = path.join(tmp(), "pg home");
     const root = `//${pgHome.slice(1)}`;
     const { permissions } = buildHooksSettings("/x/pg-hook", { pgHome: `${pgHome}/` });
+    expect(permissions.blockReadsOutsideWorkingDirectories).toBe(true);
     expect(permissions.deny).toEqual([
+      `Read(${root})`,
       `Read(${root}/token)`,
       `Edit(${root}/token)`,
       `Read(${root}/state.db*)`,
@@ -156,6 +158,23 @@ describe("hooks settings and pg-hook", () => {
     expect(written).toContain(`Read(${root}/token)`);
     expect(written).toContain(`Read(${root}/servers/**)`);
     expect(written).toContain(`Read(${root}/logs/**)`);
+  });
+
+  it("writes the deny rules for a symlinked PG_HOME and for its real location", () => {
+    const base = tmp();
+    const real = path.join(base, "disk", "pg-home");
+    fs.mkdirSync(real, { recursive: true });
+    const link = path.join(base, "pg-link");
+    fs.symlinkSync(real, link);
+    const deny = buildHooksSettings("/x/pg-hook", { pgHome: link }).permissions.deny;
+    for (const home of [link, real]) {
+      expect(deny).toContain(`Read(//${home.slice(1)})`);
+      expect(deny).toContain(`Read(//${home.slice(1)}/token)`);
+      expect(deny).toContain(`Edit(//${home.slice(1)}/runs/**)`);
+    }
+    expect(deny).toHaveLength(22);
+    // No link: one set of rules.
+    expect(buildHooksSettings("/x/pg-hook", { pgHome: real }).permissions.deny).toHaveLength(11);
   });
 
   it("installs pg-hook as an executable copy", () => {

@@ -40,3 +40,30 @@ export function fetchMetadata(): MiddlewareHandler {
     return c.json(body, 403);
   };
 }
+
+const FRAME_ANCESTORS = "frame-ancestors 'none'";
+/** `Sec-Fetch-Dest` values of a document loaded inside another page. */
+const FRAME_DESTS = new Set(["iframe", "frame", "embed", "object", "fencedframe"]);
+
+/**
+ * DESIGN §14 "never inside a frame": every response carries `X-Frame-Options: DENY` and
+ * `Content-Security-Policy: frame-ancestors 'none'` (appended to a page's own policy), and a request whose `Sec-Fetch-Dest` says it loads
+ * into a frame gets 403 `forbidden_frame`. Another localhost port is the same site, so its page could
+ * otherwise frame the signed-in UI (whose own requests are same-origin) and click its buttons
+ * (clickjacking an approval). Runs first, so even a refusal carries the headers.
+ */
+export function noFraming(): MiddlewareHandler {
+  return async (c, next) => {
+    const dest = c.req.header("sec-fetch-dest");
+    if (dest && FRAME_DESTS.has(dest.toLowerCase())) {
+      const body: ApiError = { error: "Forbidden: promptgraph pages cannot be framed", code: "forbidden_frame" };
+      c.res = c.json(body, 403);
+    } else {
+      await next();
+    }
+    c.res.headers.set("x-frame-options", "DENY");
+    const csp = c.res.headers.get("content-security-policy");
+    if (!csp) c.res.headers.set("content-security-policy", FRAME_ANCESTORS);
+    else if (!/(^|;)\s*frame-ancestors\b/i.test(csp)) c.res.headers.set("content-security-policy", `${csp}; ${FRAME_ANCESTORS}`);
+  };
+}

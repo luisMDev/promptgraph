@@ -4,14 +4,17 @@ version = "0.1.0"
 description = "promptgraph desktop shell (Tauri v2, Linux)"
 license = "MIT"
 edition = "2021"
-rust-version = "1.77.2"
+# The minimum of tauri 2.12, tauri-build 2.7 and tauri-plugin-opener 2.7.
+rust-version = "1.90"
 
 [[bin]]
 name = "promptgraph-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# The tauri-build minor released with the tauri pin (both on tauri-utils ~2.10): a newer one would put a
+# second tauri-utils in the graph and write ACL files an older tauri-codegen reads.
+tauri-build = { version = "~2.7", features = [] }
 
 [dependencies]
 # Pinned minor: WebviewWindowBuilder::on_new_window needs >= 2.8; Manager::add_capability and

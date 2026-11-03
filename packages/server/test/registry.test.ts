@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createEmptyGraph, GraphSchema } from "@promptgraph/shared";
@@ -81,6 +82,20 @@ describe("RepoRegistry (DESIGN §4.2, §4.4)", () => {
     await expect(d.ctx.registry.add(home.dir)).rejects.toMatchObject({ status: 422, code: "not_a_git_repo" });
     await expect(d.ctx.registry.add("/nonexistent/pg-nowhere")).rejects.toMatchObject({ status: 422, code: "not_a_git_repo" });
     await expect(d.ctx.registry.load("nope-0123abcd")).rejects.toMatchObject({ status: 404, code: "unknown_repo" });
+  });
+
+  it("refuses a lane worktree (at or under worktreesDir) as a repository, and backfill skips it", async () => {
+    const d = await daemon();
+    const r = repo();
+    const lane = path.join(d.ctx.paths.worktreesDir, path.basename(r), "run-1", "main");
+    fs.mkdirSync(path.dirname(lane), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "--detach", lane], { cwd: r });
+    await expect(d.ctx.registry.add(lane)).rejects.toMatchObject({ status: 422, code: "lane_worktree" });
+    await expect(d.ctx.registry.add(path.join(lane, "."))).rejects.toMatchObject({ status: 422, code: "lane_worktree" });
+    expect(d.ctx.registry.list()).toEqual([]);
+    d.ctx.store.insertRun({ id: "run-lane-1", repoPath: lane, graph: createEmptyGraph("g", "G"), graphHash: "h", shortId: "run1", startedAt: 1 });
+    await d.ctx.registry.backfill();
+    expect(d.ctx.registry.list()).toEqual([]);
   });
 
   it("refuses to remove a repository with a running run; force stops only its own runs and PTYs", { timeout: 30_000 }, async () => {

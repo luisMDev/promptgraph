@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { RepoSummary } from "@promptgraph/shared";
 import type { LegacyRepoLocks } from "../config/instance-lock.js";
+import { isInWorktreesDir, type PgPaths } from "../config/paths.js";
 import { repoIdFor } from "../config/repo-id.js";
 import type { EventBus } from "../events/bus.js";
 import { resolveRepoRoot } from "../git/repo.js";
@@ -17,6 +18,8 @@ export const REPOS_BACKFILLED_KEY = "repos_backfilled";
 export interface RepoRegistryDeps {
   store: Store;
   bus: EventBus;
+  /** Lane worktrees under `worktreesDir` are refused as repositories (DESIGN §4.2). */
+  paths: PgPaths;
   /** HOME expands a leading `~` (the daemon user's home). */
   env: NodeJS.ProcessEnv;
   legacyLocks: LegacyRepoLocks;
@@ -117,7 +120,8 @@ export class RepoRegistry {
 
   /**
    * Registers a repository (idempotent): `~` expanded, absolute paths only (422 path_not_absolute),
-   * resolved to the git top level and its realpath (422 not_a_git_repo). A known realpath only updates
+   * resolved to the git top level and its realpath (422 not_a_git_repo); a lane worktree (at or under
+   * `worktreesDir`) is refused with 422 lane_worktree. A known realpath only updates
    * lastOpenedAt. Takes its legacy lock (§4.4) and activates it; an activation failure is reported in
    * the returned summary, not thrown.
    */
@@ -133,6 +137,9 @@ export class RepoRegistry {
       real = fs.realpathSync(await resolveRepoRoot(expanded));
     } catch {
       throw new HttpError(422, "not_a_git_repo", `${expanded} is not inside a git repository`);
+    }
+    if (isInWorktreesDir(this.deps.paths, real)) {
+      throw new HttpError(422, "lane_worktree", `${real} is a promptgraph lane worktree; register the repository it belongs to instead`);
     }
     const id = this.deps.store.getRepoByPath(real)?.id ?? repoIdFor(real);
     await this.entries.get(id)?.disposing?.catch(() => undefined);
@@ -266,7 +273,7 @@ export class RepoRegistry {
   /**
    * DESIGN §4.4, until it has committed once (`meta.repos_backfilled`): normalises `runs.repo_path` and
    * `graph_meta.repo_path` to their realpath where that differs and exists, and registers every distinct
-   * run path that is still a git top level, in one transaction. The git checks run before it.
+   * run path that is still a git top level and not a lane worktree, in one transaction. The git checks run before it.
    */
   async backfill(): Promise<void> {
     const { store } = this.deps;
@@ -286,7 +293,7 @@ export class RepoRegistry {
     const candidates = new Set(store.distinctRunRepoPaths().map((p) => rewrites.get(p) ?? p));
     const topLevels: string[] = [];
     for (const p of candidates) {
-      if (!isDirectory(p)) continue;
+      if (!isDirectory(p) || isInWorktreesDir(this.deps.paths, p)) continue;
       try {
         if (realOf(await resolveRepoRoot(p)) === p) topLevels.push(p);
       } catch {

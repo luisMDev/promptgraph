@@ -89,6 +89,7 @@ export async function createTestDaemon(opts: TestDaemonOptions): Promise<TestDae
   ctx.registry = new RepoRegistry({
     store: ctx.store,
     bus: ctx.bus,
+    paths: ctx.paths,
     env,
     legacyLocks: ctx.legacyLocks,
     createContext: (row) => {

@@ -234,6 +234,27 @@ describe("tabs store (DESIGN §13.4)", () => {
     expect(activeTab(reloaded.getState()).title).toBe("repo · First");
   });
 
+  it("a reload keeps the active tab when two tabs show the same path; open picks the most recently used one", () => {
+    const w = windowStores();
+    const store = createTabsStore({ ...w, initialPath: `${R}/graphs/build` });
+    const s = () => store.getState();
+    const a = s().activeId;
+    const b = s().open(`${R}/graphs/build`, { activate: true, dedupe: false });
+    expect(b).not.toBe(a);
+    expect(s().activeId).toBe(b);
+
+    const reloaded = createTabsStore({ ...w, initialPath: `${R}/graphs/build` });
+    expect(reloaded.getState().activeId).toBe(b);
+    expect(reloaded.getState().tabs).toEqual(s().tabs);
+
+    // Another tab active: opening the shared path goes to the duplicate used last (b), not the first one.
+    reloaded.getState().open("/", { activate: true });
+    reloaded.getState().activate(a);
+    reloaded.getState().activate(b);
+    reloaded.getState().open("/", { activate: true });
+    expect(reloaded.getState().open(`${R}/graphs/build`, { activate: true })).toBe(b);
+  });
+
   it("corrupt storage gives one Home tab; bad entries are dropped one by one", () => {
     const corrupt = ["{", JSON.stringify({ version: 2, tabs: [], activeId: "x", mru: [] }), JSON.stringify({ version: 1, tabs: [], activeId: "x", mru: [] })];
     const dup = { version: 1, tabs: [{ id: "a", path: "/" }, { id: "a", path: "/x" }], activeId: "a", mru: ["a"] };

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +52,20 @@ export function ptyLogPath(paths: PgPaths, runId: string, ptyId: string): string
 /** hooks.json generated once per run (§7.2). */
 export function hooksSettingsPath(paths: PgPaths, runId: string): string {
   return path.join(runDir(paths, runId), "hooks.json");
+}
+
+/**
+ * Whether the realpath `p` is the worktrees root or inside it (DESIGN §4.2): a lane worktree is never a
+ * repository of its own. Compares against the root as configured and its realpath (PG_HOME may be a link).
+ */
+export function isInWorktreesDir(paths: PgPaths, p: string): boolean {
+  const roots = new Set([path.resolve(paths.worktreesDir)]);
+  try {
+    roots.add(fs.realpathSync(paths.worktreesDir));
+  } catch {
+    // Not created yet: nothing can be inside it but the configured path.
+  }
+  return [...roots].some((root) => p === root || p.startsWith(root + path.sep));
 }
 
 export function worktreePath(paths: PgPaths, repoName: string, runId: string, laneId: string): string {

@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { API, type RepoApiPaths } from "@promptgraph/shared";
-import type { PgPaths } from "../config/paths.js";
+import { isInWorktreesDir, type PgPaths } from "../config/paths.js";
 import { VERSION } from "../config/version.js";
 import { ensureDaemon, findDaemon, registerRepo, type DaemonConnection, type EnsuredDaemon } from "../daemon/client.js";
-import { resolveRepoRoot } from "../git/repo.js";
+import { resolveMainWorktree, resolveRepoRoot } from "../git/repo.js";
+import { errorMessage } from "../util/text.js";
 import { ApiRequestError, PromptgraphClient } from "./client.js";
 
 /** Where the MCP server runs and how it reaches the daemon (DESIGN §19.1, §19.2). */
@@ -34,6 +35,11 @@ export const NOT_RUNNING = "promptgraph is not running; call start_server";
 /** Git top level (realpath) per directory: it does not change while the MCP server runs (one git call per dir). */
 const repoRoots = new Map<string, Promise<string>>();
 
+/**
+ * The repository a tool works on: the git top level (realpath) of `repo`, `PROMPTGRAPH_REPO` or the cwd.
+ * Inside a lane worktree (a Claude step of a run calling the plugin's tools) it is the repository that
+ * worktree belongs to: a lane worktree is never registered as a repository of its own (DESIGN §19.2).
+ */
 export function resolveRepo(mcpEnv: McpEnvironment, repo?: string): Promise<string> {
   const dir = path.resolve(mcpEnv.cwd, repo ?? mcpEnv.env.PROMPTGRAPH_REPO ?? mcpEnv.cwd);
   let root = repoRoots.get(dir);
@@ -41,8 +47,22 @@ export function resolveRepo(mcpEnv: McpEnvironment, repo?: string): Promise<stri
     root = resolveRepoRoot(dir)
       .then((r) => fs.realpathSync(r))
       .catch(() => {
-        repoRoots.delete(dir);
         throw new Error(`${dir} is not inside a git repository; promptgraph works on git repositories.`);
+      })
+      .then(async (top) => {
+        if (!isInWorktreesDir(mcpEnv.paths, top)) return top;
+        let main: string;
+        try {
+          main = fs.realpathSync(await resolveMainWorktree(top));
+        } catch (err) {
+          throw new Error(`${top} is a promptgraph lane worktree whose repository could not be found: ${errorMessage(err)}`);
+        }
+        if (isInWorktreesDir(mcpEnv.paths, main)) throw new Error(`${top} is a promptgraph lane worktree; pass the repository it belongs to as repo.`);
+        return main;
+      })
+      .catch((err: unknown) => {
+        repoRoots.delete(dir);
+        throw err;
       });
     repoRoots.set(dir, root);
   }

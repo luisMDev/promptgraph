@@ -118,10 +118,13 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Runnin
 
   let closing: Promise<void> | null = null;
   const close = async () => {
-    removeDaemonInfo(paths);
+    // The record stays until the engines are down (DESIGN §4.1 item 7): meanwhile `ls` still lists this
+    // daemon, a second `stop` still finds and waits for it, and repository requests answer 503
+    // daemon_stopping instead of a client spawning a daemon that cannot take the lock yet.
     await daemon.registry.shutdownAll();
     // Anything no repository owns any more.
     await daemon.ptys.killAll();
+    removeDaemonInfo(paths);
     daemon.legacyLocks.releaseAll();
     stopNotifier();
     stopSessionSweep();

@@ -3,7 +3,7 @@ import { webDistDir } from "../config/paths.js";
 import type { DaemonContext } from "../daemon/context.js";
 import { localhostOnly, tokenAuth } from "./auth.js";
 import { toApiError } from "./errors.js";
-import { fetchMetadata } from "./fetch-metadata.js";
+import { fetchMetadata, noFraming } from "./fetch-metadata.js";
 import { registerRepoScope, type AppEnv } from "./repo-scope.js";
 import { registerDaemonRoutes } from "./routes/daemon.js";
 import { registerGraphRoutes } from "./routes/graphs.js";
@@ -16,7 +16,7 @@ import { registerRunRoutes } from "./routes/runs.js";
 import { registerStatic } from "./static.js";
 
 /**
- * Hono app of the daemon: localhostOnly (port getter) → fetchMetadata (cookie requests only) → tokenAuth
+ * Hono app of the daemon: noFraming (frame headers on every response, framed loads refused) → localhostOnly (port getter) → fetchMetadata (cookie requests only) → tokenAuth
  * (Bearer token read per request, session cookie, hook tokens; public hello and /login) → GET /login →
  * daemon routes (/api/daemon, /api/repos, /api/settings, /hooks) → repository scope
  * (/api/repos/:repoId/*: load, activate before non-GET) → repository routes → static web (SPA fallback
@@ -24,6 +24,7 @@ import { registerStatic } from "./static.js";
  */
 export function createHttpApp(daemon: DaemonContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  app.use("*", noFraming());
   app.use("*", localhostOnly(() => daemon.port));
   app.use("*", fetchMetadata());
   app.use("*", tokenAuth({ getToken: () => daemon.getToken(), hookSecret: daemon.hookSecret, sessions: daemon.sessions }));

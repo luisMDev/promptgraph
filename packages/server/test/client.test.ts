@@ -7,10 +7,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { API, type ListReposResponse } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { daemonLogPath, readDaemonInfo, writeDaemonInfo } from "../src/config/daemon-info.js";
+import { DaemonLock, isDaemonLock } from "../src/config/instance-lock.js";
 import { getPaths, type PgPaths } from "../src/config/paths.js";
 import { writeToken } from "../src/config/token.js";
 import { VERSION } from "../src/config/version.js";
-import { DaemonVersionMismatch, ensureDaemon, findDaemon, registerRepo } from "../src/daemon/client.js";
+import { absoluteExecArgv, DaemonVersionMismatch, ensureDaemon, findDaemon, registerRepo } from "../src/daemon/client.js";
 import { startDaemon } from "../src/daemon/start.js";
 import { processStartTime } from "../src/util/process.js";
 import { createTempRepo, fakeClaudeEnv, stopDaemonOf, tempDir, waitFor } from "./helpers.js";
@@ -113,13 +114,35 @@ describe("daemon client (DESIGN §4.1 items 3 and 4)", () => {
   it("keeps polling when its child lost the lock (exit 3) and another daemon becomes ready", async () => {
     const { env, paths, root } = home();
     const cli = fakeCli(root, 3);
+    // Another daemon starting: it holds the lock but has no record yet.
+    const lock = await DaemonLock.acquire(paths);
+    if (!isDaemonLock(lock)) throw new Error("lock held");
     const ensured = ensureDaemon({ paths, serverCommand: cli.command, env, timeoutMs: 10_000, pollMs: 50 });
     await waitFor(() => fs.existsSync(cli.record));
     await new Promise((r) => setTimeout(r, 500));
+    await lock.release();
     const daemon = await startDaemon({ port: 0, env });
     cleanups.push(() => daemon.close());
     const conn = await ensured;
     expect(conn).toMatchObject({ started: false, info: { pid: process.pid, port: daemon.port } });
+  });
+
+  it("spawns again once a stopping daemon released the lock its first child lost", async () => {
+    const { env, paths, root } = home();
+    const count = path.join(root, "count.txt");
+    const script = path.join(root, "fake-cli.sh");
+    // First start: the lock is held (exit 3). Second start: fails visibly, so the test needs no real daemon.
+    fs.writeFileSync(script, `#!/bin/sh\necho x >> "${count}"\nif [ "$(wc -l < "${count}")" -eq 1 ]; then exit 3; fi\necho "second start"\nexit 1\n`, { mode: 0o755 });
+    const lock = await DaemonLock.acquire(paths);
+    if (!isDaemonLock(lock)) throw new Error("lock held");
+    const ensured = ensureDaemon({ paths, serverCommand: ["/bin/sh", script], env, timeoutMs: 10_000, pollMs: 50 });
+    await waitFor(() => fs.existsSync(count));
+    await new Promise((r) => setTimeout(r, 300));
+    // Still held: it waits instead of spawning again.
+    expect(fs.readFileSync(count, "utf8")).toBe("x\n");
+    await lock.release();
+    await expect(ensured).rejects.toThrow(/exited before it was ready \(code 1\)[\s\S]*second start/);
+    expect(fs.readFileSync(count, "utf8")).toBe("x\nx\n");
   });
 
   it("starts a real detached daemon even when PG_PORT_DEFAULT is taken", { timeout: 40_000 }, async () => {
@@ -135,5 +158,32 @@ describe("daemon client (DESIGN §4.1 items 3 and 4)", () => {
     const again = await ensureDaemon({ paths, serverCommand: CLI_COMMAND, env, version: VERSION });
     expect(again).toMatchObject({ started: false, info: { pid: conn.info.pid } });
     expect(readDaemonInfo(paths)?.pid).toBe(conn.info.pid);
+  });
+});
+
+describe("absoluteExecArgv", () => {
+  it("makes loader specifiers absolute against the cwd, in both flag forms, and keeps everything else", () => {
+    const tsxUrl = pathToFileURL(createRequire(path.join(SERVER_SRC, "noop.js")).resolve("tsx")).href;
+    const local = path.join(SERVER_SRC, "test", "helpers.ts");
+    const argv = absoluteExecArgv(
+      ["--conditions=source", "--import", "tsx", "--import=tsx", "--loader", "./test/helpers.ts", "-r", "./test/helpers.ts", "--import", "data:text/javascript,0", "--import", "/abs/x.mjs", "--import", "no-such-pkg-pg"],
+      SERVER_SRC,
+    );
+    expect(argv).toEqual([
+      "--conditions=source",
+      "--import",
+      tsxUrl,
+      `--import=${tsxUrl}`,
+      "--loader",
+      pathToFileURL(local).href,
+      "-r",
+      local,
+      "--import",
+      "data:text/javascript,0",
+      "--import",
+      "/abs/x.mjs",
+      "--import",
+      "no-such-pkg-pg",
+    ]);
   });
 });
