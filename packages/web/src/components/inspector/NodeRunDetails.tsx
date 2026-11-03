@@ -19,6 +19,7 @@ import { useNow } from "../../lib/use-now";
 import { nodeControl, openNodeTerminal, openSetupTerminal, reopenSession } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
+import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import { Button, DetailRow, Field, Section, StatusDot } from "../common/ui";
@@ -62,6 +63,7 @@ export function NodeRunDetails({
           <StatusSection node={node} nodeRun={nodeRun} lane={lane} attempts={attempts} />
           <Controls node={node} nodeRun={nodeRun} label={iterations.length > 1 ? `${label} #${nodeRun.iteration + 1}` : label} runFinal={isFinalRunStatus(runStatus)} historical={historical} />
           {node.type === "condition" && <ConditionResult node={node} nodeRun={nodeRun} />}
+          {nodeRun.snapshotStart && <ChangesSection nodeRun={nodeRun} label={label} />}
           <OutputSection nodeRun={nodeRun} reasonShown={node.type === "condition"} />
           {nodeRun.output?.usage && <UsageSection usage={nodeRun.output.usage} />}
         </>
@@ -83,6 +85,7 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
         <span className={`font-medium ${style.text}`}>{style.label}</span>
         {nodeRun.hold && <span className="rounded bg-sky-900/60 px-1.5 py-0.5 text-[10px] text-sky-200">hold</span>}
       </div>
+      <GraceCountdown nodeRun={nodeRun} />
       {nodeRun.waitingReason && <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">{nodeRun.waitingReason.message}</p>}
       {nodeRun.activity && isActiveNodeStatus(nodeRun.status) && <p className="truncate font-mono text-xs text-zinc-400">{nodeRun.activity}</p>}
       <div className="space-y-1.5">
@@ -190,6 +193,20 @@ function Controls({ node, nodeRun, label, runFinal, historical }: { node: GraphN
             Reopen session
           </Button>
         )}
+      </div>
+    </Section>
+  );
+}
+
+/** §9.7: what this node changed (start → end snapshot, or → the live worktree while it runs). */
+function ChangesSection({ nodeRun, label }: { nodeRun: NodeRun; label: string }) {
+  return (
+    <Section title="Changes">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-zinc-400">{nodeRun.snapshotEnd ? "What this step changed in its worktree." : "Changes so far in this step."}</span>
+        <Button size="sm" className="ml-auto shrink-0" onClick={() => useUiStore.getState().openDiff({ kind: "node", nodeRunId: nodeRun.id, title: `Changes · ${label}` })}>
+          View diff
+        </Button>
       </div>
     </Section>
   );

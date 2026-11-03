@@ -62,6 +62,11 @@ export function RunControls() {
           {formatCostUsd(shownRun.usage.costUsd)}
         </span>
       )}
+      {shownRun && (
+        <Button onClick={() => useUiStore.getState().openReport(shownRun.id)} title="Results, changes, commits, cost and where the run stopped">
+          Report
+        </Button>
+      )}
       {resumable && (
         <Button variant="primary" onClick={() => void resumeRun(activeRun.id)} title="Continue the paused run">
           <Icons.play /> Resume

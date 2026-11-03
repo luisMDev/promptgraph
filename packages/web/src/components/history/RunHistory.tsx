@@ -5,6 +5,7 @@ import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
 import { cleanupRun } from "../../store/app-actions";
 import { useRunStore } from "../../store/run-store";
+import { useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import { Button, StatusDot } from "../common/ui";
@@ -90,15 +91,26 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
       </div>
       {run.error && <div className={`mt-1 line-clamp-2 ${run.status === "paused" ? "text-amber-300/90" : "text-red-300/90"}`}>{run.error}</div>}
       {expanded && <RunRowDetails runId={run.id} />}
-      {final && (
-        <div className="mt-1.5 flex items-center gap-2">
-          {run.cleanedUp ? (
+      <div className="mt-1.5 flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="-ml-2"
+          title="Results, changes, commits, cost and where the run stopped"
+          onClick={(e) => {
+            e.stopPropagation();
+            useUiStore.getState().openReport(run.id);
+          }}
+        >
+          Report
+        </Button>
+        {final &&
+          (run.cleanedUp ? (
             <span className="text-[11px] text-zinc-500">Worktrees cleaned up</span>
           ) : (
             <Button
               size="sm"
               variant="ghost"
-              className="-ml-2"
               disabled={cleaning}
               title="Remove this run's worktrees and its unpushed branches without commits (branches with commits are kept)"
               onClick={async (e) => {
@@ -110,9 +122,8 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
             >
               <Icons.trash /> {cleaning ? "Cleaning up…" : "Clean up"}
             </Button>
-          )}
-        </div>
-      )}
+          ))}
+      </div>
     </div>
   );
 }

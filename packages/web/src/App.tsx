@@ -9,6 +9,7 @@ import { Header } from "./components/header/Header";
 import { RunHistory } from "./components/history/RunHistory";
 import { Inspector } from "./components/inspector/Inspector";
 import { Palette } from "./components/palette/Palette";
+import { RunReport, useAutoOpenReport } from "./components/report/RunReport";
 import { TerminalDrawer } from "./components/terminal/TerminalDrawer";
 import { createGraph, openInitialGraph, startLiveUpdates } from "./store/app-actions";
 import { useAppStore } from "./store/app-store";
@@ -18,11 +19,14 @@ import { useUiStore, type LeftPanel } from "./store/ui-store";
 
 /** Lazy: the dialog pulls in diff2html, which the rest of the app does not need. */
 const ApprovalDialog = lazy(() => import("./components/approval/ApprovalDialog").then((m) => ({ default: m.ApprovalDialog })));
+const DiffDialog = lazy(() => import("./components/approval/DiffDialog").then((m) => ({ default: m.DiffDialog })));
 
 /** Layout shell: header / palette | canvas | inspector / terminal drawer (§13). */
 export function App() {
   const bootError = useAppStore((s) => s.bootError);
   const booted = useAppStore((s) => s.repo !== null);
+  const reportRunId = useUiStore((s) => s.reportRunId);
+  useAutoOpenReport();
 
   useEffect(() => {
     const stop = startLiveUpdates();
@@ -43,7 +47,8 @@ export function App() {
     <div className="flex h-full flex-col bg-zinc-950 text-zinc-200">
       <Header />
       <Banners />
-      <div className="flex min-h-0 flex-1">
+      {reportRunId && <RunReport runId={reportRunId} />}
+      <div className={`flex min-h-0 flex-1 ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
@@ -56,6 +61,7 @@ export function App() {
         </aside>
       </div>
       <ApprovalGate />
+      <DiffGate />
       <Toasts />
     </div>
   );
@@ -67,6 +73,16 @@ function ApprovalGate() {
   return (
     <Suspense fallback={null}>
       <ApprovalDialog key={nodeRunId} nodeRunId={nodeRunId} />
+    </Suspense>
+  );
+}
+
+function DiffGate() {
+  const target = useUiStore((s) => s.diffTarget);
+  if (!target) return null;
+  return (
+    <Suspense fallback={null}>
+      <DiffDialog target={target} />
     </Suspense>
   );
 }

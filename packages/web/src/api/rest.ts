@@ -5,6 +5,7 @@ import {
   type ApprovalInfoResponse,
   type ApprovalRequest,
   type DiffResponse,
+  type DiffScope,
   type GetGraphResponse,
   type GetRunResponse,
   type Graph,
@@ -15,6 +16,7 @@ import {
   type PendingResponse,
   type ReopenResponse,
   type RepoInfoResponse,
+  type RunReportResponse,
   type SaveGraphResponse,
   type StartRunResponse,
   type UpdateAppSettingsRequest,
@@ -159,8 +161,14 @@ export const api = {
   submitApproval(nodeRunId: string, req: ApprovalRequest): Promise<NodeRunResponse> {
     return request("POST", API.approval(nodeRunId), req);
   },
-  diff(nodeRunId: string): Promise<DiffResponse> {
-    return request("GET", API.diff(nodeRunId));
+  diff(nodeRunId: string, scope: DiffScope = "lane"): Promise<DiffResponse> {
+    return request("GET", API.diff(nodeRunId, scope));
+  },
+  laneDiff(runId: string, laneId: string): Promise<DiffResponse> {
+    return request("GET", API.laneDiff(runId, laneId));
+  },
+  runReport(runId: string): Promise<RunReportResponse> {
+    return request("GET", API.runReport(runId));
   },
   reopen(nodeRunId: string): Promise<ReopenResponse> {
     return request("POST", API.reopen(nodeRunId), {});

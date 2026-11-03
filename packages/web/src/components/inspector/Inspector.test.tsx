@@ -72,6 +72,25 @@ describe("inspector (phase 2)", () => {
     expect(screen.getByText("Exit code 1, expected 0")).toBeTruthy();
   });
 
+  it("opens a node's own diff (§9.7) when it has a snapshot", () => {
+    const detail = runDetailOf(testFixLoopGraph(), [
+      nodeRunOf({ id: "t0", nodeId: "test", status: "succeeded", snapshotStart: "s1", snapshotEnd: "s2" }),
+      nodeRunOf({ id: "c0", nodeId: "cond", status: "succeeded", output: { port: "true", result: true } }),
+    ]);
+    useUiStore.getState().openDiff(null);
+    useRunStore.getState().showRun(detail);
+    useRunStore.getState().selectNode("cond");
+    render(<Inspector />);
+    expect(screen.queryByRole("button", { name: "View diff" })).toBeNull();
+    cleanup();
+
+    useRunStore.getState().selectNode("test");
+    render(<Inspector />);
+    fireEvent.click(screen.getByRole("button", { name: "View diff" }));
+    expect(useUiStore.getState().diffTarget).toMatchObject({ kind: "node", nodeRunId: "t0" });
+    useUiStore.getState().openDiff(null);
+  });
+
   it("edits an edge's condition and loop settings", () => {
     const graph = testFixLoopGraph();
     useEditorStore.setState({ graph, phase: 2, validation: { errors: [], warnings: [] }, selectedNodeIds: [], selectedEdgeIds: ["e1"], selectedNodeId: null, selectedEdgeId: "e1", activeRunId: null });

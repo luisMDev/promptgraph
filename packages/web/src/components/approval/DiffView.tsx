@@ -15,8 +15,11 @@ const STATUS_MARK: Record<DiffFile["status"], { mark: string; className: string 
   other: { mark: "?", className: "text-zinc-400" },
 };
 
-/** Lane diff (§10): file list (click to jump) + diff2html patch, unified or side by side. Loaded lazily with the dialog. */
-export function DiffView({ diff }: { diff: DiffResponse }) {
+/**
+ * Lane diff (§10) or one node's changes (§9.7): file list (click to jump) + diff2html patch, unified or
+ * side by side. Loaded lazily with the dialogs.
+ */
+export function DiffView({ diff, title, emptyText = "No changes in this lane." }: { diff: DiffResponse; title?: string; emptyText?: string }) {
   const [layout, setLayout] = useState<Layout>("line-by-line");
   const bodyRef = useRef<HTMLDivElement>(null);
   const markup = useMemo(
@@ -36,10 +39,14 @@ export function DiffView({ diff }: { diff: DiffResponse }) {
     <div className="space-y-2">
       <div className="flex items-center gap-3">
         <h3 className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">
-          Changes since base{" "}
-          <span className="font-mono normal-case" title={`Merge base with the base branch: ${diff.base}`}>
-            {diff.base.slice(0, 8)}
-          </span>
+          {title ?? (
+            <>
+              Changes since base{" "}
+              <span className="font-mono normal-case" title={`Merge base with the base branch: ${diff.base}`}>
+                {diff.base.slice(0, 8)}
+              </span>
+            </>
+          )}
         </h3>
         <span className="text-xs text-zinc-500">
           {diff.files.length} file{diff.files.length === 1 ? "" : "s"} · <span className="text-green-400">+{additions}</span>{" "}
@@ -58,7 +65,7 @@ export function DiffView({ diff }: { diff: DiffResponse }) {
       </div>
       {diff.truncated && <p className="text-xs text-amber-300">The diff is too large and was truncated.</p>}
       {diff.files.length === 0 ? (
-        <p className="text-xs text-zinc-500">No changes in this lane.</p>
+        <p className="text-xs text-zinc-500">{emptyText}</p>
       ) : (
         <ul className="max-h-40 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 py-1 text-xs">
           {diff.files.map((f) => (

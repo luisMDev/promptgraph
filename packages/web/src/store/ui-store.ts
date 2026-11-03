@@ -8,7 +8,15 @@ export interface UiState {
   drawerHeight: number;
   approvalNodeRunId: string | null;
   settingsOpen: boolean;
+  /** Diff dialog: one node's changes (with a switch to its whole lane), or a lane of a run. */
+  diffTarget: DiffTarget | null;
+  /** Run whose report (§13.1) replaces the editor/canvas view. */
+  reportRunId: string | null;
 }
+
+export type DiffTarget =
+  | { kind: "node"; nodeRunId: string; title: string }
+  | { kind: "lane"; runId: string; laneId: string; title: string };
 
 export interface TerminalTabMeta {
   title: string;
@@ -41,6 +49,8 @@ export interface UiStore extends UiState {
   setDrawerHeight(px: number): void;
   openApproval(nodeRunId: string | null): void;
   setSettingsOpen(open: boolean): void;
+  openDiff(target: DiffTarget | null): void;
+  openReport(runId: string | null): void;
   setLeftPanel(panel: LeftPanel): void;
   toast(kind: Toast["kind"], message: string): void;
   dismissToast(id: number): void;
@@ -60,6 +70,8 @@ export const useUiStore = create<UiStore>()((set, get) => ({
   drawerHeight: 300,
   approvalNodeRunId: null,
   settingsOpen: false,
+  diffTarget: null,
+  reportRunId: null,
   tabMeta: {},
   drawerOpen: false,
   leftPanel: "palette",
@@ -112,6 +124,14 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 
   setSettingsOpen(open) {
     set({ settingsOpen: open });
+  },
+
+  openDiff(target) {
+    set({ diffTarget: target });
+  },
+
+  openReport(runId) {
+    set({ reportRunId: runId });
   },
 
   setLeftPanel(panel) {
