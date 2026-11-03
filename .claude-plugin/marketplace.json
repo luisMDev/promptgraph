@@ -1,0 +1,15 @@
+{
+  "name": "promptgraph",
+  "owner": { "name": "LuismDev" },
+  "metadata": {
+    "description": "Claude Code plugins for promptgraph: draw, run and supervise graphs of Claude Code steps."
+  },
+  "plugins": [
+    {
+      "name": "promptgraph",
+      "source": "./plugins/promptgraph",
+      "description": "promptgraph MCP server plus skills to design graphs of Claude Code steps, run them in parallel git worktrees and review the results.",
+      "category": "development"
+    }
+  ]
+}
