@@ -1,16 +1,22 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { getDesktopBridge, type DesktopBridge } from "../../lib/desktop";
 import { useDaemonStore } from "../../store/daemon-store";
+import { useAutoReloginWhenSignedOut, useAutoReloginWhenUnreachable, useReloginStore } from "../../store/relogin-store";
 import { Icons } from "./icons";
+import { Button } from "./ui";
 
 /**
  * Connection and version state (DESIGN §13.5), above every view: "Reconnecting…" while the socket is down,
  * "not reachable" after 15 s (it keeps retrying), and a banner when the daemon runs another version than this
- * web build.
+ * web build. In the desktop window, 10 s without a connection asks the shell to sign in again once
+ * (`relogin`, which restarts the daemon if needed and follows a new port); "not reachable" then offers Retry.
  */
-export function SessionBanners() {
+export function SessionBanners({ bridge = getDesktopBridge() }: { bridge?: DesktopBridge }) {
   const connection = useDaemonStore((s) => s.connection);
   const versionMismatch = useDaemonStore((s) => s.versionMismatch);
+  const relogin = useReloginStore();
+  useAutoReloginWhenUnreachable(bridge, connection);
   return (
     <>
       {connection === "reconnecting" && (
@@ -22,7 +28,13 @@ export function SessionBanners() {
         <SessionBanner tone="error">
           <span role="alert">
             promptgraph is not reachable — run <Code>promptgraph open</Code> in a terminal.
+            {bridge.isDesktop && relogin.error && <span className="ml-1 text-red-700/80">({relogin.error})</span>}
           </span>
+          {bridge.isDesktop && (
+            <Button size="xs" className="ml-auto" disabled={relogin.pending} onClick={() => void relogin.relogin(bridge)}>
+              {relogin.pending ? "Connecting…" : "Retry"}
+            </Button>
+          )}
         </SessionBanner>
       )}
       {versionMismatch && (
@@ -36,8 +48,27 @@ export function SessionBanners() {
   );
 }
 
-/** The session is gone (401, or the socket closed with 4401): the page stops retrying. */
-export function SignedOut() {
+/**
+ * The session is gone (401, or the socket closed with 4401): the page stops retrying. In the desktop window
+ * it asks the shell to sign in again once by itself (`relogin` with the current path), then offers a
+ * "Sign in again" button.
+ */
+export function SignedOut({ bridge = getDesktopBridge() }: { bridge?: DesktopBridge }) {
+  const relogin = useReloginStore();
+  useAutoReloginWhenSignedOut(bridge, true);
+  if (bridge.isDesktop) {
+    return (
+      <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+        <p className="text-sm font-medium text-foreground">{relogin.pending ? "Signing in again…" : "Signed out"}</p>
+        {relogin.error && <p className="max-w-lg text-xs break-words text-muted-foreground">{relogin.error}</p>}
+        {!relogin.pending && (
+          <Button size="sm" onClick={() => void relogin.relogin(bridge)}>
+            Sign in again
+          </Button>
+        )}
+      </div>
+    );
+  }
   return (
     <div role="alert" className="flex h-full flex-col items-center justify-center gap-2 bg-background p-6 text-center">
       <p className="text-sm font-medium text-foreground">Signed out</p>

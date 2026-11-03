@@ -1,5 +1,6 @@
-import { useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
+import { getDesktopBridge, type DesktopBridge, type ResizeDirection } from "../../lib/desktop";
 import { HOME_PATH, activeTab, tabsStore, useTabs, type Tab } from "../../store/tabs-store";
 import { Icons } from "../common/icons";
 import { useLoadTabRepos, useTabAttention, useTabTitle } from "./use-tab-title";
@@ -7,10 +8,17 @@ import { useLoadTabRepos, useTabAttention, useTabTitle } from "./use-tab-title";
 /**
  * The in-app tab strip at the top of the page (DESIGN §13.4): title, attention dot and close button per
  * tab, middle-click closes, "+" opens Home in a new tab. It scrolls horizontally when the tabs overflow and
- * keeps the active one in view. `role=tablist` with roving focus (arrows, Home/End). In the desktop window
- * the spacer is the drag region and `windowControls` the window buttons (§20).
+ * keeps the active one in view. `role=tablist` with roving focus (arrows, Home/End).
+ *
+ * In the desktop window with a custom title bar (DESIGN §20.2) the strip is the title bar:
+ * `data-tauri-drag-region` sits on the strip's own element and on the flex-1 spacer only (the attribute does
+ * not apply to children, so never on the tab list, which tabs cover); Tauri's drag script handles dragging
+ * and double-click-to-maximise. Window controls sit at the right end and thin edge handles resize the window.
+ * With native decorations, or in a browser, none of this renders.
  */
-export function TabStrip({ windowControls }: { windowControls?: ReactNode }) {
+export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBridge }) {
+  const titleBar = bridge.isDesktop && bridge.customTitleBar;
+  const dragRegion = titleBar ? { "data-tauri-drag-region": "" } : {};
   const tabs = useTabs((s) => s.tabs);
   const activeId = useTabs((s) => s.activeId);
   const listRef = useRef<HTMLDivElement>(null);
@@ -37,7 +45,7 @@ export function TabStrip({ windowControls }: { windowControls?: ReactNode }) {
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-stretch border-b bg-muted/40 text-xs select-none">
+    <div className="flex h-9 shrink-0 items-stretch border-b bg-muted/40 text-xs select-none" data-pg-tabstrip="" {...dragRegion}>
       <div ref={listRef} role="tablist" aria-label="Tabs" className="pg-tab-list flex min-w-0 items-stretch overflow-x-auto" onKeyDown={onKeyDown}>
         {tabs.map((tab) => (
           <TabItem key={tab.id} tab={tab} active={tab.id === activeId} />
@@ -52,9 +60,9 @@ export function TabStrip({ windowControls }: { windowControls?: ReactNode }) {
       >
         <Icons.plus />
       </button>
-      <div className="min-w-6 flex-1" data-pg-tabstrip-spacer="" />
-      {windowControls}
-      <DocumentTitle />
+      <div className="min-w-6 flex-1" data-pg-tabstrip-spacer="" {...dragRegion} />
+      {titleBar && <WindowFrame bridge={bridge} />}
+      <DocumentTitle bridge={bridge} />
     </div>
   );
 }
@@ -117,12 +125,113 @@ function TabItem({ tab, active }: { tab: Tab; active: boolean }) {
   );
 }
 
-/** The window title follows the active tab. */
-function DocumentTitle() {
+/** The window title follows the active tab (in the desktop window, the native window's title too). */
+function DocumentTitle({ bridge }: { bridge: DesktopBridge }) {
   const tab = useTabs(activeTab);
   const title = useTabTitle(tab);
   useEffect(() => {
-    document.title = title === "Home" ? "promptgraph" : `${title} · promptgraph`;
-  }, [title]);
+    const windowTitle = title === "Home" ? "promptgraph" : `${title} · promptgraph`;
+    document.title = windowTitle;
+    if (bridge.isDesktop) void bridge.setTitle(windowTitle).catch(() => {});
+  }, [bridge, title]);
   return null;
+}
+
+/**
+ * The title bar alone (drag region, window controls and resize edges) for pages without the tab strip,
+ * such as the signed-out screen: a window with a custom title bar must stay movable and closable there.
+ * Renders nothing in a browser or with native decorations.
+ */
+export function WindowTitleBar({ bridge = getDesktopBridge() }: { bridge?: DesktopBridge }) {
+  if (!bridge.isDesktop || !bridge.customTitleBar) return null;
+  return (
+    <div className="flex h-9 shrink-0 items-stretch border-b bg-muted/40 text-xs select-none" data-pg-titlebar="" data-tauri-drag-region="">
+      <div className="min-w-6 flex-1" data-tauri-drag-region="" />
+      <WindowFrame bridge={bridge} />
+    </div>
+  );
+}
+
+/** Whether the window is maximised, re-queried on every DOM `resize`. */
+function useMaximized(bridge: DesktopBridge): boolean {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const query = () => {
+      bridge.isMaximized().then(
+        (value) => alive && setMaximized(value),
+        () => {},
+      );
+    };
+    query();
+    window.addEventListener("resize", query);
+    return () => {
+      alive = false;
+      window.removeEventListener("resize", query);
+    };
+  }, [bridge]);
+  return maximized;
+}
+
+/** Window controls and resize edges of the custom title bar (DESIGN §20.2). */
+function WindowFrame({ bridge }: { bridge: DesktopBridge }) {
+  const maximized = useMaximized(bridge);
+  const control = "flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground";
+  return (
+    <>
+      <div className="flex shrink-0 items-stretch" data-pg-window-controls="">
+        <button type="button" aria-label="Minimize" title="Minimize" className={control} onClick={() => void bridge.minimize().catch(() => {})}>
+          <Icons.minimize />
+        </button>
+        <button
+          type="button"
+          aria-label={maximized ? "Restore" : "Maximize"}
+          title={maximized ? "Restore" : "Maximize"}
+          className={control}
+          onClick={() => void bridge.toggleMaximize().catch(() => {})}
+        >
+          {maximized ? <Icons.restore /> : <Icons.maximize />}
+        </button>
+        <button type="button" aria-label="Close window" title="Close" className={cn(control, "hover:bg-red-600 hover:text-white")} onClick={() => void bridge.close().catch(() => {})}>
+          <Icons.x />
+        </button>
+      </div>
+      {!maximized && <ResizeEdges bridge={bridge} />}
+    </>
+  );
+}
+
+const EDGE = 4;
+const CORNER = 8;
+const EDGES: Array<{ direction: ResizeDirection; style: CSSProperties; cursor: string }> = [
+  { direction: "North", style: { top: 0, left: CORNER, right: CORNER, height: EDGE }, cursor: "ns-resize" },
+  { direction: "South", style: { bottom: 0, left: CORNER, right: CORNER, height: EDGE }, cursor: "ns-resize" },
+  { direction: "West", style: { left: 0, top: CORNER, bottom: CORNER, width: EDGE }, cursor: "ew-resize" },
+  { direction: "East", style: { right: 0, top: CORNER, bottom: CORNER, width: EDGE }, cursor: "ew-resize" },
+  { direction: "NorthWest", style: { top: 0, left: 0, width: CORNER, height: CORNER }, cursor: "nwse-resize" },
+  { direction: "SouthEast", style: { bottom: 0, right: 0, width: CORNER, height: CORNER }, cursor: "nwse-resize" },
+  { direction: "NorthEast", style: { top: 0, right: 0, width: CORNER, height: CORNER }, cursor: "nesw-resize" },
+  { direction: "SouthWest", style: { bottom: 0, left: 0, width: CORNER, height: CORNER }, cursor: "nesw-resize" },
+];
+
+/** Thin handles along the window's edges (an undecorated window has no frame to resize by). */
+function ResizeEdges({ bridge }: { bridge: DesktopBridge }) {
+  return (
+    <>
+      {EDGES.map(({ direction, style, cursor }) => (
+        <div
+          key={direction}
+          aria-hidden="true"
+          data-pg-resize-edge={direction}
+          className="fixed z-[60]"
+          style={{ ...style, cursor }}
+          onMouseDown={(e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            void bridge.startResizeDragging(direction).catch(() => {});
+          }}
+        />
+      ))}
+    </>
+  );
 }

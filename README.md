@@ -75,6 +75,11 @@ are marked **interrupted** and the runs are paused. Start promptgraph again and 
 interrupted steps to continue. A different promptgraph version refuses to talk to a running daemon:
 run `promptgraph stop`, then retry.
 
+**Desktop app (Linux, optional).** `packages/desktop` contains a small Tauri v2 window for the same
+UI, with the tab strip as its title bar. It uses the `promptgraph` CLI to start the daemon and sign in,
+and it does not replace the daemon. You need Rust and WebKitGTK to build it. See
+[packages/desktop/README.md](packages/desktop/README.md).
+
 ## Use it from Claude Code (MCP server and plugin)
 
 promptgraph includes an MCP server, so Claude Code can design graphs, run them and supervise them

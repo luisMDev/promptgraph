@@ -1,3 +1,4 @@
+import { DESKTOP_OPEN_ARGS } from "@promptgraph/shared";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs, USAGE, UsageError, type CliOptions } from "../src/cli/args.js";
 
@@ -76,6 +77,18 @@ describe("parseCliArgs (DESIGN §4)", () => {
     expect(parse("open", "repo-0123abcd", "--json")).toMatchObject({ target: "repo-0123abcd", json: true, printUrl: true });
     expect(parse("open", "--print-url", "--json", "--next=/")).toMatchObject({ target: null, json: true, printUrl: true, next: "/" });
     expect(parse("open", "--web-port=5174")).toMatchObject({ webPort: 5174 });
+  });
+
+  it("open: the exact argv of the desktop shell (DESIGN §20.1), with and without --next and a repository", () => {
+    expect(parse(...DESKTOP_OPEN_ARGS)).toEqual({ ...DEFAULTS, command: "open", json: true, printUrl: true });
+    expect(parse(...DESKTOP_OPEN_ARGS, "/abs/repo")).toMatchObject({ command: "open", target: "/abs/repo", json: true, next: null });
+    expect(parse(...DESKTOP_OPEN_ARGS, "--next", "/r/x-0123abcd/runs/r1/nodes/n1", "/abs/repo")).toMatchObject({
+      command: "open",
+      target: "/abs/repo",
+      json: true,
+      printUrl: true,
+      next: "/r/x-0123abcd/runs/r1/nodes/n1",
+    });
   });
 
   it("--help and --version are global", () => {

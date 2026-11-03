@@ -3,6 +3,7 @@ import type { ServerMessage } from "@promptgraph/shared";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wsClient } from "../../api/ws";
+import { inertDesktopBridge, setDesktopBridge } from "../../lib/desktop";
 import { TerminalView } from "./TerminalView";
 
 /** xterm needs a real canvas: a fake that records what the view does with it. */
@@ -61,12 +62,19 @@ const xterm = vi.hoisted(() => {
       this.term!.resize(120, 40);
     }
   }
-  return { FakeTerminal, FakeFitAddon };
+  /** Records the link handler each terminal was given. */
+  class FakeWebLinksAddon {
+    static handlers: Array<((event: MouseEvent, uri: string) => void) | undefined> = [];
+    constructor(handler?: (event: MouseEvent, uri: string) => void) {
+      FakeWebLinksAddon.handlers.push(handler);
+    }
+  }
+  return { FakeTerminal, FakeFitAddon, FakeWebLinksAddon };
 });
 
 vi.mock("@xterm/xterm", () => ({ Terminal: xterm.FakeTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: xterm.FakeFitAddon }));
-vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
+vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: xterm.FakeWebLinksAddon }));
 
 let listeners: ((msg: ServerMessage) => void)[];
 let attach: ReturnType<typeof vi.spyOn>;
@@ -75,6 +83,7 @@ let ptyData: ((bytes: Uint8Array) => void) | null;
 
 beforeEach(() => {
   xterm.FakeTerminal.instances = [];
+  xterm.FakeWebLinksAddon.handlers = [];
   listeners = [];
   ptyData = null;
   vi.spyOn(wsClient, "onMessage").mockImplementation((l) => {
@@ -89,6 +98,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  setDesktopBridge(null);
   vi.restoreAllMocks();
 });
 
@@ -129,5 +139,34 @@ describe("TerminalView in a hidden tab (DESIGN §13.4)", () => {
     const term = xterm.FakeTerminal.instances.at(-1)!;
     expect(term.calls.slice(0, 2)).toEqual(["open", "fit"]);
     expect(attach.mock.calls[0]![2]).toEqual({ cols: 120, rows: 40 });
+  });
+});
+
+describe("TerminalView links (DESIGN §20.2)", () => {
+  it("in the desktop window a terminal link goes to the system browser through the bridge", async () => {
+    const openExternal = vi.fn(async (_url: string) => {});
+    setDesktopBridge({ ...inertDesktopBridge, isDesktop: true, openExternal });
+    render(<TerminalView ptyId="p3" visible onState={() => undefined} />);
+    const handler = xterm.FakeWebLinksAddon.handlers.at(-1);
+    expect(handler).toBeTypeOf("function");
+    handler!(new MouseEvent("click"), "https://github.com/acme/app/pull/7");
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/acme/app/pull/7");
+  });
+
+  it("a failing openExternal is swallowed", async () => {
+    const openExternal = vi.fn(async (_url: string) => {
+      throw new Error("no capability");
+    });
+    setDesktopBridge({ ...inertDesktopBridge, isDesktop: true, openExternal });
+    render(<TerminalView ptyId="p4" visible onState={() => undefined} />);
+    xterm.FakeWebLinksAddon.handlers.at(-1)!(new MouseEvent("click"), "https://example.com/");
+    await Promise.resolve();
+    expect(openExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it("in a browser the addon keeps its default handler (a new tab)", () => {
+    setDesktopBridge(inertDesktopBridge);
+    render(<TerminalView ptyId="p5" visible onState={() => undefined} />);
+    expect(xterm.FakeWebLinksAddon.handlers).toEqual([undefined]);
   });
 });

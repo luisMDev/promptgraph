@@ -3,6 +3,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { wsClient } from "../../api/ws";
+import { getDesktopBridge, terminalLinkHandler } from "../../lib/desktop";
 import { keepAlternateScreen } from "../../lib/terminal-replay";
 
 export type PtyState = { phase: "connecting" } | { phase: "live" } | { phase: "replay"; exitCode?: number | null } | { phase: "error"; message: string };
@@ -56,7 +57,8 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
     });
     const fit = new FitAddon();
     t.loadAddon(fit);
-    t.loadAddon(new WebLinksAddon());
+    // In the desktop window links go to the system browser (the addon's default window.open is denied).
+    t.loadAddon(new WebLinksAddon(terminalLinkHandler(getDesktopBridge())));
     fitRef.current = fit;
     setTerm(t);
     return () => {

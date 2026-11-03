@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ListReposResponseSchema, ListSessionsResponseSchema, OpenUrlResultSchema } from "@promptgraph/shared";
+import { DESKTOP_OPEN_ARGS, ListReposResponseSchema, ListSessionsResponseSchema, OpenUrlResultSchema } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { daemonInfoPath, daemonLogPath, readDaemonInfo, writeDaemonInfo } from "../../src/config/daemon-info.js";
 import { DaemonLock, isDaemonLock } from "../../src/config/instance-lock.js";
@@ -186,6 +186,14 @@ describe("e2e: promptgraph CLI", () => {
     const dev = OpenUrlResultSchema.parse(JSON.parse((await run(h, ["open", r, "--json", "--web-port", "5173", "--next", `/r/${repoId}/graphs/g`])).stdout));
     expect(dev).toMatchObject({ port: 5173, repoId });
     expect(dev.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:5173/login\\?code=[^&]+&next=%2Fr%2F${repoId}%2Fgraphs%2Fg$`));
+    // The desktop shell's exact call (DESIGN §20.1): DESKTOP_OPEN_ARGS, --next, then the repository.
+    const desktop = await run(h, [...DESKTOP_OPEN_ARGS, "--next", `/r/${repoId}/graphs/g`, r]);
+    expect(desktop.code, desktop.stderr).toBe(0);
+    const desktopLine = desktop.stdout.split("\n").filter(Boolean).at(-1)!;
+    const desktopResult = OpenUrlResultSchema.parse(JSON.parse(desktopLine));
+    expect(desktopResult.v).toBe(1);
+    expect(desktopResult).toMatchObject({ port, repoId });
+    expect(desktopResult.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/login\\?code=[^&]+&next=%2Fr%2F${repoId}%2Fgraphs%2Fg$`));
     expect(await run(h, ["open", "--next", "//evil.com"])).toMatchObject({ code: 2 });
     const unknown = await run(h, ["open", path.join(h.root, "nowhere")]);
     expect(unknown.code).toBe(1);

@@ -1,9 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import { SessionBanners, SignedOut } from "./components/common/SessionBanners";
 import { Toasts } from "./components/common/Toasts";
-import { TabStrip } from "./components/tabs/TabStrip";
+import { TabStrip, WindowTitleBar } from "./components/tabs/TabStrip";
 import { TabViews } from "./components/tabs/TabViews";
-import { isDesktopWindow } from "./lib/desktop";
+import { getDesktopBridge, installExternalLinkHandler } from "./lib/desktop";
 import { installKeymap } from "./lib/keymap";
 import { syncTabHistory } from "./lib/tabs/history";
 import { useDaemonStore } from "./store/daemon-store";
@@ -13,16 +13,20 @@ import { FullScreenMessage } from "./views/NotFound";
 
 /**
  * The page: the tab strip and the views of this window's tabs (DESIGN §13.4). The window URL follows the
- * active tab (§13.2) and the tab shortcuts are installed on the window.
+ * active tab (§13.2) and the tab shortcuts are installed on the window. In the desktop window (§20) the Ctrl
+ * shortcuts apply too and links to other origins go to the system browser.
  */
 export function App() {
   useEffect(() => {
     const store = tabsStore();
+    const bridge = getDesktopBridge();
     const stopHistory = syncTabHistory(store, window);
-    const stopKeys = installKeymap(window, { desktop: isDesktopWindow, onAction: (action) => runTabAction(store, action) });
+    const stopKeys = installKeymap(window, { desktop: () => bridge.isDesktop, onAction: (action) => runTabAction(store, action) });
+    const stopLinks = bridge.isDesktop ? installExternalLinkHandler(bridge) : () => {};
     return () => {
       stopHistory();
       stopKeys();
+      stopLinks();
     };
   }, []);
   return (
@@ -50,7 +54,17 @@ export function AppShell({ strip, children }: { strip?: ReactNode; children: Rea
     return stop;
   }, []);
 
-  if (signedOut) return <SignedOut />;
+  // No tabs while signed out, but a frameless desktop window keeps its title bar (§20.2).
+  if (signedOut) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+        <WindowTitleBar />
+        <div className="min-h-0 flex-1">
+          <SignedOut />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
       {strip}

@@ -1,6 +1,8 @@
 import type { DaemonInfoResponse, GetGraphResponse, Graph, GraphListItem, RepoInfoResponse, RepoSummary, RunDetail, RunReportResponse } from "@promptgraph/shared";
 import { vi } from "vitest";
+import { setDesktopBridge } from "./lib/desktop";
 import { useDaemonStore } from "./store/daemon-store";
+import { resetReloginStore } from "./store/relogin-store";
 import { clearRepoCaches } from "./store/repo-cache";
 import { useToastStore } from "./store/toast-store";
 import { discardEditorsOf, liveEditorStores } from "./store/view/editor-store";
@@ -155,4 +157,6 @@ export function resetGlobals(): void {
   useToastStore.setState({ toasts: [] });
   FakeSocket.instances = [];
   localStorage.clear();
+  setDesktopBridge(null);
+  resetReloginStore();
 }

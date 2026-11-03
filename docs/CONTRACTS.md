@@ -15,6 +15,7 @@ vitest.config.ts        one root config; tests in packages/*/test/**/*.test.ts(x
 packages/shared         @promptgraph/shared — zod schemas, types, validator, topology, pricing, WS protocol
 packages/server         @promptgraph/server — bin `promptgraph` (dist/cli/index.js), assets/pg-hook
 packages/web            @promptgraph/web — React 19 + Vite + Tailwind v4 (built to packages/web/dist)
+packages/desktop        @promptgraph/desktop — Tauri v2 shell for Linux (§12.6); typecheck/test only, Rust in src-tauri/
 plugins/promptgraph     Claude Code plugin: .mcp.json (runs `promptgraph mcp`) + skills (DESIGN §19.4)
 .claude-plugin          marketplace.json listing plugins/promptgraph
 ```
@@ -22,7 +23,8 @@ plugins/promptgraph     Claude Code plugin: .mcp.json (runs `promptgraph mcp`) +
 All dependencies for M1–M6 are installed. **Do not run `pnpm add`**; if something is truly missing, say so.
 M7–M9 add **no npm dependency** (hand-written router; the web reaches Tauri through `window.__TAURI__`; the Tauri
 CLI is installed with cargo). `packages/desktop` (`@promptgraph/desktop`) joins the workspace with `typecheck`/`test`
-only — no `build` script — and Rust crates live in `packages/desktop/src-tauri/Cargo.toml` (§12.6).
+only — no `build` script, so `pnpm -r build` never runs cargo — and its only devDependency is `@promptgraph/shared`
+(`workspace:*`); Rust crates live in `packages/desktop/src-tauri/Cargo.toml` (§12.6).
 
 | Package | Runtime deps | Dev deps |
 |---|---|---|
@@ -769,8 +771,10 @@ recent attach/resize drives PTY size.
 
 ```
 main.tsx, App.tsx, index.css     shell (Tailwind v4 via @tailwindcss/vite; status colour tokens in @theme). App = syncTabHistory +
-                                 installKeymap (effect) + AppShell({strip: TabStrip, children: TabViews}); AppShell boots daemon
-                                 info/repos/settings and startLiveUpdates, then renders strip, SessionBanners, children, Toasts
+                                 installKeymap (desktop = getDesktopBridge().isDesktop) + installExternalLinkHandler (desktop only)
+                                 (effect) + AppShell({strip: TabStrip, children: TabViews}); AppShell boots daemon
+                                 info/repos/settings and startLiveUpdates, then renders strip, SessionBanners, children, Toasts;
+                                 signed out: WindowTitleBar + SignedOut only
 lib/router/routes.ts             Route = home | repo | graph | run | nodeRun | report | notFound; parseRoute(path), routeHref(route)
                                  (via shared webRoutes), routeRunId, isRepoRoute. Pure
 lib/router/location.tsx          LocationContext {path, navigate(path, {replace?}), openInNewTab(path, {activate})} (a tab's location,
@@ -782,7 +786,25 @@ lib/keymap.ts                    resolveKey(event, {desktop, terminalFocused}) �
                                  AltGraph → null; with a terminal focused only next/prev), terminalHasFocus (focus inside `.xterm`),
                                  installKeymap(window, {desktop, onAction}) (keydown, capture phase; a handled key is prevented and
                                  stopped; auto-repeat only for Tab/PageUp/PageDown)
-lib/desktop.ts                   isDesktopWindow() → false (stub until the desktop bridge of §12.5)
+lib/desktop.ts                   DesktopBridge {isDesktop, customTitleBar, minimize, toggleMaximize, isMaximized, close,
+                                 startResizeDragging(ResizeDirection), setTitle, openExternal(url) (https: only, else ignored),
+                                 relogin(next) (core.invoke(DESKTOP_COMMANDS.relogin, {next}); rejects with the shell's error)};
+                                 createDesktopBridge(win) over window.__TAURI__ {core.invoke, window.getCurrentWindow(), opener.openUrl}
+                                 (local minimal types, no @tauri-apps/api) and window.__PG_DESKTOP__ {customTitleBar};
+                                 inertDesktopBridge outside Tauri; getDesktopBridge() (memoised) / setDesktopBridge(b | null) (tests);
+                                 installExternalLinkHandler(bridge, doc?) → teardown (document click/auxclick, capture phase: an
+                                 `<a href>` with another origin or target=_blank → preventDefault, openExternal when https:; same-origin
+                                 links untouched); terminalLinkHandler(bridge) → (event, uri) => openExternal(uri) (errors swallowed)
+                                 in the desktop window, undefined in a browser (WebLinksAddon's default); DESKTOP_RELOGIN_AFTER_MS = 10000; DESKTOP_RELOGIN_COOLDOWN_MS = 60000;
+                                 currentPagePath() (window pathname)
+store/relogin-store.ts           desktop only: useReloginStore {pending, error, tried {signedOut, unreachable}, relogin(bridge, {auto?})}
+                                 (an `auto` reason runs once per page load, and not at all if sessionStorage `pg.relogin.auto`
+                                 {signedOut?, unreachable?: ms} has one for it within DESKTOP_RELOGIN_COOLDOWN_MS; manual calls
+                                 always run; the record is per origin, so one more automatic attempt may follow a relogin to another port,
+                                 DESIGN §13.5), resetReloginStore (tests; also clears the record), useAutoReloginWhenSignedOut(bridge,
+                                 signedOut), useAutoReloginWhenUnreachable(bridge, connection) (any state but open for
+                                 DESKTOP_RELOGIN_AFTER_MS; reset when the socket opens, which also resets tried.unreachable and drops
+                                 the unreachable record, so the next outage relogins automatically again)
 lib/tabs/history.ts              syncTabHistory(store, window) → teardown: initial replaceState; pushState {tabId, path} for a
                                  non-replace `lastNavigation` of the active tab whose path changed; replaceState for every other change
                                  of the active tab or its path; popstate → applyHistory(tabId, path) when the tab exists, else
@@ -833,8 +855,15 @@ views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRe
 components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End; Enter/Space activate, Delete closes); per tab: title,
                                  attention dot ("Needs attention"), × ("Close <title>"); middle-click closes; "+" (New tab) opens Home
                                  without dedupe; overflow-x scroll with the active tab scrolled into view; flex-1 spacer
-                                 `[data-pg-tabstrip-spacer]` and a `windowControls` slot (desktop, §12.5); document.title follows the
-                                 active tab (`<title> · promptgraph`, `promptgraph` for Home)
+                                 `[data-pg-tabstrip-spacer]`; document.title follows the active tab (`<title> · promptgraph`,
+                                 `promptgraph` for Home), and in the desktop window `bridge.setTitle` too. Prop `bridge` (default
+                                 getDesktopBridge()). With isDesktop && customTitleBar only: `data-tauri-drag-region` on the strip
+                                 element `[data-pg-tabstrip]` and the spacer (never the tablist or tabs; no dblclick handler), window
+                                 controls (Minimize, Maximize/Restore re-queried with isMaximized on window `resize`, Close window) and
+                                 fixed edge handles `[data-pg-resize-edge=<ResizeDirection>]` (mousedown → startResizeDragging; hidden
+                                 while maximised); window calls swallow rejections. WindowTitleBar({bridge?}): the bare title bar
+                                 `[data-pg-titlebar]` (drag region, controls, edges) for the signed-out screen; null unless
+                                 isDesktop && customTitleBar
 components/tabs/TabViews.tsx     one `[data-tab-view=<id>]` per mounted tab (planMounted; starts with the active one only), inactive
                                  ones `hidden` + `inert`; each provides LocationContext over its tab (navigate → tabs.navigate,
                                  openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving
@@ -842,7 +871,9 @@ components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, rep
 components/tabs/use-tab-title.ts useTabTitle(tab) (daemon summary name or cache info name, cache graphs, persisted title),
                                  useTabAttention(tab) (repo summary waiting.approval + waiting.input > 0), useLoadTabRepos(tabs)
                                  (repo cache load() for every repository with a tab, removed ones skipped)
-components/common/SessionBanners Reconnecting / Unreachable / version banners, SignedOut full screen
+components/common/SessionBanners Reconnecting / Unreachable / version banners, SignedOut full screen. Prop `bridge`: in the desktop
+                                 window SessionBanners runs useAutoReloginWhenUnreachable and the Unreachable banner has Retry
+                                 (relogin); SignedOut calls relogin(current path) once by itself, then shows "Sign in again"
 components/header/               graph selector (links), Run/Cancel, pending approvals (links), run selector (links), run cost total
 components/palette/              draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
 components/canvas/               React Flow canvas: snap grid, minimap, edge creation (error/true/false ports in phase 2), read-only in run mode
@@ -851,7 +882,8 @@ components/inspector/            node config forms; run mode: NodeRun details (o
 components/terminal/             drawer with tabs; xterm + fit + web-links; live or replayed; "Reopen session". TerminalView: the
                                  Terminal is created at mount, opened (and fitted) on its first visible render only; attaches without a
                                  size while hidden; never fits, focuses, sends pty:input or pty:resize while hidden; when shown it
-                                 refits and resizes the PTY if its known size (pty:attached, own resizes) differs
+                                 refits and resizes the PTY if its known size (pty:attached, own resizes) differs. WebLinksAddon gets
+                                 terminalLinkHandler(getDesktopBridge()): its default window.open() is denied by the desktop shell
 components/history/              run history list (status, duration, cost; rows and Report are links), cleanup action
 components/approval/             approval dialog: message, diff2html diff, predecessor outputs, PR title/body edit, approve/reject
 components/settings/             app settings (notifications toggle) + graph settings form
@@ -1080,32 +1112,53 @@ exit 1; `FAKE_GH_EXISTS=1` → gh's "already exists" error with the URL; `FAKE_G
 
 ## 12. Daemon, multi-repo UI and desktop (M7–M9, DESIGN §4, §11–§14, §19, §20)
 
-Target contracts. Each workstream folds the part it implements into the sections above and deletes it here.
+Implemented. Each workstream folded the part it implemented into the sections above.
 
 §12.1 (shared), §12.2 (server composition), §12.3 (HTTP and WS) and §12.4 (CLI and MCP) are implemented and
-folded into §2, §4, §8 and §11; the first part of §12.5 (web) into §9.
-
-### 12.5 Web
-
-The router, per-view stores, repo cache, daemon/toast stores, API factories, the vite proxy, the tabs store, tab views
-and strip, history sync and keymap are implemented and folded into §9. Pending:
-
-- `lib/desktop.ts`: `DesktopBridge {isDesktop, customTitleBar, minimize, toggleMaximize, isMaximized, close, startResizeDragging(dir), setTitle, openExternal(url), relogin(next)}`, `getDesktopBridge()` (inert outside Tauri); `installExternalLinkHandler(bridge)` (desktop only). It replaces the `isDesktopWindow()` stub; the tab strip's spacer becomes the drag region and `windowControls` the window buttons.
+folded into §2, §4, §8 and §11; §12.5 (web, including the desktop bridge) into §9. §12.6 stays here as the map of
+`packages/desktop`.
 
 ### 12.6 Desktop (`packages/desktop`)
 
 ```
-package.json           @promptgraph/desktop: scripts typecheck, test, tauri:dev (cargo tauri dev), tauri:build; no build script
-splash/index.html      static "Starting promptgraph…", window.__pgSplashError(message) + Retry (location.reload()) (frontendDist)
-src-tauri/Cargo.toml   tauri 2 (pinned minor with WebviewWindowBuilder::on_new_window), tauri-plugin-opener 2, serde, serde_json
+package.json           @promptgraph/desktop: scripts typecheck, test, tauri:dev (cargo tauri dev), tauri:build (cargo tauri
+                       build --bundles deb,appimage); no build script; devDependencies: @promptgraph/shared (workspace) only
+splash/index.html      static "Starting promptgraph…" (inline CSS, no external resources); error block + Retry
+splash/splash.js       window.__pgSplashError(message) shows the error block; Retry → location.reload(). A file (served from
+                       'self') rather than an inline script, so the splash CSP needs no hashes
+src-tauri/Cargo.toml   tauri "~2.12" (pinned minor; on_new_window ≥ 2.8, add_capability/CapabilityBuilder via the default
+                       dynamic-acl feature), tauri-plugin-opener 2, serde (derive), serde_json, libc 0.2 (setsid, kill);
+                       build-dep tauri-build 2;
+                       bin promptgraph-desktop
 src-tauri/build.rs     tauri_build::try_build(Attributes::new().app_manifest(AppManifest::new().commands(&["relogin"])))
-src-tauri/tauri.conf.json  identifier dev.promptgraph.desktop, build.frontendDist ../splash, app.withGlobalTauri true,
-                       app.windows [] (built in code), bundle targets deb/appimage
-src-tauri/capabilities/    local-only defaults (no remote URLs); the remote capability is added at run time
-src-tauri/src/main.rs  window built in code; on_page_load(splash) → CLI via `$SHELL -ilc 'exec "$0" "$@"'` with stripped env,
-                       last JSON stdout line → OpenUrlResult (v == 1); Mutex<allowed origin>; add_capability for
-                       http://127.0.0.1:<port> and …/*; on_navigation guard; on_new_window deny (+ https → opener);
-                       initialization script window.__PG_DESKTOP__ = {customTitleBar}; PG_DESKTOP_DECORATIONS;
-                       #[cfg(debug_assertions)] PG_DESKTOP_ORIGIN; #[tauri::command] relogin(next)
-test/contract.test.ts  reads the files above and checks DESIGN §20.5 against packages/shared/src/desktop.ts
+src-tauri/tauri.conf.json  productName promptgraph, identifier dev.promptgraph.desktop, build.frontendDist ../splash (no devUrl:
+                       `tauri dev` serves it from its built-in dev server), app.withGlobalTauri true, app.windows [] (built in
+                       code), app.security.csp for the splash (default-src 'none'; script-src 'self'; …), bundle deb/appimage
+src-tauri/icons/       32x32, 128x128, 128x128@2x, icon.png (RGBA, from site/public/favicon.svg)
+src-tauri/capabilities/    absent: no static capability at all; the remote one is added at run time
+src-tauri/src/main.rs  window `main` built in code (title promptgraph, 1280×800, min 900×600, decorations(true) for the
+                       splash; customTitleBar from PG_DESKTOP_DECORATIONS, default native when WSL_DISTRO_NAME is set, kept in
+                       Shared.custom; initialization script window.__PG_DESKTOP__ = Object.freeze({customTitleBar}));
+                       on_page_load(Finished, splash URL = scheme tauri or the dev server's origin) → thread: run_cli via
+                       login_shell(): `$SHELL -ilc 'exec "$0" "$@"' <PROMPTGRAPH_BIN | promptgraph> open --print-url --json
+                       [--next p] [repo]` for sh/bash/zsh/dash/ash/ksh/mksh, `fish -ilc 'exec $argv' …` for fish, `/bin/sh -lc
+                       'exec "$0" "$@"' …` for any other shell (stdin null, stripped env, setsid in pre_exec, output appended to
+                       buffers as it arrives and used 500 ms after exit even without EOF, then SIGKILL to the whole session on
+                       every path, so jobs of start-up files close the pipes; 30 s timeout → timeout message; exit 127 (only:
+                       stderr text is never matched, it carries start-up files' messages) → not-found message; exit 2, no JSON object line or v != 1 → "promptgraph ≥
+                       <crate version> is required"; other non-zero → stderr tail; last stdout line that parses as a JSON
+                       object) → go(): the URL's origin must be http://127.0.0.1:<port> (#[cfg(debug_assertions)]
+                       dev_rewrite: PG_DESKTOP_ORIGIN replaces it), add_capability(CapabilityBuilder "remote-<port>", window
+                       main, local(false), remote origin and origin/*, DESKTOP_PERMISSIONS with opener:allow-open-url scoped
+                       to {url: "https://*"}) once per origin, then `origin.lock().replace(origin)`, showing_splash = false,
+                       set_decorations(!custom), navigate (fixed error text; on failure the previous origin and
+                       showing_splash are restored). Errors →
+                       set_decorations(true), eval window.__pgSplashError(<json>).
+                       on_navigation: splash only while showing_splash; the allowed origin; https → opener; else cancel.
+                       on_new_window: https → opener; always Deny. #[tauri::command] async relogin(next) → validates next
+                       (leading '/', no '//', no '\', no control chars) → run_cli(None, --next) → go(); Result<(), String>,
+                       never a URL. One CLI call at a time (Mutex<()>; the splash skips while one runs)
+test/contract.test.ts  lexes main.rs/build.rs (comments stripped, string literals collected) and reads the JSON/TOML/HTML/JS as
+                       text; checks DESIGN §20.5 against packages/shared/src/desktop.ts
+README.md              prerequisites, the pinned Tauri version, commands, environment and the manual checklist (D1, D2, D4, D5…)
 ```

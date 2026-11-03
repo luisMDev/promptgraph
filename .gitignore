@@ -10,3 +10,6 @@ coverage/
 !.promptgraph/graphs/
 scripts/spike/repo/
 scripts/spike/cfg/
+# Tauri / Rust build output
+target/
+packages/desktop/src-tauri/gen/

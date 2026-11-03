@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>promptgraph</title>
+    <!--
+      The desktop shell's splash (DESIGN §20.1): bundled, no network, no IPC. The shell runs the CLI every
+      time this page finishes loading, so Retry is a reload. Errors are shown by the shell evaluating
+      window.__pgSplashError(message) (defined in splash.js).
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #fafafa;
+        color: #0a0a0a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          background: #0a0a0a;
+          color: #fafafa;
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        max-width: 520px;
+        padding: 24px;
+        text-align: center;
+      }
+      .status {
+        font-size: 14px;
+        opacity: 0.75;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        opacity: 0.5;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      #error {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+      #error p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        user-select: text;
+      }
+      #error .title {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      button {
+        font: inherit;
+        font-size: 13px;
+        padding: 6px 14px;
+        border-radius: 6px;
+        border: 1px solid currentColor;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      body.failed #starting {
+        display: none;
+      }
+      body.failed #error {
+        display: flex;
+      }
+    </style>
+    <script src="splash.js"></script>
+  </head>
+  <body>
+    <main>
+      <div id="starting">
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="status" role="status">Starting promptgraph…</p>
+      </div>
+      <div id="error" role="alert">
+        <p class="title">promptgraph could not start</p>
+        <p id="message"></p>
+        <button id="retry" type="button">Retry</button>
+      </div>
+    </main>
+  </body>
+</html>

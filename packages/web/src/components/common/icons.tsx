@@ -204,6 +204,23 @@ export const Icons = {
       <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />
     </Svg>
   ),
+  /** Window controls of the desktop title bar (DESIGN §20.2). */
+  minimize: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M5 12h14" />
+    </Svg>
+  ),
+  maximize: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="5" y="5" width="14" height="14" rx="1" />
+    </Svg>
+  ),
+  restore: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="4" y="8" width="12" height="12" rx="1" />
+      <path d="M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3" />
+    </Svg>
+  ),
 } as const;
 
 export function NodeTypeIcon({ type, ...props }: { type: NodeType } & IconProps) {
