@@ -50,7 +50,7 @@ Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler r
 | `hooks.ts` | `HookEvent` (`session-start`/`activity`/`notification`/`stop`), `CLAUDE_HOOK_FOR_EVENT`, payload schemas, `HookPayloadMap`, `describeToolActivity` |
 | `headless.ts` | `HeadlessResultSchema` (real `claude -p --output-format json` envelope), `GENERATED_MESSAGE_JSON_SCHEMA`, `JUDGE_JSON_SCHEMA` |
 | `condition.ts` | `regexError(pattern, flags)` → message or null (validator + ConditionRunner) |
-| `api.ts` | REST request/response schemas (§7 below), `AppSettingsSchema`, `API` path builders, `TOKEN_COOKIE`; daemon-wide `DaemonInfoResponseSchema` (GET `/api/daemon`: version, pid, port, startedAt, phase, supportedNodeTypes, warnings, notificationsAvailable) and `LoginCodeResponseSchema` (`{code (≥ 43 chars, 32 bytes base64url), expiresAt}`) |
+| `api.ts` | REST request/response schemas (§8 below), `AppSettingsSchema`, `TOKEN_COOKIE` (temporary `?t=` page flow); `RepoInfoResponseSchema` (GET `/api/repos/:repoId`: `{id, path, name, currentBranch, branches}`); daemon-wide `DaemonInfoResponseSchema` (GET `/api/daemon`: version, pid, port, startedAt, phase, supportedNodeTypes, warnings, notificationsAvailable) and `LoginCodeResponseSchema` (`{code (≥ 43 chars, 32 bytes base64url), expiresAt}`); `API` = `{hello(nonce), daemon, repos, removeRepo(repoId, force?), settings, loginCodes, rotateToken, sessions, session(idOrAll), login, ws, hook(nodeRunId, event), repo(repoId)}` where `API.repo(repoId)` (type `RepoApiPaths`) = `{info, graphs, graph(id), validate(id), startRun(id), runs, run(id), cancelRun, cleanupRun, resumeRun, runReport, laneDiff(runId, laneId), pending, nodeRunAction(id, action), approval(id), diff(id, scope), reopen(id), pty(id), commands, claudeSetup, claudeCheck}` under `/api/repos/<repoId>` (every id `encodeURIComponent`'d) |
 | `ws.ts` | `ServerMessageSchema`, `ClientMessageSchema` (discriminated unions), `encodeBase64`/`decodeBase64`, `WS_CLOSE_SIGNED_OUT` (4401). Server: `repo:status {repo: RepoSummary}`, `repo:removed {repoId}`, `run:update {repoId, run}`, `graphs:changed {repoId, graphId}`, … Client: `repo:subscribe {repoId}`, `repo:unsubscribe {repoId}`, … (DESIGN §12.2) |
 | `server-info.ts` | `ServerInfoSchema` → `ServerInfo` (pre-M7 per-repo record; from M7 only read to detect legacy servers, DESIGN §4.4) |
 | `daemon-info.ts` | `DaemonInfoSchema` (`daemon.json`: `{version: 2, pid, pidStart, port, serverVersion, startedAt}`, no secret), `DaemonHelloResponseSchema` (`{pid, serverVersion, proof}`), `HELLO_PROOF_PREFIX` (`"hello:"`; proof = base64url(HMAC-SHA256(token, prefix + nonce))), `EXIT_DAEMON_LOCKED` (3) |
@@ -104,7 +104,8 @@ Semantics fixed here (do not re-implement elsewhere):
   `CLAUDE_CODE_REMOTE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_TEE_SDK_STDOUT`,
   `CLAUDE_CODE_SYNC_SESSION_REFS`, `*HERMETIC*` and `PG_HOME` (DESIGN §7.6: children are not told where the
   token and the DB live; a child that *is* promptgraph, e.g. the server `promptgraph mcp` starts, gets `PG_HOME`
-  back through `extra`); sets `TERM=xterm-256color`.
+  back through `extra`), and the hook variables `PG_PORT`, `PG_HOOK_HEADER_FILE`, `PG_NODE_RUN_ID` (`PG_HOOK_ENV_VARS`:
+  inherited they would be another node run's; a Claude runner passes its own through `extra`); sets `TERM=xterm-256color`.
 - Claude config file: `claudeConfigFile(env)` = `$CLAUDE_CONFIG_DIR/.claude.json` else `~/.claude.json`.
 - Other env: `PG_WEB_DIST` (static dir override), `PG_PORT` (vite proxy target in dev).
 - Text helpers (`util/text.ts`): `stripAnsi`, `tailLines`, `truncate`.
@@ -115,7 +116,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | Path | Exports |
 |---|---|
 | `config/paths.ts` | `pgHome`, `getPaths` → `PgPaths`, `runDir`, `ptyLogPath`, `hooksSettingsPath`, `worktreePath`, `graphsDir`, `claudeConfigFile`, `PG_HOOK_SOURCE`, `webDistDir` |
-| `config/child-env.ts` | `claudeBin`, `childEnv` (strips `PG_HOME`, §3), `PgHookEnv` |
+| `config/child-env.ts` | `claudeBin`, `childEnv` (strips `PG_HOME`, `PG_HOOK_ENV_VARS` and the Claude nesting variables, §3), `isClaudeNestingVar(name)`, `PgHookEnv`, `PG_HOOK_ENV_VARS` (`PG_PORT`, `PG_HOOK_HEADER_FILE`, `PG_NODE_RUN_ID`: one node run's, re-added by a Claude runner through `extra`) |
 | `config/token.ts` | `tokenPath(paths)`, `loadOrCreateToken(paths)` (32 bytes base64url; exclusive atomic create: temp file 0600 hard-linked to `token`, EEXIST → the existing value wins; chmod 0600 on every call; an empty file is replaced), `writeToken(paths, token)` (temp + rename, 0600), `helloProof(token, nonce)` |
 | `config/daemon-info.ts` | `daemonInfoPath`, `writeDaemonInfo` (atomic, 0600), `removeDaemonInfo(paths, pid?)` (only its own pid's record, or an unparsable one), `readDaemonInfo` (null when missing/invalid/dead pid/`pidStart` mismatch), `daemonLogPath`, `rotateDaemonLog(paths, maxBytes = DAEMON_LOG_MAX_BYTES /* 5 MiB */)` (→ `daemon.log.1`), `portFilePath`, `readStickyPort`/`writeStickyPort`, `isLegacyServerLive(info)` (pid alive, and not a reused pid: stale only when the process started more than 60 s after `startedAt` (btime + start ticks) and its `/proc/<pid>/cmdline` does not mention promptgraph; unreadable /proc → live), `findLegacyServers(paths)` (`servers/*.json` with isLegacyServerLive), `removeStaleLegacy(paths)` (deletes the other parsable `servers/*.json` only; returns the files) |
 | `config/repo-id.ts` | `repoSlug(name)`, `repoIdFor(realPath)` (DESIGN §4.2) |
@@ -124,7 +125,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `events/bus.ts` | `EventBus`, `BusEvents`, `AttentionKind` (§5) |
 | `util/ids.ts`, `util/text.ts` | see §3 (`util/text.ts` also exports `errorMessage(err)`) |
 | `store/schema.ts` | `MIGRATIONS` (user_version based; #2 adds `runs.loops`; #3 the `repos`, `sessions` and `meta` tables, DESIGN §11.2) |
-| `store/store.ts` | `openDatabase`, `Store` DAO, `NewRun`, `RunPatch`, `NewLane`, `LanePatch`, `NewNodeRun`, `NodeRunPatch`; repositories `RepoRow`, `NewRepo`, `listRepos` (registration order), `getRepo(id)`, `getRepoByPath`, `insertRepo`, `touchRepo(id, at?)`, `deleteRepo`; `RepoStatusCounts`, `repoStatusCounts()` (one grouped query → `Map<repo_path, {running, paused, approval, input /* idle included */, lastRunAt}>`), `distinctRunRepoPaths()`, `rewriteRepoPath(from, to)` (runs + graph_meta in one transaction; a graph_meta row already under `to` keeps the newer hash; returns runs moved); `getMeta`/`setMeta`; sessions `SessionRow`, `insertSession`, `getSession`, `touchSession(idHash, lastSeenAt, expiresAt)`, `listSessions` (newest first), `deleteSessions(hexPrefix \| "all")` (→ deleted hashes), `deleteExpiredSessions(now?)`; `transaction(fn)` |
+| `store/store.ts` | `openDatabase`, `Store` DAO, `NewRun`, `RunPatch`, `NewLane`, `LanePatch`, `NewNodeRun`, `NodeRunPatch`; repositories `RepoRow`, `NewRepo`, `listRepos` (registration order), `getRepo(id)`, `getRepoByPath`, `insertRepo`, `touchRepo(id, at?)`, `deleteRepo`; `RepoStatusCounts`, `repoStatusCounts()` (one grouped query → `Map<repo_path, {running, paused, approval, input /* idle included */, lastRunAt}>`), `distinctRunRepoPaths()`, `distinctGraphMetaRepoPaths()`, `rewriteRepoPath(from, to)` (runs + graph_meta in one transaction; a graph_meta row already under `to` keeps the newer hash; returns runs moved); `getMeta`/`setMeta`; sessions `SessionRow`, `insertSession`, `getSession`, `touchSession(idHash, lastSeenAt, expiresAt)`, `listSessions` (newest first), `deleteSessions(hexPrefix \| "all")` (→ deleted hashes), `deleteExpiredSessions(now?)`; `transaction(fn)` |
 | `graphs/graph-store.ts` | `GraphStore(repoPath, bus, repoId) {ensureDir, list, get, save, delete, watch}` (`graphs:changed` carries `repoId`), `GraphWatch {stop(), error}`, `GraphWatchOptions {onError?}`, `hashContent`, `serializeGraph`, `GraphNotFoundError`, `GraphLoadError`. `watch()` never throws for a watcher failure: a synchronous ENOSPC/EMFILE at start is returned as `error`, an `error` event stops the watcher and sets `error`; both go to `onError` (default: logged) |
 | `git/exec.ts` | `git`, `gitOk`, `GitError`, `GitOptions.readOnly` → `READ_ONLY_GIT_CONFIG` (`-c core.fsmonitor=false`) for read-only calls: branch listing, `symbolic-ref`, status, lane diffs (incl. their throwaway index), `for-each-ref`, `worktree prune` (DESIGN §14) |
 | `git/repo.ts` | `resolveRepoRoot`, `currentBranch`, `listBranches`, `revParse`, `isDirty` |
@@ -132,7 +133,7 @@ Semantics fixed here (do not re-implement elsewhere):
 | `pty/ring-buffer.ts` | `RingBuffer`, `PTY_RING_BYTES` (2 MB) |
 | `pty/pty-manager.ts` | `PtyManager` (+ `listOwnedBy(owner)`, `killOwnedBy(owner)` — `killAll`'s SIGTERM then SIGKILL-straggler logic for one owner, `owned(owner): OwnedPtys`), `OwnedPtys {owner, spawn, get, list, killOwned}` (stamps `SpawnPtyOptions.owner` on every spawn: node, `setup-`, `shell-`, `reopen-`; `get`/`list` see only the owner's PTYs; viewers — attach, input, resize — stay on the PtyManager), `PtyHandle`, `SpawnPtyOptions` (`owner?`), `PtyAttachResult`, `logSizePath` |
 | `hooks/hook-router.ts` | `HookRouter {register, dispatch}`, `HookMessage` |
-| `hooks/hook-token.ts` | `hookToken(hookSecret, nodeRunId)` (the secret is random per start, memory only, never the token: DESIGN §7.1), `sessionCookieValue(token)` (pre-M7 cookie) |
+| `hooks/hook-token.ts` | `hookToken(hookSecret, nodeRunId)` (the secret is random per start, memory only, never the token: DESIGN §7.1), `sessionCookieValue(token)` (the temporary `pg_token` cookie, until login sessions) |
 | `runners/types.ts` | `Runner`, `RunnerContext`, `RunnerResult`, `NodeControls`, `NodeExecution`, `PredecessorOutput`, `RunnerRegistry` |
 | `runners/claude/args.ts` | `buildClaudeArgs`, `toCliPermissionMode`, `ClaudeLaunchSpec` |
 | `runners/claude/context.ts` | `buildInitialMessage`, `markerInstruction`, `INTERRUPTED_MESSAGE`, `CONTEXT_OUTPUT_LIMIT` |
@@ -151,37 +152,43 @@ Semantics fixed here (do not re-implement elsewhere):
 | `runners/approval-runner.ts` | `ApprovalRunner`, `ApprovalGate`, `approvalOutput`, `rejectionError` |
 | `runners/interruption.ts` | `Interruption` (stop handling shared by the approval, pr, merge, condition and commit runners) |
 | `runners/condition-runner.ts` | `ConditionRunner` (+ `evaluatedPredecessor`, `evaluateExitCode`, `evaluateRegex`, `buildJudgePrompt`, `parseJudgeVerdict`, `laneDiffStat`) |
-| `runners/registry.ts` | `createRunnerRegistry` |
+| `runners/registry.ts` | `createRunnerRegistry`, `RUNNER_NODE_TYPES` (the node types it implements: `GET /api/daemon` `supportedNodeTypes`) |
 | `workspace/lane-manager.ts` | `LaneManager`, `RepoRef {id, path, name}` (`id` = `repoIdFor(path)`), `MergeAttempt` |
 | `workspace/setup.ts` | `runWorkspaceSetup` |
 | `engine/state.ts` | `NODE_TRANSITIONS`, `canTransition`, `assertTransition`, `RUN_TRANSITIONS` |
 | `engine/activation.ts` | `ActivationTracker`, `ActivationDelta`, `LoopIteration` |
 | `engine/scheduler.ts` | `Scheduler`, `SchedulerItem` |
 | `engine/recovery.ts` | `markInterrupted(store, scope: InterruptScope, now?)`, `InterruptScope {repoPath?, runIds?}` (`repoPath` absent = every repository; only the daemon start uses that), `INTERRUPTED_RUN_ERROR`, `INTERRUPTED_NODE_ERROR` |
-| `config/instance-lock.ts` | `DaemonLock.acquire(paths, pid?) → Promise<DaemonLock \| DaemonLockHeld {heldBy: number \| null}>` (listens on the abstract socket `daemonLockName(paths)` = `\0promptgraph-<uid>-<sha256(realpath home)[:16]>`, unref'd; EADDRINUSE → `heldBy` = live pid from `locks/daemon.pid`, else null; writes `locks/daemon.pid` for messages only), `release()`, `isDaemonLock`, `daemonPidPath`; `LegacyRepoLocks(paths, pid?) {hold(repoPath), release(repoPath), releaseAll()}` (`locks/<repoKey>.pid` = `<pid>\n<repoPath>\n`, 0600; `hold` throws `stop the promptgraph server for <repo> (pid n) first` when a live other process holds it, creates the file exclusively (temp file + hard link) and takes over a stale one only by renaming it aside and re-checking the moved file (a live owner's file is linked back), so it never overwrites a lock it has not checked; `release` removes only its own file); `InstanceLock {acquire(paths, repoPath), release}` — the pre-M7 per-repository lock, still used by `cli/server.ts` until the daemon replaces it |
-| `config/repo-key.ts` | `repoKey(repoPath)`: per-repository file key (lock, server-info record, background log) |
+| `config/instance-lock.ts` | `DaemonLock.acquire(paths, pid?) → Promise<DaemonLock \| DaemonLockHeld {heldBy: number \| null}>` (listens on the abstract socket `daemonLockName(paths)` = `\0promptgraph-<uid>-<sha256(realpath home)[:16]>`, unref'd; EADDRINUSE → `heldBy` = live pid from `locks/daemon.pid`, else null; writes `locks/daemon.pid` for messages only), `release()`, `isDaemonLock`, `daemonPidPath`; `LegacyRepoLocks(paths, pid?) {hold(repoPath), release(repoPath), releaseAll()}` (`locks/<repoKey>.pid` = `<pid>\n<repoPath>\n`, 0600; `hold` throws `stop the promptgraph server for <repo> (pid n) first` when a live other process holds it, creates the file exclusively (temp file + hard link) and takes over a stale one only by renaming it aside and re-checking the moved file (a live owner's file is linked back), so it never overwrites a lock it has not checked; `release` removes only its own file). The pre-M7 lock logic itself only survives as a test helper (`test/support/legacy-lock.ts`) |
+| `config/repo-key.ts` | `repoKey(repoPath)`: per-repository file key of the pre-M7 servers (their lock, still written by `LegacyRepoLocks`, and their `servers/` record, read by `config/daemon-info.ts`) |
 | `util/process.ts` | `isProcessAlive(pid)`, `processStartTime(pid)` (`/proc/<pid>/stat` field 22, parsed after the last `)` so the command name cannot shift fields; null when gone), `isSameProcess(pid, start)`, `processStartedAtMs(pid)` (wall-clock start: `/proc/stat` btime + start ticks at USER_HZ 100; null when unreadable), `processCmdline(pid)` (`/proc/<pid>/cmdline` arguments joined with spaces, or null) |
-| `config/server-info.ts` | `serverInfoPath`, `writeServerInfo`, `removeServerInfo(paths, repoPath)` (only this process's record), `readServerInfo` (null when missing or the pid is dead), `backgroundServerLogPath`: the discovery record `<PG_HOME>/servers/<repoKey>.json` (`ServerInfo`, DESIGN §19.1) |
-| `engine/engine.ts` | `Engine`, `EngineDeps` (`ptys: OwnedPtys`, `repo: RepoRef`), `EngineError` |
+| `engine/engine.ts` | `Engine` (+ `prune()`: `lanes.prune` + snapshot pruning, run on activation; `drain()`: resolves once every node chain settled, no timeout; `recover()` = this repository's markInterrupted + prune, tests only), `EngineDeps` (`ptys: OwnedPtys`, `repo: RepoRef`), `EngineError` |
 | `notify/notifier.ts` | `Notifier`, `detectNotifyPlatform`, `sendDesktopNotification`, `attentionText` (title `promptgraph · <repo name>: <node> …`) |
 | `commands/discover.ts` | `listSlashCommands` |
-| `app/context.ts` | `AppContext` (+ `hookSecret`: random per start), `createAppContext` (composition root; repo id = `repoIdFor(repoPath)`, engine and runners over `ptys.owned(repo.id)`) |
-| `http/auth.ts` | `tokenAuth`, `localhostOnly`, `isAuthorized` |
-| `http/app.ts` | `createHttpApp` |
-| `http/routes/{graphs,runs,node-runs,misc,hooks}.ts` | `register*Routes(app, ctx)` |
-| `http/static.ts` | `registerStatic` |
-| `ws/hub.ts` | `WsHub {attach, close}` |
-| `cli/args.ts` | `parseCliArgs`, `CliOptions` (`command: "serve" \| "mcp"`), `USAGE` |
+| `daemon/daemon-env.ts` | `daemonEnv({caller, resolveShell = true, shellTimeoutMs = 10000, node?}) → Promise<Record<string,string>>` (DESIGN §4.1 item 5: allowlisted caller variables, `CLAUDE_CONFIG_DIR` included, over the login shell's environment — `$SHELL -ilc '<node> -e "…JSON.stringify(process.env)…"'`, stdin closed, process group killed on timeout, last JSON line; `PWD`/`OLDPWD`/`SHLVL`/`_` dropped; skipped with `PG_DAEMON_SHELL_ENV=0`; caller `PATH` on failure — then `stripRuntimeEnv`), `stripRuntimeEnv(env)` (`DESKTOP_STRIPPED_ENV*` + Claude nesting variables + `PG_HOOK_ENV_VARS`, which the `PG_*` allowlist would keep), `loginShellEnv`, `lastJsonObjectLine` |
+| `daemon/context.ts` | `DaemonContext {paths, env, store, bus, settings, ptys, hooks, pgHookPath, notifier, port, startedAt, hookSecret, getToken(), setToken(t), prereqWarnings(), legacyLocks, registry}`, `createDaemonContext({token, warnings?, env?})` (home 0700, `state.db` 0600, opens and migrates the DB; touches no repository; `prereqWarnings()` = the given warnings, else `checkPrereqs(env)` errors + warnings, computed once on first use), `resolvePtyLogPath` |
+| `daemon/repo-context.ts` | `RepoContext {repo: RepoRef, graphs, lanes, claude, runners, engine, ptys: OwnedPtys, watchError, activate(), dispose()}`, `createRepoContext(daemon, row)`: no side effects (its own `ClaudeRunner` over `daemon.ptys.owned(repo.id)`, endpoint `{port getter, hookSecret}`; the PTY input listener); `activate` (idempotent) = `graphs.ensureDir()` + `graphs.watch({onError})` once (a watcher failure sets `watchError` and emits `repo:changed`, it never fails the activation) + `engine.prune()` once; `dispose` (memoised) = off user input + stop watcher + `engine.shutdown()` + `engine.drain()` |
+| `daemon/registry.ts` | `RepoRegistry(deps {store, bus, env, legacyLocks, createContext, now?})`: `list()`, `summary(id)` (`error` = load/activation failure, else the watcher's), `row(id)`, `add(path)` (503 `daemon_stopping` once `shutdownAll` started; `~`/`~/` → HOME; not absolute → `HttpError` 422 `path_not_absolute`; `resolveRepoRoot` + realpath, failure → 422 `not_a_git_repo`; waits for a pending removal; inserts or touches; `legacyLocks.hold` (live pre-M7 holder → 409 `legacy_server_running`, a new row is deleted again); emits `repo:changed`; activates, an activation failure stays in the returned summary), `load(id)` (waits for a removal, re-checked after each wait; 503 `daemon_stopping`; 404 `unknown_repo`; 409 `repo_unavailable` when the directory is gone; memoised, cleared on failure), `activate(id)` (memoised: `legacyLocks.hold` + `ctx.activate()`; failure → summary `error`, memo cleared, thrown as 500 `activation_failed`; a context whose removal started while it loaded is never activated: waits for the removal and starts over, 404 once gone), `remove(id, {force})` (404; 409 `repo_active` with a `running` run unless `force`; `disposing` promise: dispose → delete row → release legacy lock → `repo:removed`), `backfill()` (DESIGN §4.4; git checks first, then one `store.transaction` with `rewriteRepoPath`, inserts and `meta.repos_backfilled = 1`; no-op once set), `shutdownAll()` (sets `closing`: later `load`/`activate`/`add` → 503 `daemon_stopping`; every context disposed concurrently); `REPOS_BACKFILLED_KEY` |
+| `daemon/start.ts` | `startDaemon({port?, env?, warnings?, token?}) → RunningDaemon {ctx, port, origin, close()}` in the order of DESIGN §4.1 item 1 (lock → `DaemonLockedError {heldBy}`; live legacy record → `LegacyServerRunningError`, stale ones deleted; `token` given = in memory only, tests; listen: explicit port → `PortInUseError` (`code` EADDRINUSE, `Port <p> is already in use`), else `portCandidates(sticky, env)` = sticky → `PG_PORT_DEFAULT`/4777 → 0; `markInterrupted(store, {})`; `registry.backfill()`; legacy lock per registered row (failure logged); notifier; `WsHub`; `port` file; `daemon.json` with `pidStart`). `close()` (idempotent): record removed → `registry.shutdownAll()` → `ptys.killAll()` → legacy locks released → notifier, hub, HTTP, DB closed → lock released. `installProcessHandlers(daemon)` (CLI only: `unhandledRejection` logged; `uncaughtException` → `close()` → exit 1), `HOST`, `DEFAULT_PORT` |
+| `daemon/client.ts` | `findDaemon(paths, {version?, fetchImpl?, timeoutMs?}) → DaemonConnection {info, token, origin, client} \| null` (record + token file → `GET /api/daemon/hello?nonce=` without credentials → proof (timing-safe) and pid checked before any Bearer request; `version` given and different → throws `DaemonVersionMismatch` (`promptgraph <old> is running (this is <new>); run promptgraph stop, then retry`)), `ensureDaemon({paths, serverCommand: argv, port?, env?, version?, timeoutMs = 20000, pollMs?}) → {…DaemonConnection, started, logFile}` (spawns `[...serverCommand, "daemon", ...(port given ? ["--port", p] : [])]` detached, cwd PG_HOME, env `daemonEnv({caller: {...env, PG_HOME}})`, stdout/stderr appended to `logs/daemon.log` after `rotateDaemonLog`; polls; child exit 3 → keeps polling (`started: false` when it is found), other exit or timeout → error with the log's last 20 lines), `registerRepo(client, path) → RepoSummary` |
+| `http/auth.ts` | `tokenAuth({getToken, hookSecret})` (token read per request; `GET /api/daemon/hello` public), `localhostOnly`, `isAuthorized(token, req)` |
+| `http/app.ts` | `createHttpApp(daemon) → Hono<AppEnv>` |
+| `http/repo-scope.ts` | `AppEnv` (`Variables: {repo: RepoContext}`), `App`, `REPO_PREFIX` (`/api/repos/:repoId`), `registerRepoScope(app, daemon)` (`${REPO_PREFIX}/*` with a sub-path only — the bare prefix, which Hono's `/*` also matches, is skipped so `DELETE`/`GET /api/repos/:repoId` never load or activate through it: GET/HEAD → `registry.load`, anything else → `registry.activate`; `c.set("repo")`), `repoOf(c)` |
+| `http/routes/daemon.ts` | `registerDaemonRoutes`: `GET /api/daemon/hello?nonce=` (16–128 base64url chars, else 400), `GET /api/daemon` |
+| `http/routes/repos.ts` | `registerRepoRoutes`: `GET/POST /api/repos`, `DELETE /api/repos/:repoId?force=1`, `GET /api/repos/:repoId` (load only) |
+| `http/routes/{graphs,runs,node-runs,hooks}.ts`, `misc.ts` | `register*Routes(app, daemon?)`; repository routes take their context from `repoOf(c)`; `misc.ts`: `registerSettingsRoutes` (global) and `registerRepoMiscRoutes` (commands, claude-setup, claude-setup/check) |
+| `http/static.ts` | `registerStatic` (reserved: `/api`, `/hooks`, `/ws`, `/login`) |
+| `ws/hub.ts` | `WsHub(daemon) {attach, close}`, `REPO_STATUS_DEBOUNCE_MS` (250) |
+| `cli/args.ts` | `parseCliArgs`, `CliOptions {command: "open-repo" \| "daemon" \| "mcp", repoDir, port: number \| null /* only when given */, open, foreground, help, version}` (subcommands only at argv[0]; `--no-open`/`--foreground` only for open-repo), `USAGE` |
 | `cli/prereqs.ts` | `checkPrereqs` (git, `claudeBin`, `ghBin`, curl `--version`) |
-| `cli/server.ts` | `startServer` → `RunningServer {ctx, url, port, token, close}` |
-| `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it); `command: "mcp"` lazily imports `mcp/server.ts` |
+| `cli/index.ts` | `main(argv)` bin entry (auto-runs; tests must not import it): `mcp` lazily imports `mcp/server.ts`; `daemon` = foreground `startDaemon` (prints `Listening: http://127.0.0.1:<port> (pid <pid>, promptgraph <version>)`; `DaemonLockedError` → exit 3); `[repo-dir]` (bare or `--foreground`: the detached start is not implemented yet) = prereqs → `resolveRepoRoot` → `startDaemon` (lock held → exit 1) → `Listening:` → `registry.add` → `Open: http://127.0.0.1:<port>/r/<repoId>` → browser on that URL + `?t=<token>` unless `--no-open`; SIGINT/SIGTERM/SIGHUP stop it |
 | `mcp/client.ts` | `PromptgraphClient {baseUrl, get, post, put, delete}` (Bearer token), `ApiRequestError` |
-| `mcp/connection.ts` | `McpEnvironment`, `Connection {info, client}`, `resolveRepo` (cached per directory), `findServer` (re-reads the record), `connect` (throws when no server runs), `startBackgroundServer` (detached `promptgraph <repo> --no-open --port 0`) |
+| `mcp/connection.ts` | `McpEnvironment {cwd, env, paths, serverCommand: argv, fetchImpl?, version?}`, `Connection {daemon, client, repoPath, repoId, api: RepoApiPaths}`, `resolveRepo` (git top level realpath, cached per directory), `findConnection` (findDaemon with the version), `connect` (no daemon → `NOT_RUNNING` = "promptgraph is not running; call start_server"; registers on first use, repoId cached per daemon pid + pidStart + path; its `client` re-registers once and retries when a repository call answers 404 `unknown_repo`, i.e. the repository was removed while the daemon kept running), `startDaemonFor(mcpEnv, repo, {port?})` (ensureDaemon + register) |
 | `mcp/draft.ts` | `normalizeGraphDraft(input, {layout})` (edge ids, GraphSchema, layered auto layout over `buildTopology`/`topologicalOrder`), `GraphDraftError`, `LAYOUT_DX` |
 | `mcp/format.ts` | compact views for tools: `compactRunDetail` (`attention` = nodeRunIds), `compactRunSummary`, `compactNodeRun`, `compactReport`, `compactDiff`, `latestAttempts`, `needsAttention` |
 | `mcp/reference.ts` | `GRAPH_REFERENCE` (markdown), `graphJsonSchema()` |
-| `mcp/setup.ts` | `buildClaudeSetup` (GET `/api/claude-setup`), `checkClaudeSetup` (POST `/api/claude-setup/check`), `bundledMarketplaceRoot`, `shellQuote` |
-| `mcp/tools.ts` | `registerTools(server, {mcpEnv, openUrl, pollMs?})` (tool list in DESIGN §19.3) |
+| `mcp/setup.ts` | `buildClaudeSetup` (GET `/api/repos/:repoId/claude-setup`), `checkClaudeSetup({env?, cwd})` (POST `/api/repos/:repoId/claude-setup/check`: `claude mcp get` with `cwd` = the repository), `bundledMarketplaceRoot`, `shellQuote` |
+| `mcp/tools.ts` | `registerTools(server, {mcpEnv, openUrl, pollMs?})` (tool list in DESIGN §19.3; repository calls through `Connection.api`; `server_status` → `{running, pid?, version?, port?, url?, repoPath, registered, repoId?, status?: RepoSummary, versionMismatch?}` without registering; `start_server` → `{started, repoPath, repoId, url, pid, port, logFile?}`; `open_ui` opens `<origin>/r/<repoId>?t=<token>` (temporary) and returns only `{opened, url: <origin>/r/<repoId>}`) |
 | `mcp/server.ts` | `createMcpServer(deps)`, `runMcpStdio()` |
 
 
@@ -204,8 +211,9 @@ interface BusEvents {
 bus.emit(name, payload); const off = bus.on(name, listener);
 ```
 
-Consumers: `WsHub` forwards `run:update`, `graphs:changed`, `node:update`, `lane:update` and `pty:*` (§8;
-`repo:*` and `session:revoked` are consumed by the daemon hub, §12.3). `Notifier` consumes `attention` only.
+Consumers: `WsHub` forwards `run:update`, `graphs:changed` (to repository subscribers), `node:update`,
+`lane:update`, `pty:*`, `repo:changed` (debounced into `repo:status`) and `repo:removed` (§8; `session:revoked`
+is consumed once sessions land, §12.3). `Notifier` consumes `attention` only.
 The engine emits `attention` exactly once per transition **into** one of the three statuses.
 
 ## 6. Engine (`engine/engine.ts`) — lifecycle
@@ -254,12 +262,14 @@ Before `pr` and `merge` nodes the engine checkpoints dirty lanes (§18 Q1; merge
 **Usage**: Claude runners put `output.usage` (partial output allowed while running). The engine emits
 `run:update` whenever a node run's output changes so `RunSummary.usage` (sum) stays live.
 
-**Instances** (pre-M7; from M7 one daemon owns the DB and runs one engine per repository, §12.2): `~/.promptgraph/state.db` is shared by every promptgraph process. Each server only touches
-runs of its own repository: `requireRun`/`requireNodeRun` answer `not_found` for other repositories' runs,
-`/api/pending` and `listRunsByStatus`/`listNodeRunsByStatus` take `{repoPath}`, and `startServer` holds an
-`InstanceLock` (a second server for the same repository is refused) and binds its port before `recover()`.
+**Repositories**: one daemon owns the DB and runs one engine per registered repository (§4 `daemon/*`). Each
+engine only touches runs of its own repository: `requireRun`/`requireNodeRun` answer `not_found` for other
+repositories' runs, `/pending` and `listRunsByStatus`/`listNodeRunsByStatus` take `{repoPath}`, and shutdown
+kills only the repository's own PTYs (`OwnedPtys`) and interrupts only its live runs.
 
-**Recovery** (§8.6): `recover()` calls `markInterrupted(store, {repoPath})` and `lanes.prune()`. Interrupted runs are
+**Recovery** (§8.6): the daemon start calls `markInterrupted(store, {})` once (every repository: it is the single
+writer); activating a repository calls `engine.prune()` (`lanes.prune()` + snapshot pruning). `recover()`
+(this repository's `markInterrupted` + `prune()`) remains for standalone engine tests. Interrupted runs are
 `paused` with no in-memory state; the first retry/skip on such a run rebuilds it with
 `ActivationTracker.restore` from the stored node runs and re-enqueues `pending` nodes whose inputs are resolved. Retrying an interrupted
 Claude node resumes its session (`--resume <sessionId>` + `INTERRUPTED_MESSAGE`); when the interrupted attempt's
@@ -612,50 +622,69 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
 
 ## 8. HTTP & WebSocket
 
-> Pre-M7 auth (per-start token, `?t=`, `pg_token` HMAC cookie) is described below as built; M7 replaces it with §12.3 (hello, sessions, login codes, Fetch Metadata). Hook tokens already derive from the per-start hook secret.
+> Auth is still the per-start Bearer token plus the temporary `?t=` page flow and the `pg_token` HMAC cookie,
+> now with the persistent token of `<PG_HOME>/token` read per request; §12.3 (sessions, login codes, Fetch
+> Metadata) replaces the page flow. Hook tokens derive from the per-start hook secret.
 
-- Server binds `127.0.0.1:<port>`. Middleware order: `localhostOnly` (Host/Origin must be `127.0.0.1:<port>`
-  or `localhost:<port>`, else 403) → `tokenAuth` (Bearer or `pg_token` cookie; `GET /?t=<token>` sets the
-  cookie and redirects to `/`) → routes → static SPA.
+- The daemon binds `127.0.0.1:<port>`. Middleware order: `localhostOnly(() => daemon.port)` (Host/Origin must be
+  `127.0.0.1:<port>` or `localhost:<port>`, else 403) → `tokenAuth({getToken, hookSecret})` (Bearer or `pg_token`
+  cookie; `GET <page>?t=<token>` sets the cookie and redirects without `t`; `GET /api/daemon/hello` is public) →
+  daemon routes → repository scope (`/api/repos/:repoId/*`: `registry.load`, plus `registry.activate` before any
+  non-GET) → repository routes → static SPA.
 - Error body is always `ApiError {error, code?, details?}`. zod body errors → 400 `code:"bad_request"`;
-  `GraphNotFoundError` → 404; `GraphLoadError` → 422 `invalid_graph`; `EngineError` as in §6.
+  `GraphNotFoundError` → 404; `GraphLoadError` → 422 `invalid_graph`; `EngineError` as in §6; registry errors as in
+  §4 (`unknown_repo` 404, `repo_unavailable` 409, `path_not_absolute`/`not_a_git_repo` 422, `repo_active` 409,
+  `legacy_server_running` 409, `activation_failed` 500, `daemon_stopping` 503).
+
+Daemon routes:
 
 | Method & path | Request | Response |
 |---|---|---|
-| GET `/api/repo` | — | `RepoInfoResponse` |
-| GET `/api/settings` · PUT `/api/settings` | `UpdateAppSettingsRequest` | `AppSettings` |
-| GET `/api/graphs` | — | `ListGraphsResponse` |
-| GET `/api/graphs/:id` | — | `GetGraphResponse` (`modifiedOutside` = file hash ≠ store known hash) |
-| PUT `/api/graphs/:id` | `SaveGraphRequest` (Graph; `id` must match) | `SaveGraphResponse`; sets known hash; 409 while a run is active |
-| DELETE `/api/graphs/:id` | — | `OkResponse`; 409 while a run is active |
-| POST `/api/graphs/:id/validate` | `ValidateGraphRequest` (optional unsaved graph) | `ValidationResult` |
-| POST `/api/graphs/:id/runs` | `{}` | `RunDetail` |
-| GET `/api/runs?graph=&limit=` | `ListRunsQuery` | `ListRunsResponse` |
-| GET `/api/runs/:id` | — | `RunDetail` |
-| GET `/api/runs/:id/report` | — | `RunReportResponse` (§13.1) |
-| GET `/api/runs/:id/lanes/:laneId/diff` | — | `DiffResponse` (lane vs base; after cleanup from its last snapshot) |
-| POST `/api/runs/:id/cancel` · `/cleanup` · `/resume` | — | `OkResponse` |
-| GET `/api/pending` | — | `PendingResponse` (waiting_approval node runs) |
-| POST `/api/node-runs/:id/done` · `/retry` · `/skip` | — | `NodeRunResponse` |
-| POST `/api/node-runs/:id/fail` | `FailNodeRequest` | `NodeRunResponse` |
-| POST `/api/node-runs/:id/hold` | `HoldNodeRequest` | `NodeRunResponse` |
-| GET `/api/node-runs/:id/approval` | — | `ApprovalInfoResponse` |
-| POST `/api/node-runs/:id/approval` | `ApprovalRequest` | `NodeRunResponse` |
-| GET `/api/node-runs/:id/diff?scope=lane\|node` | `DiffQuery` | `DiffResponse`; `node`: 409 without a snapshot |
-| POST `/api/node-runs/:id/reopen` | — | `ReopenResponse` |
-| DELETE `/api/ptys/:ptyId` | — | `OkResponse` (ends a live reopened session; 404 otherwise) |
-| GET `/api/commands` | — | `ListCommandsResponse` |
-| POST `/hooks/:nodeRunId/:event` | raw hook JSON | 204 (always fast; never blocks Claude) |
+| GET `/api/daemon/hello?nonce=` | — (public) | `DaemonHelloResponse` (`proof` = `helloProof(token, nonce)`) |
+| GET `/api/daemon` | — | `DaemonInfoResponse` (warnings = `prereqWarnings()`) |
+| GET `/api/repos` | — | `ListReposResponse` |
+| POST `/api/repos` | `AddRepoRequest` (absolute or `~/`) | `RepoSummary` (registers, idempotent, activates) |
+| DELETE `/api/repos/:repoId?force=1` | `RemoveRepoQuery` | `OkResponse` |
+| GET `/api/repos/:repoId` | — | `RepoInfoResponse` (loads, never activates) |
+| GET `/api/settings` · PUT `/api/settings` | `UpdateAppSettingsRequest` | `AppSettings` (global) |
+| POST `/hooks/:nodeRunId/:event` | raw hook JSON | 204 (always fast; never blocks Claude; unscoped) |
 
-From M7 every route above except `/api/settings` and `/hooks` moves under `/api/repos/:repoId` and `/api/repo`
-becomes `GET /api/repos/:repoId`; the daemon routes, repo scoping and WS changes are in §12.3.
+Repository routes, after `/api/repos/:repoId` (`API.repo(repoId)`):
 
-**WebSocket `/ws`** (`shared/ws.ts`): upgrade checks Host/Origin + `isAuthorized` (cookie or `?t=`). Server
-sends `hello` on connect. `run:update` / `graphs:changed` (with `repoId`) → all clients (`repo:subscribe` /
-`repo:unsubscribe` only maintain the client's repository set until the daemon scopes by it); `node:update` / `lane:update` → clients
-subscribed to the run; `pty:*` → clients attached to that pty. `pty:attach` → `pty:attached {live, cols, rows}`,
-then replay as `pty:data` chunks (≤64 KiB each), then live data. `pty:input` → `PtyManager.userInput` (live
-PTYs only; else `pty:error`). Most recent attach/resize drives PTY size.
+| Method & path | Request | Response |
+|---|---|---|
+| GET `/graphs` | — | `ListGraphsResponse` |
+| GET `/graphs/:id` | — | `GetGraphResponse` (`modifiedOutside` = file hash ≠ store known hash) |
+| PUT `/graphs/:id` | `SaveGraphRequest` (Graph; `id` must match) | `SaveGraphResponse`; sets known hash; 409 while a run is active |
+| DELETE `/graphs/:id` | — | `OkResponse`; 409 while a run is active |
+| POST `/graphs/:id/validate` | `ValidateGraphRequest` (optional unsaved graph) | `ValidationResult` |
+| POST `/graphs/:id/runs` | `{}` | `RunDetail` |
+| GET `/runs?graph=&limit=` | `ListRunsQuery` | `ListRunsResponse` |
+| GET `/runs/:id` | — | `RunDetail` |
+| GET `/runs/:id/report` | — | `RunReportResponse` (§13.1) |
+| GET `/runs/:id/lanes/:laneId/diff` | — | `DiffResponse` (lane vs base; after cleanup from its last snapshot) |
+| POST `/runs/:id/cancel` · `/cleanup` · `/resume` | — | `OkResponse` |
+| GET `/pending` | — | `PendingResponse` (waiting_approval node runs of this repository) |
+| POST `/node-runs/:id/done` · `/retry` · `/skip` | — | `NodeRunResponse` |
+| POST `/node-runs/:id/fail` | `FailNodeRequest` | `NodeRunResponse` |
+| POST `/node-runs/:id/hold` | `HoldNodeRequest` | `NodeRunResponse` |
+| GET `/node-runs/:id/approval` | — | `ApprovalInfoResponse` |
+| POST `/node-runs/:id/approval` | `ApprovalRequest` | `NodeRunResponse` |
+| GET `/node-runs/:id/diff?scope=lane\|node` | `DiffQuery` | `DiffResponse`; `node`: 409 without a snapshot |
+| POST `/node-runs/:id/reopen` | — | `ReopenResponse` |
+| DELETE `/ptys/:ptyId` | — | `OkResponse` (ends a live reopened session; 404 otherwise) |
+| GET `/commands` | — | `ListCommandsResponse` |
+| GET `/claude-setup` · POST `/claude-setup/check` | — | `ClaudeSetupResponse` · `ClaudeCheckResponse` (`claude mcp get` run in the repository) |
+
+**WebSocket `/ws`** (`shared/ws.ts`, `WsHub(daemon)`): upgrade checks Host/Origin + `isAuthorized(getToken(), req)`
+(Bearer, cookie or the temporary `?t=`). Server sends `hello` on connect. `repo:subscribe` adds the repository to
+the client's set and activates it (`registry.activate`; a failure is sent as `error` and appears in its
+`repo:status`); `run:update` / `graphs:changed` → clients subscribed to their `repoId`; `repo:changed` → debounced
+250 ms per repository → `repo:status {repo: registry.summary(id)}` to every client; `repo:removed` → every client
+(and dropped from every client's set); `node:update` / `lane:update` → clients subscribed to the run; `pty:*` →
+clients attached to that pty. `pty:attach` → `pty:attached {live, cols, rows}`, then replay as `pty:data` chunks
+(≤64 KiB each), then live data. `pty:input` → `PtyManager.userInput` (live PTYs only; else `pty:error`). Most
+recent attach/resize drives PTY size.
 
 **Implementation notes (server-http, minimal extensions):**
 - `localhostOnly(() => ctx.port)`: the Host (and Origin, if present) must be `127.0.0.1`, `localhost` or
@@ -663,30 +692,35 @@ PTYs only; else `pty:error`). Most recent attach/resize drives PTY size.
   API/WS); the vite dev proxy rewrites Host (`changeOrigin`) and Origin. Shared with the WS upgrade as
   `isLocalRequest(host, origin, port)`. Cookie-authenticated `/api` writes must send `application/json` (403
   `forbidden_content_type`), forcing a CORS preflight for cross-origin pages.
-- `/hooks/<nodeRunId>/*` accepts the Bearer token or `hookToken(hookSecret, nodeRunId)` (`tokenAuth(token,
-  hookSecret)`; `hooks/hook-token.ts`, HMAC of the per-start hook secret, never of the token); that hook token is
+- `/hooks/<nodeRunId>/*` accepts the Bearer token or `hookToken(hookSecret, nodeRunId)` (`tokenAuth({getToken,
+  hookSecret})`; `hooks/hook-token.ts`, HMAC of the per-start hook secret, never of the token); that hook token is
   refused everywhere else. It is the only credential Claude PTYs receive.
 - Cookie name is `TOKEN_COOKIE` (`pg_token`); its value is `sessionCookieValue(token)` (HMAC, `hooks/hook-token.ts`),
   never the token: cookies are sent to every server on 127.0.0.1, and the cookie value is no Bearer credential and
   cannot derive hook tokens. `isAuthorized` also accepts `Authorization: Bearer <token>` and `?t=<token>`.
-- (Pre-M7; replaced by DESIGN §13.5 in M8.) The web client treats a 401 (REST, or a WS connect that fails while `/api/repo` answers 401) as fatal: it stops
-  reconnecting and the header says the server was restarted and its new URL must be opened.
-- `AppContext.env` (new): the server's base env (commands discovery, `PG_WEB_DIST`). `resolvePtyLogPath(store,
-  paths, ptyId)` in `app/context.ts` maps node PTYs, `setup-`/`shell-<nodeRunId>` and (by scanning run dirs)
+- (Replaced by DESIGN §13.5 in M8.) The web client treats a 401 (REST, or a WS connect that fails while
+  `/api/daemon` answers 401) as fatal: it stops reconnecting and the header says the session ended.
+- (Temporary web shim, replaced by the router in M8.) `api/rest.ts` `currentRepoId()`: the `/r/<repoId>` prefix of
+  the page URL, else the most recently opened registered repository (`GET /api/repos`); every repository call goes
+  through `API.repo(id)`; the app store boots from `GET /api/daemon` + `GET /api/repos/:repoId` (`RepoView`), and
+  `wsClient.subscribeRepo(id)` sends `repo:subscribe` (re-sent after a reconnect).
+- `DaemonContext.env`: the daemon's base env (commands discovery, `PG_WEB_DIST`, every child). `resolvePtyLogPath(store,
+  paths, ptyId)` in `daemon/context.ts` maps node PTYs, `setup-`/`shell-<nodeRunId>` and (by scanning run dirs)
   `reopen-*` PTYs to their logs after a restart.
 - `http/errors.ts` (new): `HttpError`, `toApiError`, `readBody(c, schema)` (empty body = `{}`), `readJson`.
   Extra codes: `unauthorized` 401, `forbidden_host` 403, `id_mismatch` 400 (PUT graph), `internal` 500.
 - `AppSettingsStore.update` applies only keys present in the patch (`UpdateAppSettingsRequestSchema` is
   `.partial()` of a schema with defaults, so parsing `{}` yields `{notifications: true}`); PUT /api/settings
   validates the raw body and passes it on unparsed.
-- `GET /api/graphs/:id`: `modifiedOutside` is true also when no hash is known yet (never run/saved by the app).
+- `GET …/graphs/:id`: `modifiedOutside` is true also when no hash is known yet (never run/saved by the app).
 - Hooks: unknown event → 404; everything else (unknown node run, bad payload/JSON) → 204.
 - Static: unknown paths without an extension → index.html; missing files with an extension → 404;
   `/assets/*` cached immutable.
 - WS: replay chunks ≤ 64 KiB; a client whose `bufferedAmount` exceeds 16 MiB is terminated (it reconnects and
   re-attaches with a fresh replay); 30 s ping heartbeat; max client frame 1 MiB.
 - `checkPrereqs`: only a missing git is an error; missing claude/gh and no desktop notifier are warnings
-  (DESIGN §4.2 "only warns"). The CLI checks prerequisites before `resolveRepoRoot`.
+  (DESIGN §4.2 "only warns"). The CLI checks prerequisites before `resolveRepoRoot`; `GET /api/daemon` reports
+  errors and warnings of the daemon's own environment.
 - `pg-hook` needs no copy into `dist/`: `PG_HOOK_SOURCE` resolves to `packages/server/assets/pg-hook` from
   both `src/` and `dist/`.
 
@@ -848,16 +882,21 @@ exit 1; `FAKE_GH_EXISTS=1` → gh's "already exists" error with the URL; `FAKE_G
 
 - `pnpm test` runs everything with vitest (forks pool, 20 s timeout). Put server tests in `packages/server/test/`.
   Each package also has `test` (`vitest run --root ../.. packages/<name>/`), so `pnpm -r test` works.
-- End-to-end tests: `packages/server/test/e2e/` (`harness.ts`: temp repo + PG_HOME + fake claude, in-process
-  `startServer`, REST + WS client). The crash-recovery case runs the CLI in a child process (`tsx
-  --conditions=source`) and SIGKILLs it.
+- End-to-end tests: `packages/server/test/e2e/` (`harness.ts`: temp repo + PG_HOME + fake claude; `E2eServer.start`
+  = in-process `startDaemon({port: 0, env, token})` + registration; `api()`/`request()` prefix repository routes
+  given as `/api/graphs/…` with `/api/repos/<repoId>`; `addRepo(path)`; `connectWs()` sends `repo:subscribe`). The
+  crash-recovery cases use `spawnForegroundCli(world)`: `src/cli/index.ts <repo> --foreground --no-open --port 0`
+  in a child process (`tsx --conditions=source`), `Open:` parsed, token read from `<PG_HOME>/token`, then SIGKILL.
+- HTTP/WS tests: `test/support/test-daemon.ts` `createTestDaemon({root, repos, env, mockEngines})` (a real
+  `DaemonContext` without HTTP server, token `TEST_TOKEN`, hook secret `TEST_HOOK_SECRET`, optional `EngineMock`
+  per repository); `test/support/legacy-lock.ts` `acquirePreM7Lock` (the pre-M7 lock logic, verbatim).
 - `test/helpers.ts`: `tempDir`, `createTempRepo` (branch `main`, one commit), `fakeClaudeEnv(root)` (`PG_HOME`,
   `CLAUDE_CONFIG_DIR`, `PG_CLAUDE_BIN`), `realClaudeEnv(root)`, `waitFor`, `FAKE_CLAUDE`/`FAKE_GH` fixture paths.
-- Pass env explicitly (`createAppContext({env})`, `childEnv(extra, base)`) instead of mutating `process.env`.
+- Pass env explicitly (`createDaemonContext({env})`, `startDaemon({env})`, `childEnv(extra, base)`) instead of mutating `process.env`.
 - Real claude tests are opt-in (`PG_REAL_CLAUDE=1`), use `realClaudeEnv` (a **copy** of `~/.claude.json` with
   `hasCompletedOnboarding: true`, `theme: "dark"`), strip env via `childEnv`, and keep prompts tiny
   ("Reply with exactly PONG"). Never modify `/root/.claude.json` / `~/.claude.json`.
-- Use port 0 for servers in tests (`startServer({port: 0})`; from M7 `startDaemon({port: 0, env})`).
+- Use port 0 for daemons in tests (`startDaemon({port: 0, env})`).
 - From M7: never start a daemon against the real `~/.promptgraph`; every daemon/CLI/MCP test passes a temp `PG_HOME`,
   `PG_DAEMON_SHELL_ENV=0` (no login-shell resolution) and `PG_PORT_DEFAULT=0` (no fixed port).
   Desktop contract tests (`packages/desktop/test`) read files only and never need Rust.
@@ -868,51 +907,37 @@ Target contracts. Each workstream folds the part it implements into the sections
 
 ### 12.1 Shared (`packages/shared/src`)
 
-The daemon, repository, session, URL and desktop schemas are implemented (§2). Still to change in `api.ts`:
-
-```ts
-RepoInfoResponseSchema = z.object({ id: RepoIdSchema, path, name, currentBranch: z.string().nullable(), branches });
-API = { hello: (nonce) => …, daemon: "/api/daemon", repos: "/api/repos", removeRepo: (repoId, force?) => …,
-  settings: "/api/settings", loginCodes: "/api/daemon/login-codes", rotateToken: "/api/daemon/token/rotate",
-  sessions: "/api/daemon/sessions", session: (idOrAll) => …, login: "/login", ws: "/ws", hook: (nodeRunId, event) => …,
-  repo: (repoId) => ({ info: `/api/repos/${id}`, graphs, graph(id), validate(id), startRun(id), runs, run(id),
-    cancelRun, cleanupRun, resumeRun, runReport, laneDiff(runId, laneId), pending, nodeRunAction(id, action),
-    approval(id), diff(id, scope), reopen(id), pty(id), commands, claudeSetup, claudeCheck }) };   // ids encodeURIComponent'd
-// TOKEN_COOKIE ("pg_token") and the ?t= flow are deleted.
-```
+Implemented (§2), except: `TOKEN_COOKIE` (`pg_token`) and the `?t=` flow are deleted with login sessions.
 
 ### 12.2 Server composition
 
+Implemented (§4 `daemon/*`), except:
+
 | Path | Exports |
 |---|---|
-| `config/instance-lock.ts` | `InstanceLock.acquire` (pre-M7) is deleted (`DaemonLock` and `LegacyRepoLocks` are implemented, §4) |
-| `daemon/daemon-env.ts` | `daemonEnv({caller, resolveShell = true, shellTimeoutMs = 10000}) → Record<string,string>` (allowlist + login-shell env + strip, DESIGN §4.1 item 5); `stripRuntimeEnv(env)` |
-| `daemon/context.ts` | `DaemonContext {paths, env, store, bus, settings, ptys, hooks, pgHookPath, notifier, warnings, port, getToken(), setToken(t), hookSecret, loginCodes, sessions, registry, legacyLocks}`, `createDaemonContext({token, warnings, env})`. Holds `resolvePtyLogPath` (moved from `app/context.ts`). No daemon-wide `ClaudeRunner`: each `RepoContext` builds its own over its `OwnedPtys` (endpoint `{port getter, hookSecret}`), so node and `reopen-` PTYs are owned by the repository |
-| `daemon/repo-context.ts` | `RepoContext {repo: RepoRef, graphs, lanes, claude, runners, engine, ptys: OwnedPtys, activate(): Promise<void>, dispose(): Promise<void>}`, `createRepoContext(daemon, row)` — construction has no side effects; `activate` = ensureDir + `graphs.watch()` (a returned or later `GraphWatch.error` becomes `RepoSummary.error`) + `git worktree prune` + snapshot pruning; `dispose` = offUserInput + stopWatch + `engine.shutdown()` + await chains (no timeout) |
-| `daemon/registry.ts` | `RepoRegistry {list(): RepoSummary[], add(path): Promise<RepoSummary>` (expand `~`, require absolute → 422 `path_not_absolute`, `resolveRepoRoot` + realpath → 422 `not_a_git_repo`, same realpath → existing row + touch, holds legacy lock, activates), `row(repoId)`, `load(repoId): Promise<RepoContext>` (memoised promise; 404 `unknown_repo`, 409 `repo_unavailable`; waits while disposing), `activate(repoId)` (memoised; failure → `error` in summary, memo cleared), `summary(repoId)`, `remove(repoId, {force})` (409 `repo_active`; state `disposing`), `backfill()` (DESIGN §4.4: one transaction, `meta.repos_backfilled`), `shutdownAll()}`; emits `repo:changed` on add/activate/error |
+| `daemon/context.ts` | adds `loginCodes`, `sessions` |
 | `daemon/login-codes.ts` | `LoginCodes {mint(now?): {code, expiresAt}, redeem(code, now?): boolean, clear()}` (32 bytes, TTL 30 s, single use, in memory) |
 | `daemon/sessions.ts` | `Sessions {create(label, now?): string /* cookie value */, verify(value, now?): SessionRow \| null` (sliding expiry; `last_seen_at` written ≤ once/hour), `list(currentHash?)`, `revoke(idPrefix \| "all"): number`, `revokeAll()`} over `store` |
-| `daemon/start.ts` | `startDaemon({port?, env?, warnings?, token?}) → RunningDaemon {ctx, port, origin, close()}` (order of DESIGN §4.1 item 1; `port` given = explicit, else sticky → `PG_PORT_DEFAULT`/4777 → 0); `installProcessHandlers(daemon)`; replaces `cli/server.ts`. `listen()` rejects with the original `EADDRINUSE` code |
-| `daemon/client.ts` | `findDaemon(paths, {version?})` → `{info, token, client} \| null` (hello verification before any Bearer; throws `DaemonVersionMismatch`), `ensureDaemon({paths, serverCommand, port?, env?, timeoutMs = 20000})` → `{info, token, client, started}` (spawn `daemon [--port p]` only with an explicit port; exit 3 → keep polling), `registerRepo(client, path)`, `mintLoginUrl(conn, next, {webPort?})` — used by the CLI and `promptgraph mcp` |
+| `daemon/client.ts` | adds `mintLoginUrl(conn, next, {webPort?})` — used by the CLI and `promptgraph mcp` |
 | `hooks/hook-token.ts` | `sessionCookieValue` is deleted (`hookToken(hookSecret, nodeRunId)` is implemented) |
-| `mcp/setup.ts` | `checkClaudeSetup({env, cwd})` runs `claude mcp get` with `cwd` = the repository |
 
 ### 12.3 HTTP and WS
+
+Repository scoping, the daemon and repository routes and the hub's repository delivery are implemented (§8). Still to do:
 
 - Middleware order: `localhostOnly(() => ctx.port)` → `fetchMetadata()` (cookie requests only: `/api/*`, `/ws` with `Sec-Fetch-Site` ∉ {absent, `same-origin`, `none`} or `/api/*` with `Sec-Fetch-Mode` ∈ {`no-cors`, `navigate`} → 403 `forbidden_cross_site`) → `tokenAuth({getToken, hookSecret, sessions})` → routes → static.
 - `tokenAuth`: `/hooks/<nodeRunId>/*` accepts only `hookToken(hookSecret, nodeRunId)` or the Bearer token; `GET /api/daemon/hello` and `GET /login` are public; everything else needs the Bearer token or a valid `pg_session` cookie; Bearer-only routes (`login-codes`, `token/rotate`, `sessions*`) refuse cookie auth with 403 `forbidden_cookie_auth`; cookie API writes need `application/json`; an unauthenticated page gets `signedOutPage()` (401, CSP `default-src 'none'; style-src 'unsafe-inline'`, `Cache-Control: no-store`). No `?t=` anywhere.
 - `GET /login`: `loginCodes.redeem` → `sessions.create(label from User-Agent)` → `Set-Cookie pg_session=<value>; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` → 302 `safeRedirectTarget(next, origin)`; invalid/expired → signed-out page 401. Authenticated `index.html` responses renew the cookie and carry `Cache-Control: no-store`.
-- `http/repo-scope.ts`: `/api/repos/:repoId/*` → `registry.load(repoId)`; non-GET → `registry.activate(repoId)` first; `c.set("repo", repoCtx)`; route modules take the `RepoContext` from the context.
-- Routes added: `GET /api/daemon/hello`, `GET /api/daemon`, `GET/POST /api/repos`, `DELETE /api/repos/:repoId`, `GET /api/repos/:repoId`, `POST /api/repos/:repoId/claude-setup/check` (moved), `POST /api/daemon/login-codes`, `POST /api/daemon/token/rotate`, `GET /api/daemon/sessions`, `DELETE /api/daemon/sessions/:id`, `GET /login`. Static fallback also excludes `/login`.
-- `WsHub(daemon)`: upgrade auth = Bearer or session cookie (Origin/Host and Fetch Metadata as HTTP; no `t` param); client state adds `repos: Set<repoId>` and its session hash; `repo:subscribe` → `registry.activate`; `run:update`/`graphs:changed` → repo subscribers; `repo:changed` debounced 250 ms per repo → `repo:status` to all; `repo:removed` to all; rotation → `close(4401)` for every client; `session:revoked` → `close(4401)` for that session's clients.
+- Routes added: `POST /api/daemon/login-codes`, `POST /api/daemon/token/rotate`, `GET /api/daemon/sessions`, `DELETE /api/daemon/sessions/:id`, `GET /login`.
+- `WsHub`: upgrade auth = Bearer or session cookie (Origin/Host and Fetch Metadata as HTTP; no `t` param); client state adds its session hash; rotation → `close(4401)` for every client; `session:revoked` → `close(4401)` for that session's clients.
 
 ### 12.4 CLI and MCP
 
-- `cli/args.ts` `CliOptions.command`: `"open-repo"` (default: `promptgraph [repo-dir]`) `| "daemon" | "ls" | "open" | "rm" | "stop" | "token-rotate" | "sessions" | "sessions-revoke" | "mcp"`; options `repoDir`, `target` (repo dir or id for open/rm; session id for revoke), `port`, `portExplicit`, `open`, `foreground`, `json`, `printUrl`, `next`, `webPort`, `force`, `all`. Subcommands only at argv[0] (`token rotate`, `sessions revoke` are two words). Exit codes 0/1/2, and `EXIT_DAEMON_LOCKED` (3) from `daemon`.
+- `cli/args.ts` `CliOptions.command` (`"open-repo" | "daemon" | "mcp"` and `--foreground` are implemented) adds `"ls" | "open" | "rm" | "stop" | "token-rotate" | "sessions" | "sessions-revoke"`; options `target` (repo dir or id for open/rm; session id for revoke), `json`, `printUrl`, `next`, `webPort`, `force`, `all`. Bare `promptgraph [repo-dir]` becomes the detached start (`ensureDaemon` + register + `Opened <name>: …`); today it behaves as `--foreground`. Subcommands only at argv[0] (`token rotate`, `sessions revoke` are two words). Exit codes 0/1/2, and `EXIT_DAEMON_LOCKED` (3) from `daemon`.
 - `cli/commands/*.ts`: one module per command with injected deps (`{paths, env, stdout, stderr, openBrowser, now}`) so tests call them without a child process.
 - Output lines (parsed by scripts/tests): foreground daemon `Listening: http://127.0.0.1:<port> (pid <pid>, promptgraph <version>)`; `--foreground` repo start additionally `Open: http://127.0.0.1:<port>/r/<repoId>`; detached repo start `Opened <name>: http://127.0.0.1:<port>/r/<repoId>`; `open --print-url --json` exactly one JSON line `OpenUrlResult`, warnings on stderr only.
 - Foreground `daemon`/`--foreground` stop on SIGINT, SIGTERM and SIGHUP. `stop` checks `pidStart`, waits ≤ 30 s for the pid to exit. Offline `token rotate` holds `DaemonLock` around `writeToken`.
-- MCP: `mcp/connection.ts` → `findDaemon` (hello + version) + `registerRepo` (repoId cached per daemon pid + path) + a client whose repo calls use `API.repo(repoId)`; `start_server` → `ensureDaemon` + register; `open_ui` → `mintLoginUrl(next = webRoutes.repo(id))`, opens it, returns `{url: "http://127.0.0.1:<port>/r/<id>", opened}` (never the login URL); `server_status` → `{running, pid?, version?, port?, repoPath, repoId?, registered, status?: RepoSummary, versionMismatch?}`. Tool names unchanged.
+- MCP (discovery, registration, repository-scoped calls, `start_server`, `server_status` are implemented, §4): `open_ui` → `mintLoginUrl(next = webRoutes.repo(id))`, opens it, returns `{url: "http://127.0.0.1:<port>/r/<id>", opened}` (never the login URL).
 
 ### 12.5 Web
 

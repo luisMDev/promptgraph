@@ -1,3 +1,4 @@
+import { NODE_TYPES, type NodeType } from "@promptgraph/shared";
 import type { PgPaths } from "../config/paths.js";
 import type { OwnedPtys } from "../pty/pty-manager.js";
 import type { LaneManager } from "../workspace/lane-manager.js";
@@ -18,6 +19,11 @@ export interface RunnerRegistryDeps {
   /** Base env for child processes; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
+
+/** Node types createRunnerRegistry implements (GET /api/daemon `supportedNodeTypes`; Engine.supportedNodeTypes per repository). */
+export const RUNNER_NODE_TYPES: readonly NodeType[] = NODE_TYPES.filter((t) =>
+  (["prompt", "command", "shell", "commit", "merge", "pr", "approval", "condition"] as readonly string[]).includes(t),
+);
 
 /**
  * Maps every implemented node type to its runner (prompt/command share the ClaudeRunner; merge uses it

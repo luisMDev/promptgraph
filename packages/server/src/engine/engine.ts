@@ -527,11 +527,24 @@ export class Engine {
     exec?.controls?.userInput?.();
   }
 
-  /** Startup: markInterrupted + LaneManager.prune. */
+  /**
+   * Standalone startup (tests, one repository): markInterrupted for this repository + prune. The daemon
+   * marks every repository's runs interrupted once at start and calls prune() on activation (§4.2).
+   */
   async recover(): Promise<void> {
     if (markInterrupted(this.deps.store, { repoPath: this.deps.repo.path }, this.now()).length > 0) this.emitRepoChanged();
+    await this.prune();
+  }
+
+  /** Activation (§4.2): `git worktree prune` (LaneManager.prune) and snapshot pruning (§9.7). */
+  async prune(): Promise<void> {
     await this.deps.lanes.prune();
     await this.pruneSnapshots();
+  }
+
+  /** Resolves once every background node chain has settled (no timeout; used after shutdown by dispose). */
+  async drain(): Promise<void> {
+    while (this.chains.size > 0) await Promise.allSettled([...this.chains]);
   }
 
   /** §9.7: snapshot refs of runs that finished over SNAPSHOT_RETENTION_MS ago, or are unknown, are deleted. */

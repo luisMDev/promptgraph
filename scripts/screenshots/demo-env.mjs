@@ -124,24 +124,37 @@ export function removeCredentials(claudeConfig) {
   fs.rmSync(path.join(claudeConfig, ".credentials.json"), { force: true });
 }
 
+/**
+ * Runs `promptgraph <repo> --foreground --no-open --port <port>` (the daemon in a child process, with the
+ * isolated PG_HOME of `env`), waits for `Open: http://127.0.0.1:<port>/r/<repoId>` and reads the token
+ * from `<PG_HOME>/token`. `url` signs the browser in with the temporary `?t=` page flow.
+ */
 export async function startServer(repo, env, port) {
-  const child = spawn(process.execPath, [SERVER_CLI, repo, "--port", String(port), "--no-open"], {
-    env,
+  const child = spawn(process.execPath, [SERVER_CLI, repo, "--foreground", "--no-open", "--port", String(port)], {
+    env: { ...env, PG_DAEMON_SHELL_ENV: "0" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
   child.stdout.on("data", (d) => (output += d));
   child.stderr.on("data", (d) => (output += d));
-  const url = await until(
+  const match = await until(
     "the server URL",
     () => {
       if (child.exitCode !== null) throw new Error(`Server exited (${child.exitCode}):\n${output}`);
-      return /Open: (http:\/\/127\.0\.0\.1:\d+\/\?t=\S+)/.exec(output)?.[1];
+      return /Open: (http:\/\/127\.0\.0\.1:(\d+)\/r\/(\S+))/.exec(output);
     },
     30_000,
   );
-  const token = new URL(url).searchParams.get("t");
-  return { child, url, token, base: `http://127.0.0.1:${port}`, output: () => output };
+  const [, openUrl, boundPort, repoId] = match;
+  const token = fs.readFileSync(path.join(env.PG_HOME, "token"), "utf8").trim();
+  return {
+    child,
+    url: `${openUrl}?t=${encodeURIComponent(token)}`,
+    token,
+    repoId,
+    base: `http://127.0.0.1:${boundPort}`,
+    output: () => output,
+  };
 }
 
 export async function stopServer(server) {
@@ -152,15 +165,21 @@ export async function stopServer(server) {
   if (server.child.exitCode === null) server.child.kill("SIGKILL");
 }
 
+/**
+ * REST client of the demo daemon (Bearer token). A route starting with `/api/` is used as is (daemon
+ * routes such as `/api/settings`); any other route is relative to the demo repository,
+ * `/api/repos/<repoId>` (`api("GET", "/runs/<id>")`).
+ */
 export function apiClient(server) {
   return async function api(method, route, body) {
-    const res = await fetch(`${server.base}${route}`, {
+    const url = route.startsWith("/api/") ? route : `/api/repos/${encodeURIComponent(server.repoId)}${route}`;
+    const res = await fetch(`${server.base}${url}`, {
       method,
       headers: { authorization: `Bearer ${server.token}`, ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`${method} ${route} → ${res.status}: ${text}`);
+    if (!res.ok) throw new Error(`${method} ${url} → ${res.status}: ${text}`);
     return text ? JSON.parse(text) : null;
   };
 }

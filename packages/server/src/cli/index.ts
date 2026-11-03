@@ -1,18 +1,22 @@
 #!/usr/bin/env node
+import { EXIT_DAEMON_LOCKED, webRoutes } from "@promptgraph/shared";
 import open from "open";
 import { VERSION } from "../config/version.js";
+import { DaemonLockedError, installProcessHandlers, startDaemon, type RunningDaemon } from "../daemon/start.js";
 import { resolveRepoRoot } from "../git/repo.js";
-import { parseCliArgs, USAGE } from "./args.js";
+import { errorMessage } from "../util/text.js";
+import { parseCliArgs, USAGE, type CliOptions } from "./args.js";
 import { checkPrereqs } from "./prereqs.js";
-import { startServer } from "./server.js";
 
 /**
- * `promptgraph` bin (§4). `promptgraph mcp` runs the MCP server instead (§19.2). Otherwise: parseCliArgs → resolveRepoRoot → checkPrereqs (errors exit 1, warnings
- * printed) → startServer → print + open (unless --no-open) the URL. SIGINT/SIGTERM → server.close()
- * (graceful /exit of Claude PTYs, ≤5s) → exit 0; a second SIGINT force-exits.
+ * `promptgraph` bin (DESIGN §4). `promptgraph mcp` runs the MCP server (§19.2); `promptgraph daemon`
+ * runs the daemon in this terminal (lock held → exit 3); `promptgraph [repo-dir]` (with or without
+ * `--foreground`, until the detached start lands) runs the daemon in this process, registers the
+ * repository and opens it. SIGINT/SIGTERM/SIGHUP → graceful stop (Claude PTYs get /exit, ≤5 s) → exit 0;
+ * a second SIGINT force-exits.
  */
 export async function main(argv: readonly string[]): Promise<number> {
-  let opts;
+  let opts: CliOptions;
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
@@ -33,7 +37,29 @@ export async function main(argv: readonly string[]): Promise<number> {
     await runMcpStdio();
     return 0;
   }
+  if (opts.command === "daemon") return runDaemon(opts);
+  return runForeground(opts);
+}
 
+function listeningLine(daemon: RunningDaemon): string {
+  return `Listening: ${daemon.origin} (pid ${process.pid}, promptgraph ${VERSION})`;
+}
+
+/** `promptgraph daemon`: the daemon in this terminal (also what ensureDaemon spawns detached). */
+async function runDaemon(opts: CliOptions): Promise<number> {
+  let daemon: RunningDaemon;
+  try {
+    daemon = await startDaemon({ port: opts.port ?? undefined });
+  } catch (err) {
+    console.error(`error: ${errorMessage(err)}`);
+    return err instanceof DaemonLockedError ? EXIT_DAEMON_LOCKED : 1;
+  }
+  console.log(listeningLine(daemon));
+  return serveUntilStopped(daemon);
+}
+
+/** `promptgraph [repo-dir] --foreground`: daemon in this process + register + open. */
+async function runForeground(opts: CliOptions): Promise<number> {
   const prereqs = await checkPrereqs();
   for (const e of prereqs.errors) console.error(`error: ${e}`);
   if (prereqs.errors.length > 0) return 1;
@@ -47,11 +73,35 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 1;
   }
 
-  const server = await startServer({ repoPath, port: opts.port, warnings: prereqs.warnings });
-  console.log(`promptgraph ${VERSION} serving ${repoPath}`);
-  console.log(`Open: ${server.url}`);
-  if (opts.open) open(server.url).catch(() => console.warn("warning: could not open a browser; open the URL above"));
+  let daemon: RunningDaemon;
+  try {
+    daemon = await startDaemon({ port: opts.port ?? undefined, warnings: prereqs.warnings });
+  } catch (err) {
+    console.error(`error: ${errorMessage(err)}${err instanceof DaemonLockedError ? "; --foreground needs it stopped (promptgraph stop)" : ""}`);
+    return 1;
+  }
+  console.log(listeningLine(daemon));
+  let repoId: string;
+  try {
+    const repo = await daemon.ctx.registry.add(repoPath);
+    if (repo.error) console.warn(`warning: ${repo.error}`);
+    repoId = repo.id;
+  } catch (err) {
+    console.error(`error: ${errorMessage(err)}`);
+    await daemon.close();
+    return 1;
+  }
+  const url = `${daemon.origin}${webRoutes.repo(repoId)}`;
+  console.log(`Open: ${url}`);
+  // Temporary page flow: the browser signs in with ?t= (replaced by one-time login codes, DESIGN §14).
+  if (opts.open) {
+    open(`${url}?t=${encodeURIComponent(daemon.ctx.getToken())}`).catch(() => console.warn("warning: could not open a browser; open the URL above"));
+  }
+  return serveUntilStopped(daemon);
+}
 
+function serveUntilStopped(daemon: RunningDaemon): Promise<number> {
+  installProcessHandlers(daemon);
   return new Promise<number>((resolve) => {
     let stopping = false;
     const stop = (signal: NodeJS.Signals) => {
@@ -61,23 +111,25 @@ export async function main(argv: readonly string[]): Promise<number> {
       }
       stopping = true;
       console.log("\nStopping: asking running sessions to exit (up to 5s)…");
-      server.close().then(
+      daemon.close().then(
         () => resolve(0),
         (err: unknown) => {
-          console.error(err instanceof Error ? err.message : err);
+          console.error(errorMessage(err));
           resolve(1);
         },
       );
     };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
+    // A foreground daemon stops with its terminal (DESIGN §4.1 item 6).
+    process.on("SIGHUP", stop);
   });
 }
 
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
-    console.error(err instanceof Error ? err.message : err);
+    console.error(errorMessage(err));
     process.exit(1);
   },
 );

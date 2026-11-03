@@ -28,9 +28,9 @@ export interface EditorState {
 
 /** Extensions over the contract interface (see CONTRACTS.md §9 notes). */
 export interface EditorStore extends EditorState {
-  /** Validation phase (RepoInfoResponse.phase). */
+  /** Validation phase (DaemonInfoResponse.phase). */
   phase: 1 | 2;
-  /** Node types the server can run (RepoInfoResponse.supportedNodeTypes); null = all. */
+  /** Node types the daemon can run (DaemonInfoResponse.supportedNodeTypes); null = all. */
   supportedNodeTypes: readonly NodeType[] | null;
   /** Id of the opened graph, also when it failed to load. */
   graphId: string | null;

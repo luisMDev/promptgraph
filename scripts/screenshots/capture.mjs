@@ -271,7 +271,7 @@ function makeScenes({ api, page, outDir }) {
   async function startRun(graphId) {
     await page.getByRole("button", { name: "Run", exact: true }).click();
     const { runs } = await until("the run to start", async () => {
-      const r = await api("GET", `/api/runs?graph=${graphId}&limit=1`);
+      const r = await api("GET", `/runs?graph=${graphId}&limit=1`);
       return r.runs.length && r.runs[0].status !== "succeeded" ? r : null;
     });
     return runs[0].id;
@@ -280,14 +280,14 @@ function makeScenes({ api, page, outDir }) {
   async function waitNode(runId, nodeId, statuses, iteration) {
     const want = [statuses].flat();
     return until(`${nodeId} to be ${want.join("|")}`, async () => {
-      const nr = currentNodeRun(await api("GET", `/api/runs/${runId}`), nodeId, iteration);
+      const nr = currentNodeRun(await api("GET", `/runs/${runId}`), nodeId, iteration);
       return nr && want.includes(nr.status) ? nr : null;
     });
   }
 
   async function waitRun(runId, status = "succeeded") {
     return until(`run ${runId} to be ${status}`, async () => {
-      const d = await api("GET", `/api/runs/${runId}`);
+      const d = await api("GET", `/runs/${runId}`);
       if (["failed", "cancelled"].includes(d.run.status) && status !== d.run.status) throw new Error(`Run ${runId} ${d.run.status}: ${d.run.error}`);
       return d.run.status === status ? d : null;
     }, 120_000);
@@ -297,7 +297,7 @@ function makeScenes({ api, page, outDir }) {
   const cardShows = (id, text) => node(id).getByText(text, { exact: true }).first().waitFor({ timeout: WAIT_MS });
 
   async function openRunFromHistory(runId) {
-    const { run } = await api("GET", `/api/runs/${runId}`);
+    const { run } = await api("GET", `/runs/${runId}`);
     // A run that finishes while shown opens its report: close it to get the canvas back.
     const closeReport = page.getByRole("button", { name: "Close report" });
     await closeReport.waitFor({ timeout: 3000 }).catch(() => {});
@@ -485,7 +485,7 @@ async function main() {
     const api = apiClient(server);
     // No desktop notifications from the demo runs.
     await api("PUT", "/api/settings", { ...(await api("GET", "/api/settings")), notifications: false });
-    for (const id of opts.scenes) await api("PUT", `/api/graphs/${id}`, GRAPHS[id]);
+    for (const id of opts.scenes) await api("PUT", `/graphs/${id}`, GRAPHS[id]);
 
     browser = await chromium.launch({ executablePath: chrome, headless: true });
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: "dark" });

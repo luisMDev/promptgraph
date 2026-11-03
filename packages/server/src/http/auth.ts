@@ -65,19 +65,32 @@ const deny = (error: string, code: string): ApiError => ({ error, code });
 const HOOK_PATH = /^\/hooks\/([^/]+)\//;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/** Routes that need no credential: the daemon's identity check (DESIGN §4.1 item 3). */
+const PUBLIC_ROUTES = new Set(["GET /api/daemon/hello", "HEAD /api/daemon/hello"]);
+
+export interface TokenAuthOptions {
+  /** The current token (read per request: `token rotate` swaps it in memory). */
+  getToken: () => string;
+  /** Per-start secret of the hook tokens (hookToken). */
+  hookSecret: string;
+}
+
 /**
- * Requires `Authorization: Bearer <token>` or the `pg_token` cookie. A request to `/` (or any non-API
- * page) with `?t=<token>` sets the cookie (HttpOnly, SameSite=Strict, Path=/) and redirects to drop `t`.
+ * Requires `Authorization: Bearer <token>` or the `pg_token` cookie, except on PUBLIC_ROUTES. A request
+ * to `/` (or any non-API page) with `?t=<token>` sets the cookie (HttpOnly, SameSite=Strict, Path=/) and
+ * redirects to drop `t` (temporary page flow, replaced by one-time login codes, DESIGN §14).
  * The cookie holds sessionCookieValue(token), never the token: other local servers receive it too.
  * `/hooks/<nodeRunId>/*` accepts the Bearer token or that node run's hookToken(hookSecret, nodeRunId)
  * (the only credential Claude PTYs get; derived from the per-start hook secret, never from the token).
  * Cookie-authenticated API writes must be `application/json` so a cross-origin form/`text/plain` POST
  * cannot pass without a CORS preflight. 401/403 ApiError otherwise. Constant-time comparison.
  */
-export function tokenAuth(token: string, hookSecret: string): MiddlewareHandler {
-  const cookieSecret = sessionCookieValue(token);
+export function tokenAuth({ getToken, hookSecret }: TokenAuthOptions): MiddlewareHandler {
   return async (c, next) => {
+    const token = getToken();
+    const cookieSecret = sessionCookieValue(token);
     const url = new URL(c.req.url);
+    if (PUBLIC_ROUTES.has(`${c.req.method} ${url.pathname}`)) return next();
     const hook = HOOK_PATH.exec(url.pathname);
     if (hook) {
       let nodeRunId: string;
@@ -105,8 +118,8 @@ export function tokenAuth(token: string, hookSecret: string): MiddlewareHandler 
       }
       return next();
     }
-    if (isPage) return c.text("promptgraph: unauthorized. Each start of promptgraph prints a new URL (the old one stops working when the server restarts): open the URL printed by the promptgraph command.", 401);
-    return c.json(deny("Unauthorized: missing or invalid session token", "unauthorized"), 401);
+    if (isPage) return c.text("promptgraph: unauthorized. Open the URL printed by the promptgraph command.", 401);
+    return c.json(deny("Unauthorized: missing or invalid token", "unauthorized"), 401);
   };
 }
 

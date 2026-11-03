@@ -4,18 +4,20 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { MCP_TOOL_NAMES, ServerInfoSchema, validateGraph } from "@promptgraph/shared";
+import { MCP_TOOL_NAMES, validateGraph } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { startServer } from "../src/cli/server.js";
+import { daemonLogPath, readDaemonInfo } from "../src/config/daemon-info.js";
 import { getPaths } from "../src/config/paths.js";
-import { readServerInfo, serverInfoPath } from "../src/config/server-info.js";
+import { VERSION } from "../src/config/version.js";
+import { startDaemon } from "../src/daemon/start.js";
 import type { McpEnvironment } from "../src/mcp/connection.js";
 import { GraphDraftError, LAYOUT_DX, normalizeGraphDraft } from "../src/mcp/draft.js";
 import { createMcpServer } from "../src/mcp/server.js";
+import { isProcessAlive } from "../src/util/process.js";
 import { createTempRepo, fakeClaudeEnv, tempDir, waitFor } from "./helpers.js";
 
 const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-/** Absolute tsx loader: the background server is spawned with the temp repo as cwd. */
+/** Absolute tsx loader: the detached daemon is spawned with PG_HOME as cwd. */
 const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 
 describe("normalizeGraphDraft", () => {
@@ -90,50 +92,26 @@ describe("plugin skill patterns", () => {
   });
 });
 
-describe("server-info record", () => {
-  const cleanups: Array<() => void | Promise<void>> = [];
-  afterEach(async () => {
-    for (const c of cleanups.splice(0).reverse()) await c();
-  });
-
-  it("is written (0600) once listening and removed on close", async () => {
-    const { repo, cleanup } = createTempRepo();
-    cleanups.push(cleanup);
-    const { dir, cleanup: cleanRoot } = tempDir();
-    cleanups.push(cleanRoot);
-    const env = { ...process.env, ...fakeClaudeEnv(dir) };
-    const paths = getPaths(env);
-    const server = await startServer({ repoPath: repo, port: 0, env });
-    const file = serverInfoPath(paths, repo);
-    const info = ServerInfoSchema.parse(JSON.parse(fs.readFileSync(file, "utf8")));
-    expect(info).toMatchObject({ pid: process.pid, repoPath: repo, port: server.port, token: server.token });
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    expect(readServerInfo(paths, repo)).toEqual(info);
-    await server.close();
-    expect(fs.existsSync(file)).toBe(false);
-    expect(readServerInfo(paths, repo)).toBeNull();
-  });
-});
-
 describe("promptgraph MCP server", () => {
   const cleanups: Array<() => void | Promise<void>> = [];
   afterEach(async () => {
     for (const c of cleanups.splice(0).reverse()) await c();
   });
 
-  async function setup() {
+  async function setup(opts: { version?: string } = {}) {
     const { repo, cleanup } = createTempRepo("pg-mcp-repo-");
     cleanups.push(cleanup);
     const { dir, cleanup: cleanRoot } = tempDir("pg-mcp-");
     cleanups.push(cleanRoot);
-    const env = { ...process.env, ...fakeClaudeEnv(dir) };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...fakeClaudeEnv(dir), PG_DAEMON_SHELL_ENV: "0" };
     delete env.PROMPTGRAPH_REPO;
     const opened: string[] = [];
     const mcpEnv: McpEnvironment = {
       cwd: repo,
       env,
       paths: getPaths(env),
-      serverCommand: { command: process.execPath, args: ["--conditions=source", "--import", TSX, path.join(SERVER_SRC, "src/cli/index.ts")] },
+      serverCommand: [process.execPath, "--conditions=source", "--import", TSX, path.join(SERVER_SRC, "src/cli/index.ts")],
+      version: opts.version,
     };
     const mcp = createMcpServer({ mcpEnv, openUrl: async (url) => void opened.push(url), pollMs: 50 });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -168,19 +146,20 @@ describe("promptgraph MCP server", () => {
     );
     // Approvals stay a human action in the UI (invariant 4).
     expect(tools.map((t) => t.name).some((n) => /approve/.test(n))).toBe(false);
-    expect((await call("server_status")).data).toMatchObject({ running: false, repoPath: repo });
+    expect((await call("server_status")).data).toMatchObject({ running: false, repoPath: repo, registered: false });
     const res = await call("list_graphs");
     expect(res.isError).toBe(true);
-    expect(res.text).toContain("start_server");
+    expect(res.text).toBe("promptgraph is not running; call start_server");
     expect((await call("graph_reference")).text).toContain("# promptgraph graph format");
   });
 
-  it("saves, validates, runs and reports a graph against a live server", { timeout: 30_000 }, async () => {
+  it("saves, validates, runs and reports a graph through /api/repos/<id> of a live daemon", { timeout: 30_000 }, async () => {
     const { repo, env, call, opened } = await setup();
-    const server = await startServer({ repoPath: repo, port: 0, env });
-    cleanups.push(() => server.close());
+    const daemon = await startDaemon({ port: 0, env });
+    cleanups.push(() => daemon.close());
+    const token = daemon.ctx.getToken();
 
-    expect((await call("server_status")).data).toMatchObject({ running: true, repo: { path: repo } });
+    expect((await call("server_status")).data).toMatchObject({ running: true, pid: process.pid, version: VERSION, port: daemon.port, repoPath: repo, registered: false });
 
     const invalid = await call("save_graph", { graph: { id: "broken", name: "Broken", nodes: [{ id: "m", type: "merge" }] } });
     expect(invalid.data).toMatchObject({ saved: true, runnable: false });
@@ -227,17 +206,49 @@ describe("promptgraph MCP server", () => {
 
     expect((await call("list_runs", { graphId: "hello" })).data[0]).toMatchObject({ runId, status: "succeeded" });
 
+    const status = (await call("server_status")).data;
+    expect(status).toMatchObject({ registered: true, repoId: expect.any(String), status: { path: repo, active: true, runs: { running: 0, paused: 0 } } });
+    expect(daemon.ctx.registry.list().map((r) => r.id)).toEqual([status.repoId]);
+
     const ui = await call("open_ui");
-    expect(ui.data).toMatchObject({ opened: true });
-    expect(ui.text).not.toContain(server.token);
-    expect(opened).toEqual([`http://127.0.0.1:${server.port}/?t=${encodeURIComponent(server.token)}`]);
+    const url = `${daemon.origin}/r/${status.repoId}`;
+    expect(ui.data).toEqual({ opened: true, url });
+    expect(ui.text).not.toContain(token);
+    expect(opened).toEqual([`${url}?t=${encodeURIComponent(token)}`]);
   });
 
-  it("start_server launches promptgraph in the background and is a no-op once it runs", { timeout: 40_000 }, async () => {
+  it("re-registers a repository removed while the same daemon keeps running", async () => {
     const { repo, env, call } = await setup();
+    const daemon = await startDaemon({ port: 0, env });
+    cleanups.push(() => daemon.close());
+    expect((await call("list_graphs")).data).toEqual([]);
+    const [registered] = daemon.ctx.registry.list();
+    expect(registered).toMatchObject({ path: repo });
+    // Removed from the UI or another client: the MCP server still has its repoId cached.
+    await daemon.ctx.registry.remove(registered!.id);
+    expect(daemon.ctx.registry.list()).toEqual([]);
+    const again = await call("list_graphs");
+    expect(again).toMatchObject({ isError: false, data: [] });
+    expect(daemon.ctx.registry.list()).toEqual([expect.objectContaining({ id: registered!.id, path: repo })]);
+  });
+
+  it("refuses a daemon of another version with the documented message", async () => {
+    const { env, call } = await setup({ version: "0.0.0-other" });
+    const daemon = await startDaemon({ port: 0, env });
+    cleanups.push(() => daemon.close());
+    const message = `promptgraph ${VERSION} is running (this is 0.0.0-other); run promptgraph stop, then retry`;
+    const res = await call("list_graphs");
+    expect(res).toMatchObject({ isError: true, text: message });
+    expect((await call("server_status")).data).toMatchObject({ running: true, versionMismatch: message, registered: false });
+    expect(daemon.ctx.registry.list()).toEqual([]);
+  });
+
+  it("start_server spawns a detached daemon, registers the repository and is a no-op once it runs", { timeout: 40_000 }, async () => {
+    const { repo, env, call } = await setup();
+    const paths = getPaths(env);
     const first = await call("start_server");
     expect(first.isError, first.text).toBe(false);
-    expect(first.data).toMatchObject({ started: true, repoPath: repo });
+    expect(first.data).toMatchObject({ started: true, repoPath: repo, repoId: expect.any(String), logFile: daemonLogPath(paths) });
     const pid = first.data.pid as number;
     cleanups.push(async () => {
       try {
@@ -245,10 +256,14 @@ describe("promptgraph MCP server", () => {
       } catch {
         return;
       }
-      await waitFor(() => !readServerInfo(getPaths(env), repo), 10_000, 100).catch(() => {});
+      await waitFor(() => !isProcessAlive(pid), 15_000, 100).catch(() => {});
     });
     expect(pid).not.toBe(process.pid);
-    expect((await call("server_status")).data).toMatchObject({ running: true, pid });
-    expect((await call("start_server")).data).toMatchObject({ started: false, pid });
+    expect(first.data.url).toBe(`http://127.0.0.1:${first.data.port}/r/${first.data.repoId}`);
+    expect(readDaemonInfo(paths)?.pid).toBe(pid);
+    expect(fs.readFileSync(daemonLogPath(paths), "utf8")).toContain("Listening: ");
+    expect((await call("server_status")).data).toMatchObject({ running: true, pid, registered: true, repoId: first.data.repoId });
+    expect((await call("start_server")).data).toMatchObject({ started: false, pid, repoId: first.data.repoId });
+    expect((await call("list_graphs")).data).toEqual([]);
   });
 });

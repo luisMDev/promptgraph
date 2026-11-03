@@ -113,8 +113,8 @@ describe("buildInitialMessage", () => {
 
 describe("child environment", () => {
   it("strips PG_HOME and the Claude nesting variables, sets TERM and applies extra", () => {
-    const env = childEnv({ EXTRA: "1" }, { PG_HOME: "/secret/home", CLAUDECODE: "1", FOO_HERMETIC: "1", PATH: "/bin", PG_PORT: "1", TERM: "dumb" });
-    expect(env).toEqual({ PATH: "/bin", PG_PORT: "1", TERM: "xterm-256color", EXTRA: "1" });
+    const env = childEnv({ EXTRA: "1" }, { PG_HOME: "/secret/home", CLAUDECODE: "1", FOO_HERMETIC: "1", PATH: "/bin", PG_PORT: "1", PG_HOOK_HEADER_FILE: "/x", PG_NODE_RUN_ID: "nr-old", PG_OTHER: "1", TERM: "dumb" });
+    expect(env).toEqual({ PATH: "/bin", PG_OTHER: "1", TERM: "xterm-256color", EXTRA: "1" });
     expect(Object.keys(env)).not.toContain("PG_HOME");
   });
 });

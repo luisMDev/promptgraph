@@ -2,7 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { daemonLockName, daemonPidPath, DaemonLock, InstanceLock, isDaemonLock, LegacyRepoLocks } from "../src/config/instance-lock.js";
+import { daemonLockName, daemonPidPath, DaemonLock, isDaemonLock, LegacyRepoLocks } from "../src/config/instance-lock.js";
+import { acquirePreM7Lock } from "./support/legacy-lock.js";
 import { getPaths, type PgPaths } from "../src/config/paths.js";
 import { repoKey } from "../src/config/repo-key.js";
 import { tempDir } from "./helpers.js";
@@ -94,15 +95,15 @@ describe("LegacyRepoLocks (DESIGN §4.4)", () => {
     const file = path.join(paths.home, "locks", `${repoKey("/repo/a")}.pid`);
     expect(fs.readFileSync(file, "utf8")).toBe(`${process.pid}\n/repo/a\n`);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    // InstanceLock.acquire is exactly the pre-M7 lock logic.
-    expect(() => InstanceLock.acquire(paths, "/repo/a")).toThrow(/already running/);
+    // acquirePreM7Lock is exactly the pre-M7 lock logic.
+    expect(() => acquirePreM7Lock(paths, "/repo/a")).toThrow(/already running/);
     locks.release("/repo/a");
     expect(fs.existsSync(file)).toBe(false);
-    const old = InstanceLock.acquire(paths, "/repo/a");
+    const old = acquirePreM7Lock(paths, "/repo/a");
     old.release();
-    expect(() => InstanceLock.acquire(paths, "/repo/b")).toThrow(/already running/);
+    expect(() => acquirePreM7Lock(paths, "/repo/b")).toThrow(/already running/);
     locks.releaseAll();
-    InstanceLock.acquire(paths, "/repo/b").release();
+    acquirePreM7Lock(paths, "/repo/b").release();
   });
 
   it("refuses a repository whose lock a live pre-M7 server of another process holds, and never removes it", () => {

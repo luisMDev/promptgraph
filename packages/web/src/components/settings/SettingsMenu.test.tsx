@@ -101,6 +101,7 @@ describe("settings menu", () => {
     const user = userEvent.setup();
     useAppStore.setState({
       repo: {
+        id: "repo-0123abcd",
         path: "/tmp/repo",
         name: "repo",
         currentBranch: "main",

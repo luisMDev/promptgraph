@@ -68,17 +68,27 @@ describe("checkClaudeSetup", () => {
   // Fake `claude mcp get <name>`: exit 0 and details for the plugin name only, exit 1 otherwise.
   const GET_FAKE = `if [ "$1" = mcp ] && [ "$2" = get ] && [ "$3" = "plugin:promptgraph:promptgraph" ]; then echo "plugin:promptgraph:promptgraph:"; echo "  Status: connected"; exit 0; fi; echo "No MCP server named \"$3\"" >&2; exit 1`;
 
+  const cwd = process.cwd();
+
   it("detects a promptgraph MCP entry from the plugin", async () => {
-    expect(await checkClaudeSetup(fakeClaude(GET_FAKE))).toMatchObject({ claudeFound: true, mcpRegistered: true });
+    expect(await checkClaudeSetup({ env: fakeClaude(GET_FAKE), cwd })).toMatchObject({ claudeFound: true, mcpRegistered: true });
   });
 
   it("detects a promptgraph entry added by hand", async () => {
     const env = fakeClaude('if [ "$3" = promptgraph ]; then echo "promptgraph:"; exit 0; fi; exit 1');
-    expect(await checkClaudeSetup(env)).toMatchObject({ claudeFound: true, mcpRegistered: true });
+    expect(await checkClaudeSetup({ env, cwd })).toMatchObject({ claudeFound: true, mcpRegistered: true });
+  });
+
+  it("runs claude in the repository (local and project scopes depend on the directory)", async () => {
+    const { repo, cleanup } = createTempRepo();
+    cleanups.push(cleanup);
+    const env = fakeClaude(`if [ "$(pwd)" = "${repo}" ] && [ "$3" = promptgraph ]; then echo "promptgraph:"; exit 0; fi; exit 1`);
+    expect(await checkClaudeSetup({ env, cwd: repo })).toMatchObject({ mcpRegistered: true });
+    expect(await checkClaudeSetup({ env, cwd })).toMatchObject({ mcpRegistered: false });
   });
 
   it("reports when promptgraph is not configured", async () => {
-    const res = await checkClaudeSetup(fakeClaude('echo "No MCP server named \\"promptgraph\\"" >&2; exit 1'));
+    const res = await checkClaudeSetup({ env: fakeClaude('echo "No MCP server named \\"promptgraph\\"" >&2; exit 1'), cwd });
     expect(res).toMatchObject({ claudeFound: true, mcpRegistered: false });
     expect(res.output).toBe("No promptgraph MCP server is configured.");
   });
@@ -86,7 +96,7 @@ describe("checkClaudeSetup", () => {
   it("reports a missing claude binary without throwing", async () => {
     const { repo, cleanup } = createTempRepo();
     cleanups.push(cleanup);
-    const res = await checkClaudeSetup({ PG_CLAUDE_BIN: path.join(repo, "does-not-exist") });
+    const res = await checkClaudeSetup({ env: { PG_CLAUDE_BIN: path.join(repo, "does-not-exist") }, cwd: repo });
     expect(res).toMatchObject({ claudeFound: false, mcpRegistered: false });
   });
 });

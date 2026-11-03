@@ -1,10 +1,9 @@
 import { z } from "zod";
 
 /**
- * Discovery record of a running promptgraph server (§19.1), written by the server once it listens to
- * `<PG_HOME>/servers/<repo-key>.json` (mode 0600, removed on shutdown) and read by local clients such
- * as `promptgraph mcp`. It holds the per-start token, so it lives next to the state DB, readable by
- * the user only. A record whose pid is no longer alive is stale.
+ * Discovery record of a pre-M7 per-repository server (`<PG_HOME>/servers/<repo-key>.json`). Nothing writes
+ * it any more: the daemon only reads it to refuse starting while such a server runs and to delete stale
+ * ones (DESIGN §4.4).
  */
 export const ServerInfoSchema = z.object({
   version: z.literal(1),

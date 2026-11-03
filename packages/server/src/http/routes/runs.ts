@@ -1,37 +1,42 @@
 import { ListRunsQuerySchema, type ListRunsResponse, type OkResponse, type PendingResponse } from "@promptgraph/shared";
-import type { Hono } from "hono";
-import type { AppContext } from "../../app/context.js";
+import type { DaemonContext } from "../../daemon/context.js";
+import { REPO_PREFIX, repoOf, type App } from "../repo-scope.js";
 
-/** GET /api/runs · GET /api/runs/:id · GET /api/runs/:id/report · GET /api/runs/:id/lanes/:laneId/diff · POST /api/runs/:id/cancel · POST /api/runs/:id/resume · POST /api/runs/:id/cleanup · GET /api/pending */
-export function registerRunRoutes(app: Hono, ctx: AppContext): void {
-  app.get("/api/runs", (c) => {
+const P = REPO_PREFIX;
+
+/**
+ * Under /api/repos/:repoId: GET …/runs · GET …/runs/:id · GET …/runs/:id/report · GET …/runs/:id/lanes/:laneId/diff ·
+ * POST …/runs/:id/{cancel,resume,cleanup} · GET …/pending. Another repository's run ids are not_found (its engine owns them).
+ */
+export function registerRunRoutes(app: App, daemon: DaemonContext): void {
+  const { store } = daemon;
+  app.get(`${P}/runs`, (c) => {
     const query = ListRunsQuerySchema.parse(c.req.query());
-    const runs = ctx.store.listRuns({ repoPath: ctx.repo.path, graphId: query.graph, limit: query.limit });
+    const runs = store.listRuns({ repoPath: repoOf(c).repo.path, graphId: query.graph, limit: query.limit });
     return c.json<ListRunsResponse>({ runs });
   });
 
-  app.get("/api/runs/:id", (c) => c.json(ctx.engine.getRun(c.req.param("id"))));
-  app.get("/api/runs/:id/report", async (c) => c.json(await ctx.engine.getReport(c.req.param("id"))));
-  app.get("/api/runs/:id/lanes/:laneId/diff", async (c) => c.json(await ctx.engine.getLaneDiff(c.req.param("id"), c.req.param("laneId"))));
+  app.get(`${P}/runs/:id`, (c) => c.json(repoOf(c).engine.getRun(c.req.param("id"))));
+  app.get(`${P}/runs/:id/report`, async (c) => c.json(await repoOf(c).engine.getReport(c.req.param("id"))));
+  app.get(`${P}/runs/:id/lanes/:laneId/diff`, async (c) => c.json(await repoOf(c).engine.getLaneDiff(c.req.param("id"), c.req.param("laneId"))));
 
-  app.post("/api/runs/:id/cancel", async (c) => {
-    await ctx.engine.cancelRun(c.req.param("id"));
+  app.post(`${P}/runs/:id/cancel`, async (c) => {
+    await repoOf(c).engine.cancelRun(c.req.param("id"));
     return c.json<OkResponse>({ ok: true });
   });
 
-  app.post("/api/runs/:id/resume", async (c) => {
-    await ctx.engine.resumeRun(c.req.param("id"));
+  app.post(`${P}/runs/:id/resume`, async (c) => {
+    await repoOf(c).engine.resumeRun(c.req.param("id"));
     return c.json<OkResponse>({ ok: true });
   });
 
-  app.post("/api/runs/:id/cleanup", async (c) => {
-    await ctx.engine.cleanupRun(c.req.param("id"));
+  app.post(`${P}/runs/:id/cleanup`, async (c) => {
+    await repoOf(c).engine.cleanupRun(c.req.param("id"));
     return c.json<OkResponse>({ ok: true });
   });
 
-  app.get("/api/pending", (c) => {
-    const nodeRuns = ctx.store
-      .listNodeRunsByStatus(["waiting_approval"], { repoPath: ctx.repo.path });
+  app.get(`${P}/pending`, (c) => {
+    const nodeRuns = store.listNodeRunsByStatus(["waiting_approval"], { repoPath: repoOf(c).repo.path });
     return c.json<PendingResponse>({ nodeRuns });
   });
 }

@@ -79,8 +79,10 @@ describe("WsClient", () => {
 
   it("reconnects with backoff and restores subscriptions and attachments", () => {
     const client = new WsClient(() => "ws://test/ws");
+    client.subscribeRepo("demo-0123abcd");
     client.connect();
     FakeSocket.instances[0]!.open();
+    expect(FakeSocket.instances[0]!.sent).toEqual([{ type: "repo:subscribe", repoId: "demo-0123abcd" }]);
     client.subscribeRun("r1");
     const detach = client.attachPty("p1", () => undefined);
     FakeSocket.instances[0]!.close();
@@ -88,6 +90,7 @@ describe("WsClient", () => {
     const second = FakeSocket.instances[1]!;
     second.open();
     expect(second.sent).toEqual([
+      { type: "repo:subscribe", repoId: "demo-0123abcd" },
       { type: "subscribe", runId: "r1" },
       { type: "pty:attach", ptyId: "p1" },
     ]);

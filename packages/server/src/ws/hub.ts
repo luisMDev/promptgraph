@@ -2,7 +2,7 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { ClientMessageSchema, type ClientMessage, type ServerMessage } from "@promptgraph/shared";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { AppContext } from "../app/context.js";
+import type { DaemonContext } from "../daemon/context.js";
 import { VERSION } from "../config/version.js";
 import { isAuthorized, isLocalRequest } from "../http/auth.js";
 import { errorMessage } from "../util/text.js";
@@ -15,6 +15,8 @@ export const REPLAY_CHUNK_BYTES = 64 * 1024;
  */
 export const MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 const HEARTBEAT_MS = 30_000;
+/** repo:changed bursts (one per node transition) are coalesced into one repo:status per repository. */
+export const REPO_STATUS_DEBOUNCE_MS = 250;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 
 interface Client {
@@ -27,30 +29,40 @@ interface Client {
 }
 
 /**
- * WebSocket hub on /ws (§12.2, protocol in shared/ws.ts). Upgrade requires localhost Host/Origin and
- * isAuthorized(). On connect sends `hello`. Bus → clients: run:update and graphs:changed (with their
- * repoId) to all — one repository per server, so repo:subscribe/unsubscribe only maintain the client's set;
- * node:update/lane:update to subscribers of the run; pty:data (base64) / pty:exit to attached clients.
- * Client messages are validated with ClientMessageSchema; pty:attach replies pty:attached + replay;
- * pty:input → PtyManager.userInput (live only, else pty:error).
+ * WebSocket hub on /ws (DESIGN §12.2, protocol in shared/ws.ts), one per daemon. Upgrade requires
+ * localhost Host/Origin and isAuthorized() with the current token. On connect sends `hello`.
+ * Bus → clients: run:update and graphs:changed to clients subscribed to their repository
+ * (`repo:subscribe`, which also activates it); repo:changed debounced per repository into repo:status
+ * (RepoSummary) to every client; repo:removed to every client; node:update/lane:update to subscribers
+ * of the run; pty:data (base64) / pty:exit to attached clients. Client messages are validated with
+ * ClientMessageSchema; pty:attach replies pty:attached + replay; pty:input → PtyManager.userInput (live
+ * only, else pty:error).
  */
 export class WsHub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   private readonly clients = new Set<Client>();
   private readonly unsubscribe: Array<() => void> = [];
   private heartbeat: NodeJS.Timeout | null = null;
+  private readonly statusTimers = new Map<string, NodeJS.Timeout>();
   private server: Server | null = null;
   private readonly onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => this.upgrade(req, socket, head);
 
-  constructor(private readonly ctx: AppContext) {}
+  constructor(private readonly ctx: DaemonContext) {}
 
   attach(server: Server): void {
     this.server = server;
     server.on("upgrade", this.onUpgrade);
     const { bus } = this.ctx;
     this.unsubscribe.push(
-      bus.on("run:update", ({ repoId, run }) => this.broadcast({ type: "run:update", repoId, run }, () => true)),
-      bus.on("graphs:changed", ({ repoId, graphId }) => this.broadcast({ type: "graphs:changed", repoId, graphId }, () => true)),
+      bus.on("run:update", ({ repoId, run }) => this.broadcast({ type: "run:update", repoId, run }, (c) => c.repos.has(repoId))),
+      bus.on("graphs:changed", ({ repoId, graphId }) => this.broadcast({ type: "graphs:changed", repoId, graphId }, (c) => c.repos.has(repoId))),
+      bus.on("repo:changed", ({ repoId }) => this.scheduleStatus(repoId)),
+      bus.on("repo:removed", ({ repoId }) => {
+        clearTimeout(this.statusTimers.get(repoId));
+        this.statusTimers.delete(repoId);
+        for (const c of this.clients) c.repos.delete(repoId);
+        this.broadcast({ type: "repo:removed", repoId }, () => true);
+      }),
       bus.on("node:update", ({ nodeRun }) => this.broadcast({ type: "node:update", nodeRun }, (c) => c.runs.has(nodeRun.runId))),
       bus.on("lane:update", ({ lane }) => this.broadcast({ type: "lane:update", lane }, (c) => c.runs.has(lane.runId))),
       bus.on("pty:data", ({ ptyId, data }) =>
@@ -68,6 +80,8 @@ export class WsHub {
     for (const off of this.unsubscribe.splice(0)) off();
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    for (const t of this.statusTimers.values()) clearTimeout(t);
+    this.statusTimers.clear();
     for (const c of this.clients) c.ws.terminate();
     this.clients.clear();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
@@ -77,7 +91,7 @@ export class WsHub {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     if (pathname !== "/ws") return void rejectUpgrade(socket, 404, "Not Found");
     if (!isLocalRequest(req.headers.host, req.headers.origin, this.ctx.port)) return void rejectUpgrade(socket, 403, "Forbidden");
-    if (!isAuthorized(this.ctx.token, req)) return void rejectUpgrade(socket, 401, "Unauthorized");
+    if (!isAuthorized(this.ctx.getToken(), req)) return void rejectUpgrade(socket, 401, "Unauthorized");
     this.wss.handleUpgrade(req, socket, head, (ws) => this.connect(ws));
   }
 
@@ -108,6 +122,10 @@ export class WsHub {
     switch (msg.type) {
       case "repo:subscribe":
         client.repos.add(msg.repoId);
+        // Activation failures are reported in the repository's status (repo:status), not here.
+        this.ctx.registry.activate(msg.repoId).catch((err: unknown) => {
+          if (client.repos.has(msg.repoId)) this.send(client, { type: "error", message: errorMessage(err) });
+        });
         return;
       case "repo:unsubscribe":
         client.repos.delete(msg.repoId);
@@ -155,6 +173,17 @@ export class WsHub {
       const chunk = result.replay.subarray(off, off + REPLAY_CHUNK_BYTES);
       this.send(client, { type: "pty:data", ptyId, data: chunk.toString("base64") });
     }
+  }
+
+  private scheduleStatus(repoId: string): void {
+    if (this.statusTimers.has(repoId)) return;
+    const timer = setTimeout(() => {
+      this.statusTimers.delete(repoId);
+      const repo = this.ctx.registry.summary(repoId);
+      if (repo) this.broadcast({ type: "repo:status", repo }, () => true);
+    }, REPO_STATUS_DEBOUNCE_MS);
+    timer.unref();
+    this.statusTimers.set(repoId, timer);
   }
 
   private broadcast(msg: ServerMessage, to: (c: Client) => boolean): void {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Hono } from "hono";
+import type { Env, Hono } from "hono";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -23,11 +23,11 @@ const CONTENT_TYPES: Record<string, string> = {
 const NOT_BUILT_PAGE = `<!doctype html><meta charset="utf-8"><title>promptgraph</title>
 <p>The web UI has not been built. Run <code>pnpm build</code> (or <code>pnpm --filter @promptgraph/web dev</code> for development).</p>`;
 
-/** Paths owned by the API; never answered with the SPA. */
-const RESERVED = /^\/(api|hooks|ws)(\/|$)/;
+/** Paths owned by the daemon (API, hooks, WebSocket, sign-in); never answered with the SPA. */
+const RESERVED = /^\/(api|hooks|ws|login)(\/|$)/;
 
 /** Serves webDistDir() assets; unknown non-API GET paths fall back to index.html. Missing dist → 503 hint page. */
-export function registerStatic(app: Hono, distDir: string): void {
+export function registerStatic<E extends Env>(app: Hono<E>, distDir: string): void {
   const root = path.resolve(distDir);
   app.on(["GET", "HEAD"], "*", async (c, next) => {
     const pathname = safeDecode(new URL(c.req.url).pathname);

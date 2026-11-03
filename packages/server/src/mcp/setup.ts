@@ -58,12 +58,18 @@ const CHECK_TIMEOUT_MS = 15_000;
 /** Names promptgraph can be registered under: by `claude mcp add`, or by the plugin. */
 const PROMPTGRAPH_SERVER_NAMES = ["promptgraph", "plugin:promptgraph:promptgraph"] as const;
 
+export interface ClaudeCheckOptions {
+  env?: NodeJS.ProcessEnv;
+  /** The repository: `claude mcp add` registers at local scope by default, and local and project scopes depend on the directory. */
+  cwd: string;
+}
+
 /**
- * Looks the server up with `claude mcp get <name>`, which only reads the configuration (`claude mcp list`
- * health-checks every server and can take minutes). Exit 0 = listed, 1 = not listed.
+ * Looks the server up with `claude mcp get <name>` in the repository, which only reads the configuration
+ * (`claude mcp list` health-checks every server and can take minutes). Exit 0 = listed, 1 = not listed.
  */
-export async function checkClaudeSetup(env: NodeJS.ProcessEnv = process.env): Promise<ClaudeCheckResponse> {
-  const lookups = await Promise.all(PROMPTGRAPH_SERVER_NAMES.map((name) => getMcpServer(name, env)));
+export async function checkClaudeSetup({ env = process.env, cwd }: ClaudeCheckOptions): Promise<ClaudeCheckResponse> {
+  const lookups = await Promise.all(PROMPTGRAPH_SERVER_NAMES.map((name) => getMcpServer(name, env, cwd)));
   if (lookups.some((l) => l.kind === "missing-binary")) {
     return { claudeFound: false, mcpRegistered: false, output: "The claude command was not found on PATH." };
   }
@@ -75,9 +81,9 @@ export async function checkClaudeSetup(env: NodeJS.ProcessEnv = process.env): Pr
 
 type Lookup = { kind: "found"; output: string } | { kind: "not-found" } | { kind: "error"; output: string } | { kind: "missing-binary" };
 
-function getMcpServer(name: string, env: NodeJS.ProcessEnv): Promise<Lookup> {
+function getMcpServer(name: string, env: NodeJS.ProcessEnv, cwd: string): Promise<Lookup> {
   return new Promise((resolve) => {
-    execFile(claudeBin(env), ["mcp", "get", name], { env, timeout: CHECK_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(claudeBin(env), ["mcp", "get", name], { env, cwd, timeout: CHECK_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       const output = `${stdout}${stderr}`.trim();
       if (!err) return resolve({ kind: "found", output });
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return resolve({ kind: "missing-binary" });

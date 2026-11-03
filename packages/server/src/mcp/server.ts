@@ -7,7 +7,7 @@ import type { McpEnvironment } from "./connection.js";
 import { GRAPH_REFERENCE } from "./reference.js";
 import { registerTools, type ToolDeps } from "./tools.js";
 
-const MCP_INSTRUCTIONS = `promptgraph runs graphs of Claude Code steps (prompts, slash commands, shell, commit, PR, approval, merge, condition) on a local server, each parallel branch in its own git worktree.
+const MCP_INSTRUCTIONS = `promptgraph runs graphs of Claude Code steps (prompts, slash commands, shell, commit, PR, approval, merge, condition) on a local daemon, each parallel branch in its own git worktree.
 Workflow: server_status → (start_server) → graph_reference → save_graph → start_run → wait_for_run → get_run_report.
 Approvals and pull-request gates are approved by the user in the UI (open_ui), never through these tools. Confirm with the user before cancel_run, cleanup_run or delete_graph.`;
 
@@ -35,7 +35,7 @@ export async function runMcpStdio(opts: { cwd?: string; env?: NodeJS.ProcessEnv 
     env,
     paths: getPaths(env),
     // Re-run this same CLI (works from dist and from tsx in development).
-    serverCommand: { command: process.execPath, args: [...process.execArgv, process.argv[1]!] },
+    serverCommand: [process.execPath, ...process.execArgv, process.argv[1]!],
   };
   const server = createMcpServer({
     mcpEnv,

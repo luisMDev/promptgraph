@@ -1,6 +1,7 @@
 import {
   API,
   isFinalRunStatus,
+  webRoutes,
   type ApprovalInfoResponse,
   type DiffResponse,
   type GetGraphResponse,
@@ -9,7 +10,7 @@ import {
   type ListRunsResponse,
   type NodeRunResponse,
   type PendingResponse,
-  type RepoInfoResponse,
+  type ListReposResponse,
   type RunDetail,
   type RunReportResponse,
   type SaveGraphResponse,
@@ -19,8 +20,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { errorMessage, truncate } from "../util/text.js";
-import { ApiRequestError, type PromptgraphClient } from "./client.js";
-import { connect, findServer, resolveRepo, startBackgroundServer, type Connection, type McpEnvironment } from "./connection.js";
+import { DaemonVersionMismatch, findDaemon } from "../daemon/client.js";
+import { VERSION } from "../config/version.js";
+import { ApiRequestError } from "./client.js";
+import { connect, resolveRepo, startDaemonFor, type Connection, type McpEnvironment } from "./connection.js";
 import { GraphDraftError, normalizeGraphDraft } from "./draft.js";
 import { compactDiff, compactNodeRun, compactReport, compactRunDetail, compactRunSummary, latestAttempts, needsAttention } from "./format.js";
 import { GRAPH_REFERENCE, graphJsonSchema } from "./reference.js";
@@ -76,24 +79,37 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
   const { mcpEnv } = deps;
   const pollMs = deps.pollMs ?? 1500;
   const conn = (repo?: string): Promise<Connection> => connect(mcpEnv, repo);
-  const api = async (repo?: string): Promise<PromptgraphClient> => (await conn(repo)).client;
 
   // --- Server ---------------------------------------------------------------
 
   server.registerTool(
     "server_status",
     {
-      title: "promptgraph server status",
-      description: "Whether a promptgraph server is running for the repository, and its repo info (branches, supported node types, warnings). Call first.",
+      title: "promptgraph status",
+      description:
+        "Whether the promptgraph daemon is running (pid, version, port), whether this repository is registered with it, its repoId and its counters (running/paused runs, steps waiting). Call first.",
       inputSchema: repoArg,
       annotations: READ,
     },
     guarded(async ({ repo }) => {
       const repoPath = await resolveRepo(mcpEnv, repo);
-      const found = findServer(mcpEnv, repoPath);
-      if (!found) return json({ running: false, repoPath, hint: "Call start_server to start promptgraph in the background (no browser opens), then open_ui if the user wants to watch." });
-      const info = await found.client.get<RepoInfoResponse>(API.repo);
-      return json({ running: true, repoPath, url: found.client.baseUrl, pid: found.info.pid, startedAt: new Date(found.info.startedAt).toISOString(), repo: info });
+      const found = await findDaemon(mcpEnv.paths, { fetchImpl: mcpEnv.fetchImpl });
+      if (!found) {
+        return json({
+          running: false,
+          repoPath,
+          registered: false,
+          hint: "Call start_server to start the promptgraph daemon in the background (no browser opens), then open_ui if the user wants to watch.",
+        });
+      }
+      const version = mcpEnv.version ?? VERSION;
+      const base = { running: true, pid: found.info.pid, version: found.info.serverVersion, port: found.info.port, url: found.origin, repoPath };
+      if (found.info.serverVersion !== version) {
+        return json({ ...base, registered: false, versionMismatch: new DaemonVersionMismatch(found.info.serverVersion, version).message });
+      }
+      const { repos } = await found.client.get<ListReposResponse>(API.repos);
+      const status = repos.find((r) => r.path === repoPath);
+      return json(status ? { ...base, registered: true, repoId: status.id, status } : { ...base, registered: false, hint: "Any other tool registers this repository." });
     }),
   );
 
@@ -102,21 +118,25 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Start promptgraph",
       description:
-        "Starts `promptgraph <repo> --no-open` in the background (it keeps running after this session ends; stop it with Ctrl-C in a terminal or `kill <pid>`). No-op when one is already running.",
-      inputSchema: { ...repoArg, port: z.number().int().min(0).max(65535).optional().describe("Port on 127.0.0.1. Default: any free port.") },
+        "Starts the promptgraph daemon in the background when none runs (it keeps running after this session ends, for every repository; stop it with `promptgraph stop`), and registers this repository with it.",
+      inputSchema: {
+        ...repoArg,
+        port: z.number().int().min(0).max(65535).optional().describe("Port on 127.0.0.1, only used when this call starts the daemon. Default: its last port, else 4777, else any free port."),
+      },
       annotations: WRITE,
     },
     guarded(async ({ repo, port }) => {
-      const repoPath = await resolveRepo(mcpEnv, repo);
-      const started = await startBackgroundServer(mcpEnv, repoPath, { port });
-      const c = started.connection;
+      const { connection: c, daemon } = await startDaemonFor(mcpEnv, repo, { port });
       return json({
-        started: !started.alreadyRunning,
-        repoPath,
-        url: c.client.baseUrl,
-        pid: c.info.pid,
-        ...(started.logFile ? { logFile: started.logFile } : {}),
-        hint: "open_ui opens the canvas in the browser with the session token.",
+        started: daemon.started,
+        repoPath: c.repoPath,
+        repoId: c.repoId,
+        url: `${daemon.origin}${webRoutes.repo(c.repoId)}`,
+        pid: daemon.info.pid,
+        port: daemon.info.port,
+        ...(daemon.started ? { logFile: daemon.logFile } : {}),
+        ...(port !== undefined && !daemon.started && port !== daemon.info.port ? { warning: `The daemon was already running on port ${daemon.info.port}; port ${port} was not used.` } : {}),
+        hint: "open_ui opens this repository in the browser.",
       });
     }),
   );
@@ -125,19 +145,19 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     "open_ui",
     {
       title: "Open the promptgraph UI",
-      description: "Opens the promptgraph canvas in the user's browser, already authenticated. Use when the user wants to watch a run, answer a terminal prompt or approve a gate.",
+      description: "Opens this repository in promptgraph in the user's browser, signed in. Use when the user wants to watch a run, answer a terminal prompt or approve a gate.",
       inputSchema: repoArg,
       annotations: { ...WRITE, idempotentHint: true },
     },
     guarded(async ({ repo }) => {
       const c = await conn(repo);
-      const url = `${c.client.baseUrl}/?t=${encodeURIComponent(c.info.token)}`;
+      const url = `${c.daemon.origin}${webRoutes.repo(c.repoId)}`;
       try {
-        await deps.openUrl(url);
-        return json({ opened: true, url: c.client.baseUrl });
+        // Temporary page flow (?t=, replaced by one-time login codes): the credential never appears in the result.
+        await deps.openUrl(`${url}?t=${encodeURIComponent(c.daemon.token)}`);
+        return json({ opened: true, url });
       } catch (err) {
-        // The user owns this server; give them the link to open by hand.
-        return json({ opened: false, error: errorMessage(err), openThisUrl: url });
+        return json({ opened: false, url, error: errorMessage(err), hint: "Run `promptgraph open` in a terminal." });
       }
     }),
   );
@@ -160,7 +180,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "list_graphs",
     { title: "List graphs", description: "Graphs saved in the repository (.promptgraph/graphs).", inputSchema: repoArg, annotations: READ },
-    guarded(async ({ repo }) => json((await (await api(repo)).get<ListGraphsResponse>(API.graphs)).graphs)),
+    guarded(async ({ repo }) => {
+      const c = await conn(repo);
+      return json((await c.client.get<ListGraphsResponse>(c.api.graphs)).graphs);
+    }),
   );
 
   server.registerTool(
@@ -171,7 +194,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: { ...repoArg, graphId: graphIdArg },
       annotations: READ,
     },
-    guarded(async ({ repo, graphId }) => json(await (await api(repo)).get<GetGraphResponse>(API.graph(graphId)))),
+    guarded(async ({ repo, graphId }) => {
+      const c = await conn(repo);
+      return json(await c.client.get<GetGraphResponse>(c.api.graph(graphId)));
+    }),
   );
 
   server.registerTool(
@@ -190,9 +216,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     },
     guarded(async ({ repo, graph, layout }) => {
       const normalized = normalizeGraphDraft(graph, { layout });
-      const client = await api(repo);
-      const saved = await client.put<SaveGraphResponse>(API.graph(normalized.id), normalized);
-      const validation = await client.post<ValidateGraphResponse>(API.validate(saved.graph.id), { graph: saved.graph });
+      const c = await conn(repo);
+      const client = c.client;
+      const saved = await client.put<SaveGraphResponse>(c.api.graph(normalized.id), normalized);
+      const validation = await client.post<ValidateGraphResponse>(c.api.validate(saved.graph.id), { graph: saved.graph });
       return json({
         saved: true,
         graphId: saved.graph.id,
@@ -214,13 +241,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, graphId, graph }) => {
-      const client = await api(repo);
+      const c = await conn(repo);
+      const client = c.client;
       if (graph) {
         const draft = normalizeGraphDraft(graph);
-        return json(await client.post<ValidateGraphResponse>(API.validate(draft.id), { graph: draft }));
+        return json(await client.post<ValidateGraphResponse>(c.api.validate(draft.id), { graph: draft }));
       }
       if (!graphId) return fail("Pass graphId (a saved graph) or graph (a draft).");
-      return json(await client.post<ValidateGraphResponse>(API.validate(graphId)));
+      return json(await client.post<ValidateGraphResponse>(c.api.validate(graphId)));
     }),
   );
 
@@ -232,7 +260,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: { ...repoArg, graphId: graphIdArg },
       annotations: DESTRUCTIVE,
     },
-    guarded(async ({ repo, graphId }) => json(await (await api(repo)).delete(API.graph(graphId)))),
+    guarded(async ({ repo, graphId }) => {
+      const c = await conn(repo);
+      return json(await c.client.delete(c.api.graph(graphId)));
+    }),
   );
 
   server.registerTool(
@@ -244,7 +275,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, query }) => {
-      const { commands } = await (await api(repo)).get<ListCommandsResponse>(API.commands);
+      const c = await conn(repo);
+      const { commands } = await c.client.get<ListCommandsResponse>(c.api.commands);
       const q = query?.toLowerCase();
       const hits = q ? commands.filter((c) => `${c.name} ${c.description ?? ""}`.toLowerCase().includes(q)) : commands;
       return json({ total: hits.length, commands: hits.slice(0, 80).map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint, source: c.source })) });
@@ -264,7 +296,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: WRITE,
     },
     guarded(async ({ repo, graphId }) => {
-      const detail = await (await api(repo)).post<RunDetail>(API.startRun(graphId));
+      const c = await conn(repo);
+      const detail = await c.client.post<RunDetail>(c.api.startRun(graphId));
       return json(compactRunDetail(detail));
     }),
   );
@@ -278,8 +311,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, graphId, limit }) => {
+      const c = await conn(repo);
       const qs = new URLSearchParams({ limit: String(limit), ...(graphId ? { graph: graphId } : {}) });
-      const { runs } = await (await api(repo)).get<ListRunsResponse>(`${API.runs}?${qs}`);
+      const { runs } = await c.client.get<ListRunsResponse>(`${c.api.runs}?${qs}`);
       return json(runs.map(compactRunSummary));
     }),
   );
@@ -292,7 +326,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: { ...repoArg, runId: runIdArg },
       annotations: READ,
     },
-    guarded(async ({ repo, runId }) => json(compactRunDetail(await (await api(repo)).get<RunDetail>(API.run(runId))))),
+    guarded(async ({ repo, runId }) => {
+      const c = await conn(repo);
+      return json(compactRunDetail(await c.client.get<RunDetail>(c.api.run(runId))));
+    }),
   );
 
   server.registerTool(
@@ -311,10 +348,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, runId, until, timeoutSec }) => {
+      const c = await conn(repo);
       const started = Date.now();
       const deadline = started + timeoutSec * 1000;
       for (;;) {
-        const detail = await (await api(repo)).get<RunDetail>(API.run(runId));
+        const detail = await c.client.get<RunDetail>(c.api.run(runId));
         const status = detail.run.status;
         const stop =
           isFinalRunStatus(status) ||
@@ -345,7 +383,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, runId, nodeId, nodeRunId, iteration, maxChars }) => {
-      const detail = await (await api(repo)).get<RunDetail>(API.run(runId));
+      const c = await conn(repo);
+      const detail = await c.client.get<RunDetail>(c.api.run(runId));
       const picked = nodeRunId
         ? detail.nodeRuns.find((nr) => nr.id === nodeRunId)
         : latestAttempts(detail)
@@ -382,10 +421,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: WRITE,
     },
     guarded(async ({ repo, nodeRunId, action, reason }) => {
-      const client = await api(repo);
+      const c = await conn(repo);
+      const client = c.client;
       const hold = action === "hold" || action === "release";
       const body = hold ? { hold: action === "hold" } : action === "fail" ? { reason } : undefined;
-      const res = await client.post<NodeRunResponse>(API.nodeRunAction(nodeRunId, hold ? "hold" : action), body);
+      const res = await client.post<NodeRunResponse>(c.api.nodeRunAction(nodeRunId, hold ? "hold" : action), body);
       return json(compactNodeRun(res.nodeRun, undefined));
     }),
   );
@@ -406,10 +446,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, nodeRunId, scope, runId, laneId, maxChars }) => {
-      const client = await api(repo);
+      const c = await conn(repo);
+      const client = c.client;
       let diff: DiffResponse;
-      if (nodeRunId) diff = await client.get<DiffResponse>(API.diff(nodeRunId, scope));
-      else if (runId && laneId) diff = await client.get<DiffResponse>(API.laneDiff(runId, laneId));
+      if (nodeRunId) diff = await client.get<DiffResponse>(c.api.diff(nodeRunId, scope));
+      else if (runId && laneId) diff = await client.get<DiffResponse>(c.api.laneDiff(runId, laneId));
       else return fail("Pass nodeRunId (with scope), or runId and laneId.");
       return json(compactDiff(diff, maxChars));
     }),
@@ -423,7 +464,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: { ...repoArg, runId: runIdArg },
       annotations: READ,
     },
-    guarded(async ({ repo, runId }) => json(compactReport(await (await api(repo)).get<RunReportResponse>(API.runReport(runId))))),
+    guarded(async ({ repo, runId }) => {
+      const c = await conn(repo);
+      return json(compactReport(await c.client.get<RunReportResponse>(c.api.runReport(runId))));
+    }),
   );
 
   server.registerTool(
@@ -435,9 +479,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: DESTRUCTIVE,
     },
     guarded(async ({ repo, runId }) => {
-      const client = await api(repo);
-      await client.post(API.cancelRun(runId));
-      return json(compactRunSummary((await client.get<RunDetail>(API.run(runId))).run));
+      const c = await conn(repo);
+      const client = c.client;
+      await client.post(c.api.cancelRun(runId));
+      return json(compactRunSummary((await client.get<RunDetail>(c.api.run(runId))).run));
     }),
   );
 
@@ -450,9 +495,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: WRITE,
     },
     guarded(async ({ repo, runId }) => {
-      const client = await api(repo);
-      await client.post(API.resumeRun(runId));
-      return json(compactRunDetail(await client.get<RunDetail>(API.run(runId))));
+      const c = await conn(repo);
+      const client = c.client;
+      await client.post(c.api.resumeRun(runId));
+      return json(compactRunDetail(await client.get<RunDetail>(c.api.run(runId))));
     }),
   );
 
@@ -465,7 +511,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: DESTRUCTIVE,
     },
     guarded(async ({ repo, runId }) => {
-      await (await api(repo)).post(API.cleanupRun(runId));
+      const c = await conn(repo);
+      await c.client.post(c.api.cleanupRun(runId));
       return json({ ok: true, runId });
     }),
   );
@@ -481,7 +528,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo }) => {
-      const { nodeRuns } = await (await api(repo)).get<PendingResponse>(API.pending);
+      const c = await conn(repo);
+      const { nodeRuns } = await c.client.get<PendingResponse>(c.api.pending);
       return json(nodeRuns.map((nr) => ({ runId: nr.runId, ...compactNodeRun(nr, undefined) })));
     }),
   );
@@ -497,7 +545,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       annotations: READ,
     },
     guarded(async ({ repo, nodeRunId }) => {
-      const info = await (await api(repo)).get<ApprovalInfoResponse>(API.approval(nodeRunId));
+      const c = await conn(repo);
+      const info = await c.client.get<ApprovalInfoResponse>(c.api.approval(nodeRunId));
       return json({
         ...compactNodeRun(info.nodeRun, undefined),
         message: info.message,

@@ -1,19 +1,21 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { RepoInfoResponse } from "@promptgraph/shared";
+import type { DaemonInfoResponse, RepoInfoResponse } from "@promptgraph/shared";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { linearGraph, nodeRunOf, runDetailOf } from "./test-fixtures";
 
 const graph = linearGraph();
-const repo: RepoInfoResponse = { path: "/repo", name: "repo", currentBranch: "main", branches: ["main"], version: "0.1.0", phase: 1, warnings: [], supportedNodeTypes: ["prompt", "command", "shell", "commit"], notificationsAvailable: true };
+const repo: RepoInfoResponse = { id: "repo-0123abcd", path: "/repo", name: "repo", currentBranch: "main", branches: ["main"] };
+const daemon: DaemonInfoResponse = { version: "0.1.0", pid: 1, port: 4777, startedAt: 1, phase: 1, warnings: [], supportedNodeTypes: ["prompt", "command", "shell", "commit"], notificationsAvailable: true };
 
 vi.mock("./api/rest", async (orig) => {
   const actual = await orig<typeof import("./api/rest")>();
   return {
     ...actual,
     api: {
-      repo: async () => repo,
+      daemon: async () => daemon,
+      repoInfo: async () => repo,
       getSettings: async () => ({ notifications: true }),
       listGraphs: async () => ({ graphs: [{ id: "g1", name: "Graph 1", loadError: null, updatedAt: 1, hash: "h0" }] }),
       getGraph: async () => ({ graph, hash: "h0", modifiedOutside: true, activeRunId: null }),

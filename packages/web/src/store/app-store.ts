@@ -1,4 +1,13 @@
-import { nodeDisplayLabel, type AppSettings, type GraphListItem, type NodeRun, type RepoInfoResponse, type RunDetail, type SlashCommand } from "@promptgraph/shared";
+import {
+  nodeDisplayLabel,
+  type AppSettings,
+  type DaemonInfoResponse,
+  type GraphListItem,
+  type NodeRun,
+  type RepoInfoResponse,
+  type RunDetail,
+  type SlashCommand,
+} from "@promptgraph/shared";
 import { create } from "zustand";
 import { api, errorMessage } from "../api/rest";
 
@@ -21,9 +30,13 @@ export function pendingRunInfo(detail: RunDetail): PendingRunInfo {
   };
 }
 
+/** The shown repository (GET /api/repos/:repoId) with the daemon-wide data the views need (GET /api/daemon). */
+export type RepoView = RepoInfoResponse &
+  Pick<DaemonInfoResponse, "version" | "phase" | "warnings" | "supportedNodeTypes" | "notificationsAvailable">;
+
 /** App-wide data that is not tied to the edited graph or the selected run. */
 export interface AppState {
-  repo: RepoInfoResponse | null;
+  repo: RepoView | null;
   settings: AppSettings | null;
   graphs: GraphListItem[];
   /** null until first requested (lazy, for the command picker). */
@@ -59,7 +72,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   async boot() {
     try {
-      const [repo, settings, graphs] = await Promise.all([api.repo(), api.getSettings(), api.listGraphs()]);
+      const [daemon, info, settings, graphs] = await Promise.all([api.daemon(), api.repoInfo(), api.getSettings(), api.listGraphs()]);
+      const { version, phase, warnings, supportedNodeTypes, notificationsAvailable } = daemon;
+      const repo: RepoView = { ...info, version, phase, warnings, supportedNodeTypes, notificationsAvailable };
       set({ repo, settings, graphs: graphs.graphs, bootError: null });
     } catch (err) {
       set({ bootError: errorMessage(err) });

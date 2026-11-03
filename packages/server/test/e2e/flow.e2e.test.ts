@@ -1,12 +1,11 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GraphInput, RunDetail } from "@promptgraph/shared";
 import { waitFor } from "../helpers.js";
-import { createWorld, E2eServer, readClaudeLog, type E2eWorld } from "./harness.js";
+import { createWorld, E2eServer, readClaudeLog, spawnForegroundCli, type E2eWorld } from "./harness.js";
 
-const SERVER_ROOT = path.resolve(import.meta.dirname, "../..");
 
 /** Phase 2 end to end (§15): real shell + condition runners, fake claude, real git worktree. */
 describe("e2e: control flow (fake claude)", () => {
@@ -392,20 +391,11 @@ describe("e2e: control flow (fake claude)", () => {
     ) as GraphInput["nodes"];
     fs.writeFileSync(path.join(graphsDir, "tf.json"), JSON.stringify(g));
 
-    // First server: a separate process we can SIGKILL mid-loop (tsx as an in-process loader, see run.e2e).
-    const child = spawn(process.execPath, ["--import", "tsx", "--conditions=source", "src/cli/index.ts", w.repo, "--port", "0", "--no-open"], {
-      cwd: SERVER_ROOT,
-      env: w.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    cleanups.push(() => void child.kill("SIGKILL"));
-    let stdout = "";
-    child.stdout.on("data", (c: Buffer) => (stdout += c.toString()));
-    const url = new URL(await waitFor(() => /Open: (\S+)/.exec(stdout)?.[1], 20_000));
-    const base = `${url.protocol}//${url.host}`;
-    const auth = { authorization: `Bearer ${url.searchParams.get("t")}` };
-    const runId = ((await (await fetch(`${base}/api/graphs/tf/runs`, { method: "POST", headers: auth })).json()) as { run: { id: string } }).run.id;
-    const read = async () => (await (await fetch(`${base}/api/runs/${runId}`, { headers: auth })).json()) as RunDetail;
+    // First daemon: a separate `--foreground` process we can SIGKILL mid-loop.
+    const cli = await spawnForegroundCli(w, (fn) => cleanups.push(fn));
+    const child = cli.child;
+    const runId = ((await (await cli.fetch("POST", "/graphs/tf/runs")).json()) as { run: { id: string } }).run.id;
+    const read = async () => (await (await cli.fetch("GET", `/runs/${runId}`)).json()) as RunDetail;
     const end = Date.now() + 30_000;
     let before = await read();
     const hanging = () => before.nodeRuns.find((n) => n.nodeId === "fix" && n.iteration === 1 && n.status === "running" && n.sessionId);

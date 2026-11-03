@@ -39,7 +39,7 @@ export class PromptgraphClient {
     return this.request<T>("DELETE", path);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  protected async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}${path}`, {

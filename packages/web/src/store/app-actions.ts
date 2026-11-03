@@ -1,5 +1,5 @@
 import { createEmptyGraph, isFinalRunStatus, slugifyGraphId, type NodeRun, type ServerMessage, nodeDisplayLabel } from "@promptgraph/shared";
-import { ApiRequestError, api, errorMessage, onUnauthorized } from "../api/rest";
+import { ApiRequestError, api, currentRepoId, errorMessage, onUnauthorized } from "../api/rest";
 import { wsClient } from "../api/ws";
 import { enteredMergeConflict } from "../lib/run-view";
 import { useAppStore } from "./app-store";
@@ -259,14 +259,25 @@ export function handleServerMessage(msg: ServerMessage): void {
   }
 }
 
+function subscribeCurrentRepo(): Promise<void> {
+  return currentRepoId()
+    .then((id) => wsClient.subscribeRepo(id))
+    .catch(() => undefined);
+}
+
 /** Connects the shared socket and routes server messages into the stores. Returns teardown. */
 export function startLiveUpdates(): () => void {
   const offMsg = wsClient.onMessage(handleServerMessage);
   const offConn = wsClient.onConnection((c) => {
     useAppStore.getState().setConnected(c);
     if (!c && wsClient.stopped()) useAppStore.getState().setSessionExpired();
+    // Retried on every connection: a first resolution that failed (daemon unreachable, no repository
+    // yet) must not leave the page unsubscribed. subscribeRepo is idempotent.
+    if (c) void subscribeCurrentRepo();
   });
   const offAuth = onUnauthorized(() => useAppStore.getState().setSessionExpired());
+  // run:update and graphs:changed only reach subscribers of their repository (DESIGN §12.2).
+  void subscribeCurrentRepo();
   wsClient.connect();
   return () => {
     offMsg();

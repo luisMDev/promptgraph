@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { WsHub } from "../src/ws/hub.js";
 import { createTempRepo, tempDir, waitFor } from "./helpers.js";
-import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
+import { createTestDaemon, TEST_TOKEN, type TestDaemon } from "./support/test-daemon.js";
 import { sessionCookieValue } from "../src/hooks/hook-token.js";
 
 interface TestClient {
@@ -16,11 +16,16 @@ interface TestClient {
   next(pred: (m: ServerMessage) => boolean): Promise<ServerMessage>;
 }
 
-const REPO_ID = "repo-0123abcd";
+let REPO_ID: string;
 let server: Server;
 let hub: WsHub;
 let port: number;
-let setup: ReturnType<typeof createTestContext>;
+let daemon: TestDaemon;
+const setup = {
+  get ctx() {
+    return daemon.ctx;
+  },
+};
 let cleanups: Array<() => void>;
 const clients: WebSocket[] = [];
 
@@ -28,7 +33,8 @@ beforeEach(async () => {
   const r = createTempRepo();
   const t = tempDir();
   cleanups = [r.cleanup, t.cleanup];
-  setup = createTestContext(r.repo, t.dir);
+  daemon = await createTestDaemon({ root: t.dir, repos: [r.repo], mockEngines: true });
+  REPO_ID = daemon.repoIds[0]!;
   server = createServer((_req, res) => res.end());
   hub = new WsHub(setup.ctx);
   hub.attach(server);
@@ -38,10 +44,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const ws of clients.splice(0)) ws.terminate();
-  await setup.ctx.ptys.killAll();
   await hub.close();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  setup.ctx.store.db.close();
+  await daemon.close();
   for (const c of cleanups) c();
 });
 
@@ -80,43 +85,66 @@ describe("WsHub", () => {
     expect((await viaCookie.next((m) => m.type === "hello")).type).toBe("hello");
   });
 
-  it("broadcasts run updates to all and node updates to subscribers only", async () => {
+  it("sends run and graph updates to repository subscribers and node updates to run subscribers", async () => {
     const a = await connect();
     const b = await connect();
+    a.send({ type: "repo:subscribe", repoId: REPO_ID });
     a.send({ type: "subscribe", runId: "r1" });
     a.send({ type: "ping" });
     await a.next((m) => m.type === "pong");
 
     setup.ctx.bus.emit("run:update", { repoId: REPO_ID, run: summary("r1") });
+    setup.ctx.bus.emit("run:update", { repoId: "other-0123abcd", run: summary("r9") });
     setup.ctx.bus.emit("node:update", { nodeRun: nodeRun("n1", "r1") });
     setup.ctx.bus.emit("node:update", { nodeRun: nodeRun("n2", "r2") });
     setup.ctx.bus.emit("graphs:changed", { repoId: REPO_ID, graphId: "g" });
 
     await a.next((m) => m.type === "graphs:changed");
-    await b.next((m) => m.type === "graphs:changed");
     expect(a.messages.filter((m) => m.type === "node:update")).toEqual([{ type: "node:update", nodeRun: nodeRun("n1", "r1") }]);
-    expect(b.messages.some((m) => m.type === "node:update")).toBe(false);
-    expect(b.messages.find((m) => m.type === "run:update")).toMatchObject({ repoId: REPO_ID, run: { id: "r1" } });
-    expect(b.messages.find((m) => m.type === "graphs:changed")).toEqual({ type: "graphs:changed", repoId: REPO_ID, graphId: "g" });
+    expect(a.messages.filter((m) => m.type === "run:update")).toEqual([{ type: "run:update", repoId: REPO_ID, run: summary("r1") }]);
+    expect(a.messages.find((m) => m.type === "graphs:changed")).toEqual({ type: "graphs:changed", repoId: REPO_ID, graphId: "g" });
+    // b subscribed to nothing: a ping round trip proves the events were not merely late.
+    b.send({ type: "ping" });
+    await b.next((m) => m.type === "pong");
+    expect(b.messages.some((m) => m.type === "run:update" || m.type === "graphs:changed" || m.type === "node:update")).toBe(false);
 
     a.send({ type: "unsubscribe", runId: "r1" });
+    a.send({ type: "repo:unsubscribe", repoId: REPO_ID });
     a.send({ type: "ping" });
     await waitFor(() => a.messages.filter((m) => m.type === "pong").length === 2);
     setup.ctx.bus.emit("node:update", { nodeRun: nodeRun("n3", "r1") });
     setup.ctx.bus.emit("graphs:changed", { repoId: REPO_ID, graphId: "g2" });
-    await a.next((m) => m.type === "graphs:changed" && m.graphId === "g2");
+    a.send({ type: "ping" });
+    await waitFor(() => a.messages.filter((m) => m.type === "pong").length === 3);
     expect(a.messages.filter((m) => m.type === "node:update")).toHaveLength(1);
+    expect(a.messages.filter((m) => m.type === "graphs:changed")).toHaveLength(1);
   });
 
-  it("accepts repo:subscribe / repo:unsubscribe and rejects invalid repository ids", async () => {
+  it("repo:subscribe activates the repository; unknown and invalid ids are errors", async () => {
     const a = await connect();
     a.send({ type: "repo:subscribe", repoId: REPO_ID });
-    a.send({ type: "repo:unsubscribe", repoId: REPO_ID });
     a.send({ type: "ping" });
     await a.next((m) => m.type === "pong");
     expect(a.messages.some((m) => m.type === "error")).toBe(false);
+    a.send({ type: "repo:subscribe", repoId: "missing-0123abcd" });
+    expect(await a.next((m) => m.type === "error")).toMatchObject({ message: expect.stringContaining("missing-0123abcd") });
     a.send({ type: "repo:subscribe", repoId: "../x" });
-    await a.next((m) => m.type === "error");
+    await waitFor(() => a.messages.filter((m) => m.type === "error").length === 2);
+  });
+
+  it("debounces repo:changed into one repo:status for every client and sends repo:removed to every client", async () => {
+    const a = await connect();
+    const b = await connect();
+    for (let i = 0; i < 5; i++) setup.ctx.bus.emit("repo:changed", { repoId: REPO_ID });
+    const status = await b.next((m) => m.type === "repo:status");
+    expect(status).toMatchObject({ type: "repo:status", repo: { id: REPO_ID, active: true } });
+    await a.next((m) => m.type === "repo:status");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(b.messages.filter((m) => m.type === "repo:status")).toHaveLength(1);
+
+    await setup.ctx.registry.remove(REPO_ID);
+    expect(await a.next((m) => m.type === "repo:removed")).toEqual({ type: "repo:removed", repoId: REPO_ID });
+    await b.next((m) => m.type === "repo:removed");
   });
 
   it("attaches to a PTY with replay, live output, input and exit", async () => {

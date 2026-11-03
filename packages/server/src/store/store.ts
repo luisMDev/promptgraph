@@ -575,6 +575,11 @@ export class Store {
     return (this.db.prepare(`SELECT DISTINCT repo_path FROM runs ORDER BY repo_path`).all() as Array<{ repo_path: string }>).map((r) => r.repo_path);
   }
 
+  /** Every repo_path of graph meta rows (backfill normalises them, DESIGN §4.4). */
+  distinctGraphMetaRepoPaths(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT repo_path FROM graph_meta ORDER BY repo_path`).all() as Array<{ repo_path: string }>).map((r) => r.repo_path);
+  }
+
   /**
    * Moves runs and graph meta from `from` to `to` (backfill normalises paths to their realpath). A graph
    * meta row already present under `to` keeps the more recent hash. Returns the number of runs moved.

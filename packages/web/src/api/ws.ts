@@ -14,7 +14,8 @@ const MAX_BACKOFF_MS = 5000;
 
 /**
  * Single shared WebSocket to /ws with automatic reconnect (backoff ≤5s). On reconnect it re-sends
- * `subscribe` for subscribed runs and `pty:attach` for attached ptys. Messages are validated with
+ * `repo:subscribe` for subscribed repositories, `subscribe` for subscribed runs and `pty:attach` for
+ * attached ptys. Messages are validated with
  * ServerMessageSchema; invalid ones are dropped. Browsers hide the HTTP status of a refused upgrade, so
  * after a failed connect `checkSession` (a REST probe) tells a restarted server (401: the token of this
  * tab is gone) from a server that is down: on 401 it stops retrying (see stopped()).
@@ -24,6 +25,8 @@ export class WsClient {
   private readonly listeners = new Set<ServerMessageListener>();
   private readonly connectionListeners = new Set<ConnectionListener>();
   private readonly runs = new Set<string>();
+  /** Repositories subscribed with repo:subscribe (run:update and graphs:changed are scoped by them). */
+  private readonly repos = new Set<string>();
   private readonly ptys = new Map<string, PtyAttachment>();
   private backoff = 500;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -55,6 +58,7 @@ export class WsClient {
       this.opened = true;
       this.backoff = 500;
       this.setConnected(true);
+      for (const repoId of this.repos) this.rawSend({ type: "repo:subscribe", repoId });
       for (const runId of this.runs) this.rawSend({ type: "subscribe", runId });
       for (const [ptyId, a] of this.ptys) this.rawSend({ type: "pty:attach", ptyId, ...a.size });
     };
@@ -86,6 +90,17 @@ export class WsClient {
   onConnection(listener: ConnectionListener): () => void {
     this.connectionListeners.add(listener);
     return () => this.connectionListeners.delete(listener);
+  }
+
+  subscribeRepo(repoId: string): void {
+    if (this.repos.has(repoId)) return;
+    this.repos.add(repoId);
+    this.rawSend({ type: "repo:subscribe", repoId });
+  }
+
+  unsubscribeRepo(repoId: string): void {
+    if (!this.repos.delete(repoId)) return;
+    this.rawSend({ type: "repo:unsubscribe", repoId });
   }
 
   subscribeRun(runId: string): void {

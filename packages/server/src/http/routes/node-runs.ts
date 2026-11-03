@@ -7,43 +7,45 @@ import {
   type NodeRunResponse,
   type OkResponse,
 } from "@promptgraph/shared";
-import type { Context, Hono } from "hono";
-import type { AppContext } from "../../app/context.js";
+import type { Context } from "hono";
 import { readBody } from "../errors.js";
+import { REPO_PREFIX, repoOf, type App, type AppEnv } from "../repo-scope.js";
+
+const P = REPO_PREFIX;
 
 /**
- * POST /api/node-runs/:id/{done,fail,retry,skip,hold} · GET|POST /api/node-runs/:id/approval ·
- * GET /api/node-runs/:id/diff?scope=lane|node · POST /api/node-runs/:id/reopen · DELETE /api/ptys/:ptyId (reopened sessions)
+ * Under /api/repos/:repoId: POST …/node-runs/:id/{done,fail,retry,skip,hold} · GET|POST …/node-runs/:id/approval ·
+ * GET …/node-runs/:id/diff?scope=lane|node · POST …/node-runs/:id/reopen · DELETE …/ptys/:ptyId (reopened sessions)
  */
-export function registerNodeRunRoutes(app: Hono, ctx: AppContext): void {
-  const { engine } = ctx;
-  const respond = (c: Context, nodeRun: NodeRun) => c.json<NodeRunResponse>({ nodeRun });
+export function registerNodeRunRoutes(app: App): void {
+  const respond = (c: Context<AppEnv>, nodeRun: NodeRun) => c.json<NodeRunResponse>({ nodeRun });
+  const engine = (c: Context<AppEnv>) => repoOf(c).engine;
 
-  app.post("/api/node-runs/:id/done", async (c) => respond(c, await engine.done(c.req.param("id"))));
-  app.post("/api/node-runs/:id/retry", async (c) => respond(c, await engine.retry(c.req.param("id"))));
-  app.post("/api/node-runs/:id/skip", async (c) => respond(c, await engine.skip(c.req.param("id"))));
-  app.post("/api/node-runs/:id/fail", async (c) => {
+  app.post(`${P}/node-runs/:id/done`, async (c) => respond(c, await engine(c).done(c.req.param("id"))));
+  app.post(`${P}/node-runs/:id/retry`, async (c) => respond(c, await engine(c).retry(c.req.param("id"))));
+  app.post(`${P}/node-runs/:id/skip`, async (c) => respond(c, await engine(c).skip(c.req.param("id"))));
+  app.post(`${P}/node-runs/:id/fail`, async (c) => {
     const { reason } = await readBody(c, FailNodeRequestSchema);
-    return respond(c, await engine.fail(c.req.param("id"), reason));
+    return respond(c, await engine(c).fail(c.req.param("id"), reason));
   });
-  app.post("/api/node-runs/:id/hold", async (c) => {
+  app.post(`${P}/node-runs/:id/hold`, async (c) => {
     const { hold } = await readBody(c, HoldNodeRequestSchema);
-    return respond(c, await engine.setHold(c.req.param("id"), hold));
+    return respond(c, await engine(c).setHold(c.req.param("id"), hold));
   });
 
-  app.get("/api/node-runs/:id/approval", async (c) => c.json(await engine.getApprovalInfo(c.req.param("id"))));
-  app.post("/api/node-runs/:id/approval", async (c) => {
+  app.get(`${P}/node-runs/:id/approval`, async (c) => c.json(await engine(c).getApprovalInfo(c.req.param("id"))));
+  app.post(`${P}/node-runs/:id/approval`, async (c) => {
     const req = await readBody(c, ApprovalRequestSchema);
-    return respond(c, await engine.submitApproval(c.req.param("id"), req));
+    return respond(c, await engine(c).submitApproval(c.req.param("id"), req));
   });
 
-  app.get("/api/node-runs/:id/diff", async (c) => {
+  app.get(`${P}/node-runs/:id/diff`, async (c) => {
     const { scope } = DiffQuerySchema.parse(c.req.query());
-    return c.json(await engine.getDiff(c.req.param("id"), scope));
+    return c.json(await engine(c).getDiff(c.req.param("id"), scope));
   });
-  app.post("/api/node-runs/:id/reopen", async (c) => c.json(await engine.reopenSession(c.req.param("id"))));
-  app.delete("/api/ptys/:ptyId", (c) => {
-    engine.closeReopenedSession(c.req.param("ptyId"));
+  app.post(`${P}/node-runs/:id/reopen`, async (c) => c.json(await engine(c).reopenSession(c.req.param("id"))));
+  app.delete(`${P}/ptys/:ptyId`, (c) => {
+    engine(c).closeReopenedSession(c.req.param("ptyId"));
     return c.json<OkResponse>({ ok: true });
   });
 }
