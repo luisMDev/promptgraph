@@ -80,6 +80,10 @@ const faqs = [
     a: 'Yes. Each parallel branch gets its own git worktree and branch, forked from the state of the lane before it. Sessions never share a working directory. A merge node brings the lanes back together.',
   },
   {
+    q: 'Is promptgraph free and open source?',
+    a: 'Yes. promptgraph is released under the MIT license. You can use, modify and redistribute it, including in commercial work. You only pay for the Claude Code usage your own sessions consume.',
+  },
+  {
     q: 'Which platforms are supported?',
     a: 'Linux and WSL, with Node.js 22 or newer, git and a logged-in Claude Code. The GitHub CLI is optional and only needed for pull-request steps.',
   },
@@ -100,6 +104,7 @@ const jsonLd = [
     operatingSystem: 'Linux, Windows Subsystem for Linux',
     image: new URL(`${base}/og.png`, Astro.site).href,
     codeRepository: repo,
+    license: 'https://opensource.org/licenses/MIT',
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   },
   {
@@ -145,7 +150,7 @@ const jsonLd = [
   <main id="main">
     <section class="hero">
       <div class="container hero-inner">
-        <p class="pill"><span class="dot"></span> Local tool for Claude Code · Linux &amp; WSL</p>
+        <p class="pill"><span class="dot"></span> Open source (MIT) · Local tool for Claude Code · Linux &amp; WSL</p>
         <h1>Draw your Claude Code workflow. <span class="nowrap">Run it in parallel.</span></h1>
         <p class="lead">
           promptgraph turns prompts, slash commands, shell steps, commits, approvals and pull requests
@@ -388,7 +393,7 @@ promptgraph ~/code/my-app</code></pre>
     <section class="final">
       <div class="container narrow">
         <h2>Stop babysitting terminals. Draw the flow once.</h2>
-        <p>Your Claude Code workflow, as a graph you can run, watch and repeat.</p>
+        <p>Your Claude Code workflow, as a graph you can run, watch and repeat. Free and open source under the MIT license.</p>
         <div class="cta-row center">
           <a class="btn btn-primary" href={repo}>Get promptgraph on GitHub</a>
         </div>
@@ -407,6 +412,7 @@ promptgraph ~/code/my-app</code></pre>
         <a href={`${repo}/blob/main/docs/DESIGN.md`}>Design</a>
         <a href={`${repo}/tree/main/docs/examples`}>Examples</a>
         <a href={`${repo}/issues`}>Issues</a>
+        <a href={`${repo}/blob/main/LICENSE`}>MIT License</a>
       </nav>
       <p class="fine">Not affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
     </div>

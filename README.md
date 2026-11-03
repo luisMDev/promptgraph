@@ -326,3 +326,7 @@ PG_REAL_CLAUDE=1 pnpm test
 - [docs/SPIKE.md](docs/SPIKE.md): what was verified against the real Claude Code
 - [docs/examples/](docs/examples): example graphs
 - [docs/screenshots/](docs/screenshots): screenshots of the UI
+
+## License
+
+[MIT](LICENSE)
