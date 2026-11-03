@@ -148,13 +148,19 @@ export class WsClient {
     return this.refCounted(this.runs, runId, { type: "subscribe", runId }, { type: "unsubscribe", runId });
   }
 
-  /** Data listener receives decoded bytes; returns detach. */
+  /**
+   * Data listener receives decoded bytes; returns detach. A second listener on an attached PTY (two views of
+   * one node run) asks for the replay again, without a size: every view of it then resets on `pty:attached`
+   * and redraws from the replay, so the new one starts from the full output.
+   */
   attachPty(ptyId: string, onData: (bytes: Uint8Array) => void, size?: { cols: number; rows: number }): () => void {
     let a = this.ptys.get(ptyId);
     if (!a) {
       a = { listeners: new Set(), size };
       this.ptys.set(ptyId, a);
       this.rawSend({ type: "pty:attach", ptyId, ...size });
+    } else {
+      this.rawSend({ type: "pty:attach", ptyId });
     }
     a.listeners.add(onData);
     const attachment = a;

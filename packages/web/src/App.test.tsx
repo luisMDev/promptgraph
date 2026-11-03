@@ -9,6 +9,7 @@ import { useDaemonStore } from "./store/daemon-store";
 import { findEditorStore } from "./store/view/editor-store";
 import { FakeSocket, REPO, installFakeDaemon, resetGlobals, summaryOf, type FakeDaemon } from "./test-daemon";
 import { graphOf, linearGraph, nodeRunOf, runDetailOf } from "./test-fixtures";
+import { RoutedView } from "./views/RoutedView";
 
 // xterm needs a real canvas; the drawer's tabs are what these tests look at.
 vi.mock("./components/terminal/TerminalView", () => ({ TerminalView: ({ ptyId }: { ptyId: string }) => <div data-testid={`terminal-${ptyId}`} /> }));
@@ -41,7 +42,9 @@ function renderAt(path: string) {
   const navigations: { path: string; replace: boolean }[] = [];
   render(
     <MemoryLocationProvider initialPath={path} onNavigate={(p, o) => navigations.push({ path: p, replace: !!o?.replace })}>
-      <AppShell />
+      <AppShell>
+        <RoutedView />
+      </AppShell>
       <Where />
     </MemoryLocationProvider>,
   );

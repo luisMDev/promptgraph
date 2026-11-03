@@ -2,6 +2,7 @@ import { webRoutes } from "@promptgraph/shared";
 import { useState, type ReactNode } from "react";
 import { Button } from "../components/common/ui";
 import { errorMessage } from "../api/rest";
+import { useTabContext } from "../components/tabs/tab-context";
 import { Link } from "../lib/router/Link";
 import { useLocation } from "../lib/router/location";
 import { useDaemonStore, type RemovedRepo } from "../store/daemon-store";
@@ -42,11 +43,12 @@ export function NotFound({ what = "There is nothing at this address.", repoId }:
 }
 
 /**
- * A view of a repository that was removed (DESIGN §13.4): "Add again" registers the remembered path (same id,
- * so the view reloads), "Close" goes Home.
+ * A view of a repository that was removed (DESIGN §13.4): its tabs stay open; "Add again" registers the
+ * remembered path (same id, so the view reloads), "Close tab" closes the tab (outside tabs: goes Home).
  */
 export function RepoRemoved({ repo }: { repo: RemovedRepo }) {
   const { navigate } = useLocation();
+  const tab = useTabContext();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const addAgain = async () => {
@@ -71,8 +73,8 @@ export function RepoRemoved({ repo }: { repo: RemovedRepo }) {
         <Button size="sm" variant="primary" disabled={busy} onClick={() => void addAgain()}>
           Add again
         </Button>
-        <Button size="sm" onClick={() => navigate(webRoutes.home())}>
-          Close
+        <Button size="sm" onClick={() => (tab ? tab.close() : navigate(webRoutes.home()))}>
+          Close tab
         </Button>
       </div>
     </FullScreenMessage>

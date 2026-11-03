@@ -1,9 +1,11 @@
-import { webRoutes } from "@promptgraph/shared";
+import { nodeDisplayLabel, webRoutes } from "@promptgraph/shared";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { repoApi } from "../api/rest";
 import { wsClient } from "../api/ws";
+import { useTabContext } from "../components/tabs/tab-context";
 import { useLocation } from "../lib/router/location";
+import { tabTitleFromData } from "../lib/tabs/titles";
 import { routeRunId, type RepoRoute } from "../lib/router/routes";
 import { useDaemonStore } from "../store/daemon-store";
 import { dispatcher } from "../store/live";
@@ -21,8 +23,10 @@ import { Workspace } from "./Workspace";
  * shows, its repository subscription, and the route applied to those stores (graph opened, run selected and
  * subscribed, node run shown). Mounted per repository; the route inside it changes freely.
  */
-export function RepoView({ route, active = true }: { route: RepoRoute; active?: boolean }) {
+export function RepoView({ route, active: activeProp }: { route: RepoRoute; active?: boolean }) {
   const { repoId } = route;
+  const tab = useTabContext();
+  const active = activeProp ?? tab?.active ?? true;
   const [own] = useState(() => ({ api: repoApi(repoId), run: createRunStore(repoId), ui: createViewUiStore() }));
   const cache = getRepoCache(repoId);
   const info = useRepoCache(repoId, (s) => s.info);
@@ -55,6 +59,38 @@ export function RepoView({ route, active = true }: { route: RepoRoute; active?: 
     if (target) return <Redirect to={webRoutes.graph(repoId, target)} />;
   }
   return <RouteViews route={route} own={own} active={active} />;
+}
+
+/**
+ * Tells the view's tab what it shows (DESIGN §13.4): its title, derived from the run and repository data
+ * (persisted with the tab, so unmounted tabs keep it), and its editor store (dirty views are never evicted).
+ */
+function useReportToTab(route: RepoRoute, run: RunStoreApi, editor: EditorStoreApi): void {
+  const tab = useTabContext();
+  const { repoId } = route;
+  const runId = routeRunId(route);
+  const nodeRunId = route.kind === "nodeRun" ? route.nodeRunId : null;
+  const repoName = useRepoCache(repoId, (s) => s.info?.name ?? null);
+  const graphs = useRepoCache(repoId, (s) => s.graphs);
+  const graphName = useStore(run, (s) => (s.detail && s.detail.run.id === runId ? s.detail.run.graphName : null));
+  const shortId = useStore(run, (s) => (s.detail && s.detail.run.id === runId ? s.detail.run.shortId : null));
+  const nodeLabel = useStore(run, (s) => {
+    if (!nodeRunId || !s.detail || s.detail.run.id !== runId) return null;
+    const nodeId = s.detail.nodeRuns.find((n) => n.id === nodeRunId)?.nodeId;
+    const node = nodeId ? s.detail.run.graphSnapshot.nodes.find((n) => n.id === nodeId) : undefined;
+    return node ? nodeDisplayLabel(node) : null;
+  });
+  const title = tabTitleFromData(route, { repoName, graphs, run: graphName !== null && shortId !== null ? { graphName, shortId } : null, nodeLabel });
+  const setTitle = tab?.setTitle;
+  useEffect(() => {
+    if (setTitle && title) setTitle(title);
+  }, [setTitle, title]);
+  const reportEditor = tab?.reportEditor;
+  useEffect(() => {
+    if (!reportEditor) return;
+    reportEditor(editor);
+    return () => reportEditor(null);
+  }, [reportEditor, editor]);
 }
 
 function Redirect({ to }: { to: string }) {
@@ -95,6 +131,7 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
   const runGraphId = useStore(own.run, (s) => (runId ? (s.detail?.run.id === runId ? s.detail.run.graphId : (s.runs.find((r) => r.id === runId)?.graphId ?? null)) : null));
   const graphId = routeGraphId ?? runGraphId;
   const editor = useEditorSlot(repoId, graphId);
+  useReportToTab(route, own.run, editor);
   const stores: ViewStores = useMemo(() => ({ repoId, ...own, editor, active }), [repoId, own, editor, active]);
   const view: View = useMemo(() => ({ ...stores, navigate: location.navigate, openInNewTab: location.openInNewTab }), [stores, location.navigate, location.openInNewTab]);
 

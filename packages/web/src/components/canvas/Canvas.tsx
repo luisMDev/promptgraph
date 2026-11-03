@@ -319,7 +319,8 @@ function useReadableFit() {
 
 /**
  * Fits once the nodes are measured (when `fitOnInit`), and again (debounced) whenever the canvas changes
- * size with the window, the terminal drawer or the side panels — unless the user moved the viewport.
+ * size with the window, the terminal drawer or the side panels, and at once when its hidden tab is shown
+ * again (DESIGN §13.4) — unless the user moved the viewport.
  */
 function AutoFit({ manual, fitOnInit }: { manual: RefObject<boolean>; fitOnInit: boolean }) {
   const width = useStore((s) => s.width);
@@ -335,10 +336,20 @@ function AutoFit({ manual, fitOnInit }: { manual: RefObject<boolean>; fitOnInit:
     fit();
   }, [fitOnInit, initialized, width, height, fit]);
 
+  // Shown again after its tab was hidden (a hidden view measures 0×0): refit at once, unless the user moved.
+  const measuredBefore = useRef(false);
   useEffect(() => {
     const prev = last.current;
     last.current = { width, height };
-    if (!prev || prev.width === 0 || (prev.width === width && prev.height === height) || manual.current) return;
+    if (!width || !height) return;
+    const shownAgain = measuredBefore.current && prev !== null && (prev.width === 0 || prev.height === 0);
+    measuredBefore.current = true;
+    if (manual.current || !prev) return;
+    if (shownAgain) {
+      fit();
+      return;
+    }
+    if (prev.width === 0 || (prev.width === width && prev.height === height)) return;
     const timer = setTimeout(() => fit(FIT_ANIMATION_MS), REFIT_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [width, height, manual, fit]);

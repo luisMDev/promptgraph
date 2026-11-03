@@ -440,8 +440,10 @@ function makeScenes({ api, page, outDir, server }) {
       await shot("m6-run-finished.png");
 
       await clickNode("test");
-      await page.getByRole("tablist", { name: "Loop iterations" }).waitFor();
-      await page.getByRole("tab", { name: "#1" }).click();
+      const iterations = page.getByRole("tablist", { name: "Loop iterations" });
+      await iterations.waitFor();
+      // Scoped: the app's tab strip has tabs too ("<graph> #<shortId>").
+      await iterations.getByRole("tab", { name: "#1" }).click();
       await page.getByText("Previous iteration: read-only.").waitFor();
       await page.getByText(/Run tests #1/).first().waitFor();
       await shot("m6-iteration-selector.png");

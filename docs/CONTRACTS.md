@@ -768,16 +768,30 @@ recent attach/resize drives PTY size.
 ## 9. Web (`packages/web/src`)
 
 ```
-main.tsx, App.tsx, index.css     shell (Tailwind v4 via @tailwindcss/vite; status colour tokens in @theme). App = WindowLocationProvider
-                                 + AppShell (boots daemon info/repos/settings, startLiveUpdates, SessionBanners, routes, Toasts)
+main.tsx, App.tsx, index.css     shell (Tailwind v4 via @tailwindcss/vite; status colour tokens in @theme). App = syncTabHistory +
+                                 installKeymap (effect) + AppShell({strip: TabStrip, children: TabViews}); AppShell boots daemon
+                                 info/repos/settings and startLiveUpdates, then renders strip, SessionBanners, children, Toasts
 lib/router/routes.ts             Route = home | repo | graph | run | nodeRun | report | notFound; parseRoute(path), routeHref(route)
                                  (via shared webRoutes), routeRunId, isRepoRoute. Pure
-lib/router/location.tsx          LocationContext {path, navigate(path, {replace?}), openInNewTab(path, {activate})};
-                                 WindowLocationProvider (history + popstate; openInNewTab = window.open(path, "_blank", "noopener")),
-                                 MemoryLocationProvider (tests); useLocation, useNavigate, useRoute
+lib/router/location.tsx          LocationContext {path, navigate(path, {replace?}), openInNewTab(path, {activate})} (a tab's location,
+                                 provided by TabViews); MemoryLocationProvider (tests); useLocation, useNavigate, useRoute
 lib/router/Link.tsx              <Link to replace?>: real <a href>; plain click → navigate, Ctrl/Cmd or middle click → background tab,
                                  Ctrl/Cmd+Shift → foreground tab, Shift/Alt alone → browser default; onClick runs first
                                  (preventDefault cancels). linkClickAction(event) is the pure decision
+lib/keymap.ts                    resolveKey(event, {desktop, terminalFocused}) → KeyAction | null (pure; DESIGN §13.4 table; event.code;
+                                 AltGraph → null; with a terminal focused only next/prev), terminalHasFocus (focus inside `.xterm`),
+                                 installKeymap(window, {desktop, onAction}) (keydown, capture phase; a handled key is prevented and
+                                 stopped; auto-repeat only for Tab/PageUp/PageDown)
+lib/desktop.ts                   isDesktopWindow() → false (stub until the desktop bridge of §12.5)
+lib/tabs/history.ts              syncTabHistory(store, window) → teardown: initial replaceState; pushState {tabId, path} for a
+                                 non-replace `lastNavigation` of the active tab whose path changed; replaceState for every other change
+                                 of the active tab or its path; popstate → applyHistory(tabId, path) when the tab exists, else
+                                 replaceState(active tab) (closed tab: skipped); an entry without state → open(window URL, activate)
+lib/tabs/keep-alive.ts           MAX_MOUNTED = 6; planMounted(mounted, {tabIds, activeId, mru, pinned, max?}) (pure: add the active
+                                 view, drop closed tabs, evict least recently used beyond max except the active and pinned ones)
+lib/tabs/titles.ts               deriveTabTitle(route, {repoName, graphs, run {graphName, shortId}, nodeLabel}, persisted?),
+                                 tabTitleFromData (null without data), routeShapeTitle (Home, Repository, Graph, Run, Step, Report,
+                                 Not found)
 lib/version.ts                   BUILD_VERSION (vite define __PG_VERSION__ = packages/server/package.json version; null in unit tests)
 lib/vite-proxy-guard.ts          proxyGuard({host, origin}, {allowedHosts, port}) → null | reason (403), used by vite.config.ts
 api/rest.ts                      daemonApi {daemon, repos, addRepo, removeRepo(id, force), getSettings, updateSettings},
@@ -785,6 +799,12 @@ api/rest.ts                      daemonApi {daemon, repos, addRepo, removeRepo(i
                                  onUnauthorized (any 401), sessionValid. No credential of its own (same-origin cookie); graph PUTs
                                  use keepalive (≤ 60 kB) so a pagehide flush survives the page
 api/ws.ts                        WsClient({url?, checkSession?, buildVersion?, unreachableAfterMs?}), wsClient (the page's socket)
+store/tabs-store.ts              createTabsStore({session, local, initialPath?}) (zustand vanilla), tabsStore() (the page's, from
+                                 window storages + URL), setTabsStore (tests), useTabs, activeTab, runTabAction(store, KeyAction),
+                                 parsePersistedTabs, tabPath (isSafeNextPath + normalizePath, else "/"). State {tabs: Tab {id, path,
+                                 title?}[], activeId, mru, closed: {path, title?, index}[] (≤ 10), lastNavigation {tabId, path,
+                                 replace} | null}; actions open(path, {activate, dedupe = true}) → id, close, activate, navigate(id,
+                                 path, {replace?}), applyHistory(id, path), next(±1), goto(index | "last"), reopenClosed, setTitle
 store/toast-store.ts             useToastStore {toasts, toast, dismiss} (the sequence counter lives in the store), toast()
 store/daemon-store.ts            useDaemonStore: info, repos (sorted by last opened; live from repo:status / repo:removed), settings,
                                  connection, signedOut, versionMismatch, removed {id, path, name}; addRepo, markRemoved, applyWsStatus
@@ -805,16 +825,33 @@ store/view/actions.ts            view workflows: createGraph, deleteGraph, start
                                  lastGraphKey/rememberGraph/lastGraphId (localStorage `pg.lastGraph.<repoId>`)
 store/view/test-view.tsx         createTestView(opts) → stores + repo cache + memory location (navigations, newTabs) + render()
 views/HomeView.tsx               Home (DESIGN §13.3)
-views/RepoView.tsx               one view of a repository: own run + UI stores, shared editor store, repo subscription, route sync
+views/RoutedView.tsx             the view of the location: Home, NotFound, or RepoRoot (RepoRemoved while removed, else RepoView)
+views/RepoView.tsx               one view of a repository: own run + UI stores, shared editor store, repo subscription, route sync;
+                                 active from the TabContext (prop overrides; true outside tabs); reports its title and editor to the tab
 views/Workspace.tsx              editor / run layout (header, sidebars, canvas, drawer, dialogs); report route replaces the canvas row
-views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRemoved (Add again / Close)
+views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRemoved (Add again / Close tab; outside tabs: Home)
+components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End; Enter/Space activate, Delete closes); per tab: title,
+                                 attention dot ("Needs attention"), × ("Close <title>"); middle-click closes; "+" (New tab) opens Home
+                                 without dedupe; overflow-x scroll with the active tab scrolled into view; flex-1 spacer
+                                 `[data-pg-tabstrip-spacer]` and a `windowControls` slot (desktop, §12.5); document.title follows the
+                                 active tab (`<title> · promptgraph`, `promptgraph` for Home)
+components/tabs/TabViews.tsx     one `[data-tab-view=<id>]` per mounted tab (planMounted; starts with the active one only), inactive
+                                 ones `hidden` + `inert`; each provides LocationContext over its tab (navigate → tabs.navigate,
+                                 openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving
+components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, reportEditor}; useTabContext() (null outside tabs)
+components/tabs/use-tab-title.ts useTabTitle(tab) (daemon summary name or cache info name, cache graphs, persisted title),
+                                 useTabAttention(tab) (repo summary waiting.approval + waiting.input > 0), useLoadTabRepos(tabs)
+                                 (repo cache load() for every repository with a tab, removed ones skipped)
 components/common/SessionBanners Reconnecting / Unreachable / version banners, SignedOut full screen
 components/header/               graph selector (links), Run/Cancel, pending approvals (links), run selector (links), run cost total
 components/palette/              draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
 components/canvas/               React Flow canvas: snap grid, minimap, edge creation (error/true/false ports in phase 2), read-only in run mode
 components/nodes/                node cards: status colour (§8.2), elapsed time, activity, lane badge, tokens/cost, validation outline + tooltip
 components/inspector/            node config forms; run mode: NodeRun details (output, session, branch, timings, error, usage) + controls
-components/terminal/             drawer with tabs; xterm + fit + web-links; live or replayed; "Reopen session"
+components/terminal/             drawer with tabs; xterm + fit + web-links; live or replayed; "Reopen session". TerminalView: the
+                                 Terminal is created at mount, opened (and fitted) on its first visible render only; attaches without a
+                                 size while hidden; never fits, focuses, sends pty:input or pty:resize while hidden; when shown it
+                                 refits and resizes the PTY if its known size (pty:attached, own resizes) differs
 components/history/              run history list (status, duration, cost; rows and Report are links), cleanup action
 components/approval/             approval dialog: message, diff2html diff, predecessor outputs, PR title/body edit, approve/reject
 components/settings/             app settings (notifications toggle) + graph settings form
@@ -860,6 +897,26 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   the status of a refused upgrade). `startLiveUpdates` maps a REST 401 (`onUnauthorized`) to `setSignedOut` +
   `client.signOut()` and installs the `pagehide` → `flushAllEditors` listener.
 - Datalist ids (models, commands) use `useId`, so several mounted views never share an id.
+- WsClient.attachPty: a second listener on an attached PTY (two views of one node run) sends `pty:attach` again
+  without a size; every view of it resets on `pty:attached` and redraws from the replay. The PTY is detached when its
+  last listener detaches.
+
+**Tabs (M8, DESIGN §13.4):**
+- Storage: `sessionStorage["pg.tabs.v1"]` (this window) and `localStorage["pg.tabs.last.v1"]` (mirror; read once at
+  start as a seed when the session has none) hold `{version: 1, tabs: [{id, path, title?}], activeId, mru: [id]}`,
+  validated by a local zod schema (1–30 tabs, unique ids, safe paths; a missing active id or incomplete MRU list is
+  repaired; anything else → one Home tab). Written on every change (identical JSON skipped); the closed stack and
+  `lastNavigation` are not persisted. The initial window URL is `open(url, {activate: true})`.
+- `open` dedupes on `normalizePath`; `/r/<repoId>` reuses the MRU tab of that repository; new tabs are appended;
+  background tabs go to the end of the MRU list. More than 30 tabs: the least recently used non-active one is moved to
+  the closed stack. `close` of the active tab activates its right neighbour (else the left one); the last tab becomes
+  a new Home tab. `reopenClosed` reinserts at the old index (with its title) and activates. `navigate` drops the title.
+- Keep-alive and gating: hidden views keep run subscriptions (ref-counted in WsClient), repo subscriptions, dispatcher
+  registration and PTY attachments. React Flow gets `null` delete/selection/multi-selection key codes while hidden;
+  `AutoFit` refits at once when the canvas measures non-zero again after a zero size (tab shown), unless the user moved
+  the viewport. `useAutoOpenReport` only follows in the active view.
+- Titles: the strip derives from data (repo cache, daemon summaries) and falls back to `Tab.title`, then the route
+  shape; a mounted RepoView sets `Tab.title` whenever its data yields a title (run titles come only from there).
 - Vite dev proxy (`vite.config.ts`): `/api`, `/login`, `/ws` to `PG_DEV_PORT` (then `PG_PORT`, default 4777);
   `server.allowedHosts: ["127.0.0.1", "localhost"]`; the proxy `bypass` runs `proxyGuard` (Host = allowed name on vite's
   own port, Origin absent or equal to `http://<Host>`), else 403 (HTTP response, or `HTTP/1.1 403` written on the
@@ -1030,12 +1087,10 @@ folded into §2, §4, §8 and §11; the first part of §12.5 (web) into §9.
 
 ### 12.5 Web
 
-The router, per-view stores, repo cache, daemon/toast stores, API factories and the vite proxy are implemented and
-folded into §9. Pending:
+The router, per-view stores, repo cache, daemon/toast stores, API factories, the vite proxy, the tabs store, tab views
+and strip, history sync and keymap are implemented and folded into §9. Pending:
 
-- `store/tabs-store.ts` (after views): `Tab {id, path, title?}`, `TabsState {tabs, activeId, mru, closed}`, actions `open(path, {activate})` (dedupe on `normalizePath`; `/r/<id>` → MRU tab of that repo), `close(id)`, `activate(id)`, `navigate(id, path, {replace?})`, `next(dir)`, `goto(index | "last")`, `reopenClosed()`; persisted `sessionStorage["pg.tabs.v1"]` and mirrored to `localStorage["pg.tabs.last.v1"]` (seed only) as `{version: 1, tabs, activeId, mru}` (≤ 30 tabs, ≤ 6 mounted, LRU by `mru`, dirty editors never evicted, only the active tab mounts at load).
-- `lib/keymap.ts`: `resolveKey(event, {desktop, terminalFocused}) → KeyAction | null` with `KeyAction = newTab | closeTab | reopenClosed | nextTab | prevTab | gotoTab(n) | lastTab`; matches `event.code`; ignores `AltGraph`; in terminals only tab switching.
-- `lib/desktop.ts`: `DesktopBridge {isDesktop, customTitleBar, minimize, toggleMaximize, isMaximized, close, startResizeDragging(dir), setTitle, openExternal(url), relogin(next)}`, `getDesktopBridge()` (inert outside Tauri); `installExternalLinkHandler(bridge)` (desktop only).
+- `lib/desktop.ts`: `DesktopBridge {isDesktop, customTitleBar, minimize, toggleMaximize, isMaximized, close, startResizeDragging(dir), setTitle, openExternal(url), relogin(next)}`, `getDesktopBridge()` (inert outside Tauri); `installExternalLinkHandler(bridge)` (desktop only). It replaces the `isDesktopWindow()` stub; the tab strip's spacer becomes the drag region and `windowControls` the window buttons.
 
 ### 12.6 Desktop (`packages/desktop`)
 

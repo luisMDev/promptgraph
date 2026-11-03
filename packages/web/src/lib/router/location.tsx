@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { parseRoute, type Route } from "./routes";
 
 export interface NavigateOptions {
@@ -12,8 +12,9 @@ export interface OpenInNewTabOptions {
 }
 
 /**
- * The location of a view (DESIGN §13.2): the window's location before in-app tabs exist, a tab's location
- * after. Components read and change it only through this context, never through `window.location`.
+ * The location of a view (DESIGN §13.2): its tab's path (`components/tabs/TabViews`), or a memory location in
+ * tests. Components read and change it only through this context, never through `window.location`; the
+ * window URL follows the active tab (`lib/tabs/history`).
  */
 export interface LocationValue {
   path: string;
@@ -22,32 +23,6 @@ export interface LocationValue {
 }
 
 export const LocationContext = createContext<LocationValue | null>(null);
-
-function windowPath(): string {
-  const { pathname, search, hash } = window.location;
-  return pathname + search + hash;
-}
-
-/** The window's history as the location (popstate re-applies it). */
-export function WindowLocationProvider({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(windowPath);
-  useEffect(() => {
-    const onPop = () => setPath(windowPath());
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-  const navigate = useCallback((to: string, opts?: NavigateOptions) => {
-    if (opts?.replace) window.history.replaceState(null, "", to);
-    else if (to !== windowPath()) window.history.pushState(null, "", to);
-    setPath(windowPath());
-  }, []);
-  const openInNewTab = useCallback((to: string) => {
-    // A browser decides itself whether the new tab is in the foreground.
-    window.open(to, "_blank", "noopener");
-  }, []);
-  const value = useMemo(() => ({ path, navigate, openInNewTab }), [path, navigate, openInNewTab]);
-  return <LocationContext.Provider value={value}>{children}</LocationContext.Provider>;
-}
 
 /** In-memory location (tests). `onOpenInNewTab` records new-tab requests. */
 export function MemoryLocationProvider({

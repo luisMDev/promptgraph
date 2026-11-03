@@ -381,8 +381,9 @@ function ReportSection({ title, children }: { title: string; children: ReactNode
 }
 
 /**
- * Opens the report when the run shown on the canvas finishes while you watch (or come back to the tab): the
- * moment to see what happened. Only the active view follows (DESIGN §13.4), and only from the run's own views.
+ * Opens the report when the run shown on the canvas finishes while you watch: the moment to see what happened.
+ * Only the active view follows (DESIGN §13.4), and only from the run's own views: a run that finishes while its
+ * tab is hidden stays on the canvas when you come back to it.
  */
 export function useAutoOpenReport(route: RepoRoute): void {
   const view = useView();

@@ -187,4 +187,26 @@ describe("WsClient", () => {
     expect(chunks).toEqual(["héllo"]);
     expect(received.map((m) => m.type)).toEqual(["pty:data", "pty:data"]);
   });
+
+  it("a second view of an attached PTY asks for the replay again, without a size; detaching one keeps it", () => {
+    const client = new WsClient({ url: () => "ws://test/ws" });
+    client.connect();
+    const sock = last();
+    sock.open();
+    const one: string[] = [];
+    const two: string[] = [];
+    const detachOne = client.attachPty("p1", (b) => one.push(new TextDecoder().decode(b)), { cols: 80, rows: 24 });
+    const detachTwo = client.attachPty("p1", (b) => two.push(new TextDecoder().decode(b)), { cols: 100, rows: 30 });
+    expect(sock.sent.filter((m) => (m as { type: string }).type === "pty:attach")).toEqual([
+      { type: "pty:attach", ptyId: "p1", cols: 80, rows: 24 },
+      { type: "pty:attach", ptyId: "p1" },
+    ]);
+    sock.receive({ type: "pty:data", ptyId: "p1", data: encodeBase64("replay") });
+    expect(one).toEqual(["replay"]);
+    expect(two).toEqual(["replay"]);
+    detachOne();
+    expect(sock.sent).not.toContainEqual({ type: "pty:detach", ptyId: "p1" });
+    detachTwo();
+    expect(sock.sent).toContainEqual({ type: "pty:detach", ptyId: "p1" });
+  });
 });
