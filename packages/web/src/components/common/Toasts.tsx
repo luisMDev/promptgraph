@@ -1,5 +1,9 @@
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { useUiStore } from "../../store/ui-store";
 import { Icons } from "./icons";
+import { Button } from "./ui";
 
 export function Toasts() {
   const toasts = useUiStore((s) => s.toasts);
@@ -7,17 +11,32 @@ export function Toasts() {
   return (
     <div className="pointer-events-none fixed right-4 bottom-4 z-[60] flex w-96 flex-col gap-2">
       {toasts.map((t) => (
-        <div
+        <Alert
           key={t.id}
           role="status"
-          className={`pointer-events-auto flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm shadow-xl ${t.kind === "error" ? "border-red-500/40 bg-red-950/90 text-red-100" : "border-zinc-700 bg-zinc-900/95 text-zinc-100"}`}
+          variant={t.kind === "error" ? "destructive" : "default"}
+          className={cn("pointer-events-auto flex items-start gap-2 py-2.5 shadow-xl", t.kind === "error" && "border-destructive/40")}
         >
-          {t.kind === "error" && <Icons.alert className="mt-0.5 shrink-0 text-red-400" />}
-          <span className="flex-1">{t.message}</span>
-          <button type="button" aria-label="Dismiss" className="text-zinc-400 hover:text-zinc-100" onClick={() => useUiStore.getState().dismissToast(t.id)}>
-            <Icons.x />
-          </button>
-        </div>
+          {t.kind === "error" && <Icons.alert className="shrink-0" />}
+          <AlertDescription className={cn("flex-1 text-sm", t.kind === "error" ? "text-destructive" : "text-foreground")}>
+            {t.message}
+          </AlertDescription>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Dismiss"
+                className="-my-0.5 shrink-0 text-muted-foreground"
+                onClick={() => useUiStore.getState().dismissToast(t.id)}
+              >
+                <Icons.x />
+              </Button>
+            </TooltipTrigger>
+            {/* Above the z-[60] toast stack, which would otherwise cover it. */}
+            <TooltipContent className="z-[70]">Dismiss</TooltipContent>
+          </Tooltip>
+        </Alert>
       ))}
     </div>
   );

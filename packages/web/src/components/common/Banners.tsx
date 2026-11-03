@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
 import { Icons } from "./icons";
@@ -55,14 +57,22 @@ export function Banners() {
 function Banner({ tone, children, onDismiss }: { tone: "warning" | "info"; children: ReactNode; onDismiss?: () => void }) {
   return (
     <div
-      className={`flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-xs ${tone === "warning" ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-blue-500/20 bg-blue-500/5 text-blue-200"}`}
+      className={cn(
+        "flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-xs",
+        tone === "warning" ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-primary/20 bg-primary/5 text-blue-200",
+      )}
     >
       {tone === "warning" && <Icons.alert className="shrink-0" />}
       <div className="flex flex-1 items-center">{children}</div>
       {onDismiss && (
-        <button type="button" aria-label="Dismiss" className="opacity-70 hover:opacity-100" onClick={onDismiss}>
-          <Icons.x />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon-xs" aria-label="Dismiss" className="-my-1 text-current opacity-70 hover:bg-transparent dark:hover:bg-transparent hover:text-current hover:opacity-100" onClick={onDismiss}>
+              <Icons.x />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Dismiss</TooltipContent>
+        </Tooltip>
       )}
     </div>
   );

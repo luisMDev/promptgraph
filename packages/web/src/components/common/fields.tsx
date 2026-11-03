@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { inputClass } from "./ui";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
+/** Monospace modifier shared by code-like fields. */
+const monoClass = "font-mono text-xs md:text-xs";
+/** Textareas honour `rows` (shadcn's Textarea auto-sizes to its content by default). */
+const textareaClass = "field-sizing-fixed min-h-0 resize-y";
 
 /** Text input that maps "" to undefined (optional config fields). */
 export function OptionalText({
@@ -18,8 +26,8 @@ export function OptionalText({
   disabled?: boolean;
 }) {
   return (
-    <input
-      className={`${inputClass} ${mono ? "font-mono text-xs" : ""}`}
+    <Input
+      className={cn(mono && monoClass)}
       value={value ?? ""}
       placeholder={placeholder}
       list={list}
@@ -45,8 +53,9 @@ export function TextArea({
   disabled?: boolean;
 }) {
   return (
-    <textarea
-      className={`${inputClass} resize-y leading-relaxed ${mono ? "font-mono text-xs" : ""}`}
+    <Textarea
+      // leading-relaxed must come after the font-size classes, or cn drops it as a conflict.
+      className={cn(textareaClass, mono && monoClass, "leading-relaxed")}
       rows={rows}
       value={value}
       placeholder={placeholder}
@@ -74,9 +83,8 @@ export function OptionalNumber({
   disabled?: boolean;
 }) {
   return (
-    <input
+    <Input
       type="number"
-      className={inputClass}
       value={value ?? ""}
       min={min}
       max={max}
@@ -102,13 +110,13 @@ export function Select<T extends string>({
   disabled?: boolean;
 }) {
   return (
-    <select className={inputClass} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as T)}>
+    <NativeSelect className="w-full" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as T)}>
       {options.map((o) => (
-        <option key={o.value} value={o.value}>
+        <NativeSelectOption key={o.value} value={o.value}>
           {o.label}
-        </option>
+        </NativeSelectOption>
       ))}
-    </select>
+    </NativeSelect>
   );
 }
 
@@ -131,8 +139,8 @@ export function LinesInput({
 }) {
   const [text, setText] = useState(() => (value ?? []).join("\n"));
   return (
-    <textarea
-      className={`${inputClass} resize-y font-mono text-xs`}
+    <Textarea
+      className={cn(textareaClass, monoClass)}
       rows={rows}
       value={text}
       placeholder={placeholder}

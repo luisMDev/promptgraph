@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { Button, Field, Modal, inputClass } from "./ui";
+import { Input } from "@/components/ui/input";
+import { Button, Field, Modal } from "./ui";
 
 /** Small modal asking for one line of text (create / rename graph). */
 export function PromptDialog({
@@ -44,7 +45,7 @@ export function PromptDialog({
     >
       <form onSubmit={submit}>
         <Field label={label} hint={hint?.(value) ?? undefined}>
-          <input autoFocus className={inputClass} value={value} onChange={(e) => setValue(e.target.value)} />
+          <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
         </Field>
       </form>
     </Modal>
@@ -85,7 +86,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      <p className="text-sm text-zinc-300">{message}</p>
+      <p className="text-sm text-muted-foreground">{message}</p>
     </Modal>
   );
 }

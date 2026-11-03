@@ -1,52 +1,49 @@
-import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode, type RefObject } from "react";
+import { useState, type ComponentProps, type ReactNode } from "react";
+import { Button as UiButton } from "@/components/ui/button";
+import { Checkbox as UiCheckbox } from "@/components/ui/checkbox";
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import { Icons } from "./icons";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+/**
+ * App-level wrappers over the shadcn/ui primitives in `@/components/ui`. Their props are the stable API the
+ * rest of the app uses; the shadcn components underneath own styling and accessibility.
+ */
 
-const VARIANTS: Record<Variant, string> = {
-  primary: "bg-blue-600 text-white hover:bg-blue-500 disabled:bg-blue-900 disabled:text-blue-300/60",
-  secondary: "bg-zinc-800 text-zinc-100 ring-1 ring-inset ring-zinc-700 hover:bg-zinc-700 disabled:text-zinc-500",
-  ghost: "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 disabled:text-zinc-600",
-  danger: "bg-red-600/90 text-white hover:bg-red-500 disabled:bg-red-950 disabled:text-red-300/50",
-};
+type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Size = "sm" | "md" | "xs" | "icon" | "icon-sm" | "icon-xs";
+
+const VARIANTS = {
+  primary: "default",
+  secondary: "outline",
+  ghost: "ghost",
+  danger: "destructive",
+} as const satisfies Record<Variant, ComponentProps<typeof UiButton>["variant"]>;
+
+const SIZES = {
+  sm: "sm",
+  md: "default",
+  xs: "xs",
+  icon: "icon",
+  "icon-sm": "icon-sm",
+  "icon-xs": "icon-xs",
+} as const satisfies Record<Size, ComponentProps<typeof UiButton>["size"]>;
 
 export function Button({
   variant = "secondary",
   size = "md",
-  className = "",
+  type = "button",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: "sm" | "md" }) {
-  const sizing = size === "sm" ? "h-7 px-2 text-xs gap-1" : "h-8 px-3 text-sm gap-1.5";
-  return (
-    <button
-      type="button"
-      className={`inline-flex shrink-0 items-center justify-center rounded-md font-medium transition-colors disabled:cursor-not-allowed ${sizing} ${VARIANTS[variant]} ${className}`}
-      {...props}
-    />
-  );
+}: Omit<ComponentProps<"button">, "type"> & { variant?: Variant; size?: Size; type?: "button" | "submit" | "reset" }) {
+  return <UiButton type={type} variant={VARIANTS[variant]} size={SIZES[size]} {...props} />;
 }
 
-/** Calls `onOutside` on mousedown outside `ref` and on Escape while `active`. */
-export function useDismiss(ref: RefObject<HTMLElement | null>, active: boolean, onOutside: () => void): void {
-  const cb = useRef(onOutside);
-  cb.current = onOutside;
-  useEffect(() => {
-    if (!active) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) cb.current();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cb.current();
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [ref, active]);
-}
-
+/**
+ * Always-open modal dialog; unmount it (or call `onClose`) to close. Built on Radix Dialog via shadcn: focus
+ * moves into the dialog and is trapped there, returns to the opener on close, the page behind is inert and
+ * does not scroll, Escape / a click outside close only the topmost dialog, and the title names the dialog.
+ */
 export function Modal({
   title,
   onClose,
@@ -60,41 +57,60 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, true, onClose);
+  // The dialog has no DialogTrigger (it is mounted open), so Radix has no trigger to refocus on close: remember
+  // what had focus when it mounted and return focus there, whether it closes via Escape/outside/X or unmounts.
+  const [opener] = useState(() => (typeof document === "undefined" ? null : focusReturnTarget(document.activeElement)));
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-[2px]">
-      <div
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        className={`flex max-h-full w-full flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 shadow-2xl ${wide ? "max-w-5xl" : "max-w-md"}`}
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        aria-describedby={undefined}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          if (opener?.isConnected) opener.focus();
+        }}
+        className={cn("flex max-h-[calc(100%-3rem)] flex-col gap-0 overflow-hidden p-0", wide ? "sm:max-w-5xl" : "sm:max-w-md")}
       >
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-          <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
-          <button type="button" onClick={onClose} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" aria-label="Close">
-            <Icons.x />
-          </button>
+        <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+          <DialogTitle className="text-sm font-semibold">{title}</DialogTitle>
+          <DialogClose asChild>
+            <UiButton variant="ghost" size="icon-sm" aria-label="Close">
+              <Icons.x />
+            </UiButton>
+          </DialogClose>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-zinc-800 px-4 py-3">{footer}</div>}
-      </div>
-    </div>
+        {footer && <DialogFooter className="m-0 rounded-none px-4 py-3">{footer}</DialogFooter>}
+      </DialogContent>
+    </Dialog>
   );
 }
 
+/**
+ * Element focus should return to when a Modal opened from `active` closes. A dialog opened from a menu item would
+ * otherwise "return" to the item, which unmounts with the menu: use the menu's trigger instead.
+ */
+function focusReturnTarget(active: Element | null): HTMLElement | null {
+  const menu = active?.closest<HTMLElement>("[role=menu]");
+  if (menu?.id) {
+    const trigger = [...document.querySelectorAll<HTMLElement>("[aria-controls]")].find((el) => el.getAttribute("aria-controls") === menu.id);
+    if (trigger) return trigger;
+  }
+  return active instanceof HTMLElement ? active : null;
+}
+
+/** Label + control + optional hint. The control is nested in the label, so it is labelled implicitly. */
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <label className="block space-y-1">
-      <span className="block text-xs font-medium text-zinc-400">{label}</span>
+    // Native <label>, not the Radix Label: Radix prevents text selection on mousedown, which would make hints and
+    // read-only values inside a Field impossible to select or copy.
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="block text-xs font-medium text-muted-foreground">{label}</span>
       {children}
-      {hint && <span className="block text-[11px] leading-snug text-zinc-500">{hint}</span>}
+      {hint && <span className="block text-[11px] leading-snug text-muted-foreground/80">{hint}</span>}
     </label>
   );
 }
-
-export const inputClass =
-  "w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60";
 
 export function Checkbox({
   checked,
@@ -108,24 +124,18 @@ export function Checkbox({
   disabled?: boolean;
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
-      <input
-        type="checkbox"
-        className="size-3.5 accent-blue-500"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
+    <Label className="cursor-pointer font-normal text-foreground/85">
+      <UiCheckbox checked={checked} disabled={disabled} onCheckedChange={(v) => onChange(v === true)} />
       {label}
-    </label>
+    </Label>
   );
 }
 
 export function Section({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
   return (
-    <section className="space-y-3 border-b border-zinc-800 px-4 py-4 last:border-b-0">
+    <section className="space-y-3 border-b px-4 py-4 last:border-b-0">
       <div className="flex items-center justify-between">
-        <h3 className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">{title}</h3>
+        <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</h3>
         {actions}
       </div>
       {children}
@@ -141,8 +151,8 @@ export function StatusDot({ className }: { className: string }) {
 export function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[96px_1fr] gap-2 text-xs">
-      <span className="text-zinc-500">{label}</span>
-      <span className="min-w-0 break-words text-zinc-200">{children}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-foreground/90">{children}</span>
     </div>
   );
 }

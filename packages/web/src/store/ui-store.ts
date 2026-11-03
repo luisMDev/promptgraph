@@ -36,6 +36,8 @@ export interface UiStore extends UiState {
   tabMeta: Record<string, TerminalTabMeta>;
   drawerOpen: boolean;
   leftPanel: LeftPanel;
+  /** Left sidebar expanded (it collapses off-canvas via the header trigger). */
+  sidebarOpen: boolean;
   toasts: Toast[];
   /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
   revealNodeId: string | null;
@@ -51,7 +53,9 @@ export interface UiStore extends UiState {
   setSettingsOpen(open: boolean): void;
   openDiff(target: DiffTarget | null): void;
   openReport(runId: string | null): void;
+  /** Shows a left panel, expanding the sidebar if it was collapsed. */
   setLeftPanel(panel: LeftPanel): void;
+  setSidebarOpen(open: boolean): void;
   toast(kind: Toast["kind"], message: string): void;
   dismissToast(id: number): void;
 }
@@ -75,6 +79,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
   tabMeta: {},
   drawerOpen: false,
   leftPanel: "palette",
+  sidebarOpen: true,
   toasts: [],
   revealNodeId: null,
 
@@ -135,7 +140,11 @@ export const useUiStore = create<UiStore>()((set, get) => ({
   },
 
   setLeftPanel(panel) {
-    set({ leftPanel: panel });
+    set({ leftPanel: panel, sidebarOpen: true });
+  },
+
+  setSidebarOpen(open) {
+    set({ sidebarOpen: open });
   },
 
   toast(kind, message) {

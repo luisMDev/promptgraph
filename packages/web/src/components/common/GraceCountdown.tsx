@@ -1,6 +1,7 @@
 import type { NodeRun } from "@promptgraph/shared";
 import { useNow } from "../../lib/use-now";
 import { nodeControl } from "../../store/app-actions";
+import { Button } from "./ui";
 
 /** Whole seconds left of a running auto-completion countdown (§7.4), or null when none is showing. */
 export function graceSecondsLeft(nodeRun: NodeRun | null | undefined, now: number): number | null {
@@ -27,16 +28,17 @@ export function GraceCountdown({ nodeRun, compact = false }: { nodeRun: NodeRun 
       <span className="min-w-0 flex-1 truncate">
         Auto-continuing in <span className="font-mono tabular-nums">{left}s</span>…
       </span>
-      <button
-        type="button"
-        className="nodrag nopan shrink-0 rounded bg-sky-600 px-1.5 py-0.5 text-[11px] font-semibold text-white hover:bg-sky-500"
+      <Button
+        variant="primary"
+        size="xs"
+        className="nodrag nopan h-5 shrink-0 rounded px-1.5 text-[11px] font-semibold"
         onClick={(e) => {
           e.stopPropagation();
           void nodeControl(nodeRun.id, "hold");
         }}
       >
         Hold
-      </button>
+      </Button>
     </div>
   );
 }
