@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.webp" alt="promptgraph" width="100%">
+</p>
+
 # promptgraph
 
 Draw a flow of Claude Code steps, run it, and watch each step work in a real terminal.
