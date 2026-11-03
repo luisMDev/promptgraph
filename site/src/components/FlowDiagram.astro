@@ -1,0 +1,143 @@
+---
+// Decorative SVG of a fan-out run: one planning step, three parallel lanes, a merge,
+// an approval and a pull request. Node colours cycle through run states with CSS.
+const lanes = [
+  { y: 40, label: 'Implement API', lane: 'main', color: '#2563eb', delay: 0 },
+  { y: 130, label: 'Write tests', lane: 'l2', color: '#db2777', delay: 0.4 },
+  { y: 220, label: 'Update docs', lane: 'l3', color: '#16a34a', delay: 0.8 },
+];
+---
+
+<figure class="flow">
+  <svg
+    viewBox="0 0 560 300"
+    role="img"
+    aria-labelledby="flow-title flow-desc"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <title id="flow-title">A promptgraph run fanning out into parallel lanes</title>
+    <desc id="flow-desc">
+      A plan step fans out to three Claude Code steps running in separate git worktrees. A merge
+      step joins them, then an approval gate and a pull request step.
+    </desc>
+
+    <g class="edges" fill="none" stroke-width="1.6">
+      {
+        lanes.map((l) => (
+          <>
+            <path d={`M118 150 C150 150 150 ${l.y + 22} 182 ${l.y + 22}`} stroke={l.color} class="edge" />
+            <path d={`M316 ${l.y + 22} C348 ${l.y + 22} 348 150 380 150`} stroke={l.color} class="edge" />
+          </>
+        ))
+      }
+      <path d="M470 150 L470 150" />
+    </g>
+
+    <g class="node done">
+      <rect x="10" y="128" width="108" height="44" rx="9" />
+      <text x="24" y="148" class="t">Plan</text>
+      <text x="24" y="162" class="s">plan mode</text>
+    </g>
+
+    {
+      lanes.map((l) => (
+        <g class="node running" style={`--d:${l.delay}s;--c:${l.color}`}>
+          <rect x="182" y={l.y} width="134" height="44" rx="9" />
+          <text x="196" y={l.y + 20} class="t">
+            {l.label}
+          </text>
+          <circle cx="199" cy={l.y + 32} r="3.2" class="status" />
+          <text x="208" y={l.y + 35} class="s">
+            running · {l.lane}
+          </text>
+        </g>
+      ))
+    }
+
+    <g class="node pending">
+      <rect x="380" y="128" width="80" height="44" rx="9" />
+      <text x="394" y="148" class="t">Merge</text>
+      <text x="394" y="162" class="s">3 lanes</text>
+    </g>
+
+    <path d="M460 150 L480 150" stroke="#b9b0a5" stroke-width="1.6" stroke-dasharray="3 3" />
+
+    <g class="node gate">
+      <rect x="480" y="106" width="72" height="36" rx="9" />
+      <text x="492" y="128" class="t">Approve</text>
+      <rect x="480" y="160" width="72" height="36" rx="9" />
+      <text x="492" y="182" class="t">Open PR</text>
+      <path d="M516 142 L516 160" stroke="#b9b0a5" stroke-width="1.6" />
+    </g>
+  </svg>
+  <figcaption>Independent steps run at once, each in its own worktree.</figcaption>
+</figure>
+
+<style>
+  .flow {
+    margin: 0;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: 0 20px 50px -24px rgb(60 40 20 / 0.25);
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    font-family: var(--font);
+  }
+  figcaption {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .node rect {
+    fill: #fff;
+    stroke: #d9d1c7;
+    stroke-width: 1.2;
+  }
+  .t {
+    font-size: 12px;
+    font-weight: 650;
+    fill: #0a0a0a;
+  }
+  .s {
+    font-size: 9.5px;
+    fill: #6b665f;
+  }
+  .done rect {
+    stroke: #16a34a;
+    stroke-width: 1.8;
+    fill: #f0fdf4;
+  }
+  .running rect {
+    stroke: var(--c);
+    stroke-width: 1.8;
+    fill: color-mix(in srgb, var(--c) 6%, #fff);
+  }
+  .running .status {
+    fill: var(--c);
+    animation: blink 1.4s ease-in-out infinite;
+    animation-delay: var(--d);
+  }
+  .gate rect {
+    stroke-dasharray: 4 3;
+  }
+  .edge {
+    stroke-dasharray: 5 5;
+    animation: flow 1.2s linear infinite;
+  }
+  @keyframes flow {
+    to {
+      stroke-dashoffset: -20;
+    }
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0.25;
+    }
+  }
+</style>
