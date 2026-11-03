@@ -17,7 +17,7 @@ import { registerStatic } from "./static.js";
 export function createHttpApp(ctx: AppContext): Hono {
   const app = new Hono();
   app.use("*", localhostOnly(() => ctx.port));
-  app.use("*", tokenAuth(ctx.token));
+  app.use("*", tokenAuth(ctx.token, ctx.hookSecret));
   registerMiscRoutes(app, ctx);
   registerGraphRoutes(app, ctx);
   registerRunRoutes(app, ctx);

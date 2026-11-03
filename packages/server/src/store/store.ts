@@ -61,6 +61,66 @@ export type NewNodeRun = Pick<NodeRun, "id" | "runId" | "nodeId" | "iteration" |
 /** Any mutable field; `updatedAt` is set by the store. */
 export type NodeRunPatch = Partial<Omit<NodeRun, "id" | "runId" | "nodeId" | "iteration" | "attempt" | "updatedAt">>;
 
+/** A registered repository (table `repos`, DESIGN §11.2). */
+export interface RepoRow {
+  /** repoId, `<slug>-<hash8>`. */
+  id: string;
+  /** Realpath of the git top level (= runs.repo_path). */
+  path: string;
+  name: string;
+  addedAt: number;
+  lastOpenedAt: number | null;
+}
+
+export type NewRepo = Omit<RepoRow, "lastOpenedAt"> & { lastOpenedAt?: number | null };
+
+/** A browser or desktop session (table `sessions`, DESIGN §14). */
+export interface SessionRow {
+  /** SHA-256 hex of the cookie value. */
+  idHash: string;
+  label: string;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+}
+
+/** Home counters of one repository path (RepoSummary.runs / waiting / lastRunAt). */
+export interface RepoStatusCounts {
+  running: number;
+  paused: number;
+  /** Node runs waiting for approval. */
+  approval: number;
+  /** Node runs waiting for input, `idle` included. */
+  input: number;
+  /** Start of the newest run. */
+  lastRunAt: number | null;
+}
+
+interface RepoDbRow {
+  id: string;
+  path: string;
+  name: string;
+  added_at: number;
+  last_opened_at: number | null;
+}
+
+interface SessionDbRow {
+  id_hash: string;
+  label: string;
+  created_at: number;
+  last_seen_at: number;
+  expires_at: number;
+}
+
+const repoFromRow = (r: RepoDbRow): RepoRow => ({ id: r.id, path: r.path, name: r.name, addedAt: r.added_at, lastOpenedAt: r.last_opened_at });
+const sessionFromRow = (r: SessionDbRow): SessionRow => ({
+  idHash: r.id_hash,
+  label: r.label,
+  createdAt: r.created_at,
+  lastSeenAt: r.last_seen_at,
+  expiresAt: r.expires_at,
+});
+
 interface RunRow {
   id: string;
   repo_path: string;
@@ -446,7 +506,153 @@ export class Store {
       .run(repoPath, graphId, hash, this.now());
   }
 
-  /** Runs `fn` in a transaction. */
+  // repositories (DESIGN §4.2) -------------------------------------------------
+  /** Oldest registration first. */
+  listRepos(): RepoRow[] {
+    return (this.db.prepare(`SELECT * FROM repos ORDER BY added_at, rowid`).all() as RepoDbRow[]).map(repoFromRow);
+  }
+
+  getRepo(id: string): RepoRow | undefined {
+    const row = this.db.prepare(`SELECT * FROM repos WHERE id = ?`).get(id) as RepoDbRow | undefined;
+    return row && repoFromRow(row);
+  }
+
+  getRepoByPath(repoPath: string): RepoRow | undefined {
+    const row = this.db.prepare(`SELECT * FROM repos WHERE path = ?`).get(repoPath) as RepoDbRow | undefined;
+    return row && repoFromRow(row);
+  }
+
+  insertRepo(repo: NewRepo): RepoRow {
+    this.db
+      .prepare(`INSERT INTO repos (id, path, name, added_at, last_opened_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(repo.id, repo.path, repo.name, repo.addedAt, repo.lastOpenedAt ?? null);
+    return this.getRepo(repo.id)!;
+  }
+
+  /** Sets last_opened_at (registration of an already registered repository, `promptgraph open`). */
+  touchRepo(id: string, at: number = this.now()): RepoRow | undefined {
+    this.db.prepare(`UPDATE repos SET last_opened_at = ? WHERE id = ?`).run(at, id);
+    return this.getRepo(id);
+  }
+
+  /** Forgets a repository; its runs, graph meta and files stay (re-adding it finds them again). */
+  deleteRepo(id: string): boolean {
+    return this.db.prepare(`DELETE FROM repos WHERE id = ?`).run(id).changes > 0;
+  }
+
+  /**
+   * Home counters for every repository path that has runs, in one grouped query: running and paused
+   * runs, node runs waiting for approval or for input (`idle` included) and the newest run start.
+   */
+  repoStatusCounts(): Map<string, RepoStatusCounts> {
+    const rows = this.db
+      .prepare(
+        `SELECT r.repo_path AS repo_path,
+                SUM(r.status = 'running') AS running,
+                SUM(r.status = 'paused') AS paused,
+                COALESCE(SUM(n.approval), 0) AS approval,
+                COALESCE(SUM(n.input), 0) AS input,
+                MAX(r.started_at) AS last_run_at
+           FROM runs r
+           LEFT JOIN (
+             SELECT run_id,
+                    SUM(status = 'waiting_approval') AS approval,
+                    SUM(status IN ('waiting_input', 'idle')) AS input
+               FROM node_runs
+              WHERE status IN ('waiting_approval', 'waiting_input', 'idle')
+              GROUP BY run_id
+           ) n ON n.run_id = r.id
+          GROUP BY r.repo_path`,
+      )
+      .all() as Array<{ repo_path: string; running: number; paused: number; approval: number; input: number; last_run_at: number | null }>;
+    return new Map(
+      rows.map((r) => [r.repo_path, { running: r.running, paused: r.paused, approval: r.approval, input: r.input, lastRunAt: r.last_run_at }]),
+    );
+  }
+
+  /** Every repo_path that has runs (backfill, DESIGN §4.4). */
+  distinctRunRepoPaths(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT repo_path FROM runs ORDER BY repo_path`).all() as Array<{ repo_path: string }>).map((r) => r.repo_path);
+  }
+
+  /**
+   * Moves runs and graph meta from `from` to `to` (backfill normalises paths to their realpath). A graph
+   * meta row already present under `to` keeps the more recent hash. Returns the number of runs moved.
+   */
+  rewriteRepoPath(from: string, to: string): number {
+    if (from === to) return 0;
+    return this.transaction(() => {
+      const moved = this.db.prepare(`UPDATE runs SET repo_path = ? WHERE repo_path = ?`).run(to, from).changes;
+      this.db
+        .prepare(
+          `INSERT INTO graph_meta (repo_path, graph_id, known_hash, updated_at)
+             SELECT ?, graph_id, known_hash, updated_at FROM graph_meta WHERE repo_path = ?
+           ON CONFLICT (repo_path, graph_id) DO UPDATE SET known_hash = excluded.known_hash, updated_at = excluded.updated_at
+             WHERE excluded.updated_at > graph_meta.updated_at`,
+        )
+        .run(to, from);
+      this.db.prepare(`DELETE FROM graph_meta WHERE repo_path = ?`).run(from);
+      return moved;
+    });
+  }
+
+  // meta ---------------------------------------------------------------------
+  getMeta(key: string): string | undefined {
+    const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(key, value);
+  }
+
+  // sessions (DESIGN §14) ----------------------------------------------------
+  insertSession(session: SessionRow): SessionRow {
+    this.db
+      .prepare(`INSERT INTO sessions (id_hash, label, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(session.idHash, session.label, session.createdAt, session.lastSeenAt, session.expiresAt);
+    return this.getSession(session.idHash)!;
+  }
+
+  getSession(idHash: string): SessionRow | undefined {
+    const row = this.db.prepare(`SELECT * FROM sessions WHERE id_hash = ?`).get(idHash) as SessionDbRow | undefined;
+    return row && sessionFromRow(row);
+  }
+
+  /** Sliding expiry: records the last use and the new expiry. */
+  touchSession(idHash: string, lastSeenAt: number, expiresAt: number): void {
+    this.db.prepare(`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?`).run(lastSeenAt, expiresAt, idHash);
+  }
+
+  /** Newest first. */
+  listSessions(): SessionRow[] {
+    return (this.db.prepare(`SELECT * FROM sessions ORDER BY created_at DESC, rowid DESC`).all() as SessionDbRow[]).map(sessionFromRow);
+  }
+
+  /**
+   * Deletes the sessions whose hash starts with `prefix` (lowercase hex, at least one digit), or every
+   * session with "all". Returns the deleted hashes.
+   */
+  deleteSessions(prefix: string | "all"): string[] {
+    if (prefix !== "all" && !/^[0-9a-f]+$/.test(prefix)) throw new Error(`Invalid session id "${prefix}"`);
+    return this.transaction(() => {
+      const rows = (
+        prefix === "all"
+          ? this.db.prepare(`SELECT id_hash FROM sessions`).all()
+          : this.db.prepare(`SELECT id_hash FROM sessions WHERE substr(id_hash, 1, ?) = ?`).all(prefix.length, prefix)
+      ) as Array<{ id_hash: string }>;
+      const del = this.db.prepare(`DELETE FROM sessions WHERE id_hash = ?`);
+      for (const r of rows) del.run(r.id_hash);
+      return rows.map((r) => r.id_hash);
+    });
+  }
+
+  /** Drops sessions that expired before `now`; returns how many. */
+  deleteExpiredSessions(now: number = this.now()): number {
+    return this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(now).changes;
+  }
+
+  /** Runs `fn` in a transaction (nested calls become savepoints). */
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)();
   }

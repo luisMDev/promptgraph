@@ -6,7 +6,7 @@ import { ptyLogPath, type PgPaths } from "../../config/paths.js";
 import { git, gitOk } from "../../git/exec.js";
 import { gitPath, hasMergeHead, hasPendingSquash, unmergedFiles } from "../../git/merge-state.js";
 import { revParse } from "../../git/repo.js";
-import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
+import type { OwnedPtys, PtyHandle } from "../../pty/pty-manager.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
 import { Interruption } from "../interruption.js";
 import type { NodeControls, NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
@@ -29,7 +29,7 @@ const SHELL_KILL_WAIT_MS = 2000;
 
 export interface MergeRunnerDeps {
   lanes: Pick<LaneManager, "merge" | "markMerged" | "withLaneLock">;
-  ptys: PtyManager;
+  ptys: OwnedPtys;
   /** Resolves conflicts with onConflict "claude" (the ClaudeRunner). */
   claude: Runner;
   paths: PgPaths;

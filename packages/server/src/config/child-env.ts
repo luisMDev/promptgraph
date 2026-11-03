@@ -20,6 +20,8 @@ const STRIPPED_EXACT = new Set([
   "CLAUDE_CODE_CHILD_SESSION",
   "CLAUDE_CODE_TEE_SDK_STDOUT",
   "CLAUDE_CODE_SYNC_SESSION_REFS",
+  // promptgraph's home holds the token and the DB: children (Claude, shell nodes) are not told where it is (DESIGN §7.6).
+  "PG_HOME",
 ]);
 const STRIPPED_PATTERN = /HERMETIC/;
 
@@ -31,7 +33,7 @@ export interface PgHookEnv {
   PG_NODE_RUN_ID: string;
 }
 
-/** Child env = parent env − nested-session vars + TERM + `extra`. */
+/** Child env = parent env − nested-session vars − PG_HOME + TERM + `extra`. */
 export function childEnv(extra: Record<string, string> = {}, base: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {

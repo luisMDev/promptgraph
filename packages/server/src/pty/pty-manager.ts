@@ -17,6 +17,23 @@ export interface SpawnPtyOptions {
   rows?: number; // default 40
   /** Where the ring buffer is flushed on exit (replay of finished terminals). */
   logPath: string;
+  /** Owning repository (repoId); set by an OwnedPtys facade. killOwnedBy(owner) kills only these. */
+  owner?: string;
+}
+
+/**
+ * One repository's view of the daemon-wide PtyManager (PtyManager.owned): every spawn is stamped with
+ * the owner (node PTYs, `setup-`, `shell-`, `reopen-`), so stopping that repository's engine kills only
+ * its own PTYs. Viewers (attach, input, resize) stay on the PtyManager: PTY ids are unique daemon-wide.
+ */
+export interface OwnedPtys {
+  readonly owner: string;
+  spawn(opts: Omit<SpawnPtyOptions, "owner">): PtyHandle;
+  get(id: string): PtyHandle | undefined;
+  /** This owner's live PTYs. */
+  list(): PtyHandle[];
+  /** killOwnedBy(owner). */
+  killOwned(): Promise<void>;
 }
 
 export interface PtyExit {
@@ -73,6 +90,7 @@ class ManagedPty implements PtyHandle {
     readonly id: string,
     private readonly proc: IPty,
     readonly logPath: string,
+    readonly owner: string | null,
     size: { cols: number; rows: number },
     onChunk: (chunk: Buffer) => void,
     onExit: (handle: ManagedPty, exit: PtyExit) => Promise<void>,
@@ -165,6 +183,7 @@ export class PtyManager {
       id,
       proc,
       opts.logPath,
+      opts.owner ?? null,
       size,
       (data) => this.bus.emit("pty:data", { ptyId: id, data }),
       async (h, exit) => {
@@ -229,14 +248,42 @@ export class PtyManager {
     return [...this.handles.values()].filter((h) => h.isLive);
   }
 
-  /** SIGINT path: kills every live PTY (callers send /exit first) and waits for log flush. */
-  async killAll(): Promise<void> {
-    const live = this.list();
-    for (const h of live) h.kill("SIGTERM");
-    const timer = setTimeout(() => live.forEach((h) => h.kill("SIGKILL")), KILL_ALL_GRACE_MS);
-    await Promise.all(live.map((h) => h.exited));
-    clearTimeout(timer);
+  /** Live PTYs spawned for `owner`. */
+  listOwnedBy(owner: string): PtyHandle[] {
+    return [...this.handles.values()].filter((h) => h.isLive && h.owner === owner);
   }
+
+  /** SIGINT path: kills every live PTY (callers send /exit first) and waits for log flush. */
+  killAll(): Promise<void> {
+    return killAndWait(this.list());
+  }
+
+  /** Like killAll, for the PTYs of one owner only (a repository's engine shutdown or removal). */
+  killOwnedBy(owner: string): Promise<void> {
+    return killAndWait(this.listOwnedBy(owner));
+  }
+
+  /** Facade for one repository: stamps `owner` on every spawn. */
+  owned(owner: string): OwnedPtys {
+    return {
+      owner,
+      spawn: (opts) => this.spawn({ ...opts, owner }),
+      get: (id) => {
+        const h = this.handles.get(id);
+        return h && h.owner === owner ? h : undefined;
+      },
+      list: () => this.listOwnedBy(owner),
+      killOwned: () => this.killOwnedBy(owner),
+    };
+  }
+}
+
+/** SIGTERM, then SIGKILL the stragglers after KILL_ALL_GRACE_MS; resolves once every log is flushed. */
+async function killAndWait(live: PtyHandle[]): Promise<void> {
+  for (const h of live) h.kill("SIGTERM");
+  const timer = setTimeout(() => live.forEach((h) => h.kill("SIGKILL")), KILL_ALL_GRACE_MS);
+  await Promise.all(live.map((h) => h.exited));
+  clearTimeout(timer);
 }
 
 /** Sidecar of a PTY log holding its final size (`<log>.size.json`), read when replaying after a restart. */

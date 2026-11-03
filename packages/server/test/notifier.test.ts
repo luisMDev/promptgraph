@@ -5,7 +5,7 @@ import { attentionText, detectNotifyPlatform, Notifier, psString, sendDesktopNot
 import { makeNodeRun } from "./support/runner-ctx.js";
 
 function attention(kind: BusEvents["attention"]["kind"], message: string | null = null): BusEvents["attention"] {
-  return { kind, nodeRun: makeNodeRun("nr", "n1"), nodeLabel: "Implement", graphName: "Feature", message };
+  return { kind, nodeRun: makeNodeRun("nr", "n1"), nodeLabel: "Implement", graphName: "Feature", message, repo: { id: "shop-0123abcd", name: "shop" } };
 }
 
 describe("notifications", () => {
@@ -33,7 +33,7 @@ describe("notifications", () => {
 
   it("formats titles per attention kind", () => {
     expect(attentionText(attention("waiting_input", "Claude needs your permission"))).toEqual({
-      title: "promptgraph: Implement needs your input",
+      title: "promptgraph · shop: Implement needs your input",
       body: "Feature: Claude needs your permission",
     });
     expect(attentionText(attention("waiting_approval")).title).toContain("waiting for approval");
@@ -62,7 +62,7 @@ describe("notifications", () => {
     stop();
     bus.emit("attention", attention("idle"));
     await new Promise((r) => setTimeout(r, 10));
-    expect(sent).toEqual([["linux", "promptgraph: Implement needs your input", "Feature: hi"]]);
+    expect(sent).toEqual([["linux", "promptgraph · shop: Implement needs your input", "Feature: hi"]]);
     expect(detections).toBe(1);
   });
 

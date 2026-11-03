@@ -16,6 +16,7 @@ interface TestClient {
   next(pred: (m: ServerMessage) => boolean): Promise<ServerMessage>;
 }
 
+const REPO_ID = "repo-0123abcd";
 let server: Server;
 let hub: WsHub;
 let port: number;
@@ -86,24 +87,36 @@ describe("WsHub", () => {
     a.send({ type: "ping" });
     await a.next((m) => m.type === "pong");
 
-    setup.ctx.bus.emit("run:update", { run: summary("r1") });
+    setup.ctx.bus.emit("run:update", { repoId: REPO_ID, run: summary("r1") });
     setup.ctx.bus.emit("node:update", { nodeRun: nodeRun("n1", "r1") });
     setup.ctx.bus.emit("node:update", { nodeRun: nodeRun("n2", "r2") });
-    setup.ctx.bus.emit("graphs:changed", { graphId: "g" });
+    setup.ctx.bus.emit("graphs:changed", { repoId: REPO_ID, graphId: "g" });
 
     await a.next((m) => m.type === "graphs:changed");
     await b.next((m) => m.type === "graphs:changed");
     expect(a.messages.filter((m) => m.type === "node:update")).toEqual([{ type: "node:update", nodeRun: nodeRun("n1", "r1") }]);
     expect(b.messages.some((m) => m.type === "node:update")).toBe(false);
-    expect(b.messages.some((m) => m.type === "run:update")).toBe(true);
+    expect(b.messages.find((m) => m.type === "run:update")).toMatchObject({ repoId: REPO_ID, run: { id: "r1" } });
+    expect(b.messages.find((m) => m.type === "graphs:changed")).toEqual({ type: "graphs:changed", repoId: REPO_ID, graphId: "g" });
 
     a.send({ type: "unsubscribe", runId: "r1" });
     a.send({ type: "ping" });
     await waitFor(() => a.messages.filter((m) => m.type === "pong").length === 2);
     setup.ctx.bus.emit("node:update", { nodeRun: nodeRun("n3", "r1") });
-    setup.ctx.bus.emit("graphs:changed", { graphId: "g2" });
+    setup.ctx.bus.emit("graphs:changed", { repoId: REPO_ID, graphId: "g2" });
     await a.next((m) => m.type === "graphs:changed" && m.graphId === "g2");
     expect(a.messages.filter((m) => m.type === "node:update")).toHaveLength(1);
+  });
+
+  it("accepts repo:subscribe / repo:unsubscribe and rejects invalid repository ids", async () => {
+    const a = await connect();
+    a.send({ type: "repo:subscribe", repoId: REPO_ID });
+    a.send({ type: "repo:unsubscribe", repoId: REPO_ID });
+    a.send({ type: "ping" });
+    await a.next((m) => m.type === "pong");
+    expect(a.messages.some((m) => m.type === "error")).toBe(false);
+    a.send({ type: "repo:subscribe", repoId: "../x" });
+    await a.next((m) => m.type === "error");
   });
 
   it("attaches to a PTY with replay, live output, input and exit", async () => {

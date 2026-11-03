@@ -6,7 +6,7 @@ import { EngineError } from "../src/engine/engine.js";
 import { hookToken } from "../src/hooks/hook-token.js";
 import { createHttpApp } from "../src/http/app.js";
 import { createTempRepo, tempDir } from "./helpers.js";
-import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
+import { createTestContext, TEST_HOOK_SECRET, TEST_TOKEN } from "./support/http-ctx.js";
 import { sessionCookieValue } from "../src/hooks/hook-token.js";
 
 vi.mock("../src/git/repo.js", () => ({
@@ -98,12 +98,22 @@ describe("security middleware", () => {
   });
 
   it("accepts a node run's hook token on its own hook routes only", async () => {
-    const token = hookToken(TEST_TOKEN, "nr1");
+    const token = hookToken(TEST_HOOK_SECRET, "nr1");
     const headers = { ...HOST, authorization: `Bearer ${token}`, "content-type": "application/json" };
     expect((await app.request("/hooks/nr1/stop", { method: "POST", headers, body: "{}" })).status).toBe(204);
     expect((await app.request("/hooks/nr2/stop", { method: "POST", headers, body: "{}" })).status).toBe(401);
     expect((await app.request("/api/graphs", { headers })).status).toBe(401);
     expect((await app.request("/api/node-runs/nr1/approval", { method: "POST", headers, body: '{"approved":true}' })).status).toBe(401);
+  });
+
+  it("derives hook tokens from the hook secret, never from the API token", async () => {
+    const fromToken = { ...HOST, authorization: `Bearer ${hookToken(TEST_TOKEN, "nr1")}`, "content-type": "application/json" };
+    expect((await app.request("/hooks/nr1/stop", { method: "POST", headers: fromToken, body: "{}" })).status).toBe(401);
+    const fromSecret = { ...HOST, authorization: `Bearer ${hookToken(TEST_HOOK_SECRET, "nr1")}`, "content-type": "application/json" };
+    expect((await app.request("/hooks/nr1/stop", { method: "POST", headers: fromSecret, body: "{}" })).status).toBe(204);
+    // The API token itself still works for local clients.
+    const bearer = { ...HOST, authorization: `Bearer ${TEST_TOKEN}`, "content-type": "application/json" };
+    expect((await app.request("/hooks/nr1/stop", { method: "POST", headers: bearer, body: "{}" })).status).toBe(204);
   });
 });
 

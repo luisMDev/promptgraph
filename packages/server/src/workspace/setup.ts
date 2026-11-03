@@ -1,5 +1,5 @@
 import type { Lane } from "@promptgraph/shared";
-import type { PtyManager } from "../pty/pty-manager.js";
+import type { OwnedPtys } from "../pty/pty-manager.js";
 
 export interface WorkspaceSetupResult {
   ok: boolean;
@@ -15,7 +15,7 @@ const KILL_WAIT_MS = 3000;
  * lane's first node. The engine shows it as `laneSetup` on that node; failure fails the node.
  */
 export async function runWorkspaceSetup(opts: {
-  ptys: PtyManager;
+  ptys: OwnedPtys;
   lane: Lane;
   command: string;
   nodeRunId: string;

@@ -69,11 +69,12 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * Requires `Authorization: Bearer <token>` or the `pg_token` cookie. A request to `/` (or any non-API
  * page) with `?t=<token>` sets the cookie (HttpOnly, SameSite=Strict, Path=/) and redirects to drop `t`.
  * The cookie holds sessionCookieValue(token), never the token: other local servers receive it too.
- * `/hooks/<nodeRunId>/*` also accepts that node run's hookToken (the only credential Claude PTYs get).
+ * `/hooks/<nodeRunId>/*` accepts the Bearer token or that node run's hookToken(hookSecret, nodeRunId)
+ * (the only credential Claude PTYs get; derived from the per-start hook secret, never from the token).
  * Cookie-authenticated API writes must be `application/json` so a cross-origin form/`text/plain` POST
  * cannot pass without a CORS preflight. 401/403 ApiError otherwise. Constant-time comparison.
  */
-export function tokenAuth(token: string): MiddlewareHandler {
+export function tokenAuth(token: string, hookSecret: string): MiddlewareHandler {
   const cookieSecret = sessionCookieValue(token);
   return async (c, next) => {
     const url = new URL(c.req.url);
@@ -86,7 +87,7 @@ export function tokenAuth(token: string): MiddlewareHandler {
         nodeRunId = "";
       }
       const presented = bearer(c.req.header("authorization"));
-      if (tokenMatches(token, presented) || (nodeRunId && tokenMatches(hookToken(token, nodeRunId), presented))) return next();
+      if (tokenMatches(token, presented) || (nodeRunId && tokenMatches(hookToken(hookSecret, nodeRunId), presented))) return next();
       return c.json(deny("Unauthorized: missing or invalid hook token", "unauthorized"), 401);
     }
     const t = url.searchParams.get("t");

@@ -24,12 +24,20 @@ export interface GitOptions {
   env?: Record<string, string>;
   /** Stop reading (and kill git) once stdout exceeds this many bytes; the result is then `truncated`. */
   maxStdoutBytes?: number;
+  /**
+   * A read-only query (branch listing, status, diffs, `worktree prune`): runs with READ_ONLY_GIT_CONFIG,
+   * so listing an untrusted clone does not run its fsmonitor hook (DESIGN §14).
+   */
+  readOnly?: boolean;
 }
+
+/** `-c` options of read-only git calls: never start the repository's configured fsmonitor command. */
+export const READ_ONLY_GIT_CONFIG: readonly string[] = ["-c", "core.fsmonitor=false"];
 
 /** Runs git (never through a shell). Resolves with the exit code; never throws on non-zero. */
 export function git(cwd: string, args: readonly string[], opts: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, {
+    const child = spawn("git", opts.readOnly ? [...READ_ONLY_GIT_CONFIG, ...args] : args, {
       cwd,
       env: { ...process.env, ...opts.env, GIT_TERMINAL_PROMPT: "0" },
       stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],

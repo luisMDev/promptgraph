@@ -20,7 +20,7 @@ function setup(config: Record<string, unknown>) {
   const paths = getPaths(env);
   const ptys = new PtyManager(new EventBus(), () => null);
   cleanups.push(() => ptys.killAll());
-  const runner = new ShellRunner({ ptys, paths, env });
+  const runner = new ShellRunner({ ptys: ptys.owned("repo"), paths, env });
   const run = makeRun({ nodes: [{ id: "sh", type: "shell", label: "Tests", config } as never] });
   const ctx = makeCtx({ run, node: run.graphSnapshot.nodes[0]!, lane: makeLane(t.dir) });
   return { dir: t.dir, paths, ptys, run, ctx, exec: runner.start(ctx) };

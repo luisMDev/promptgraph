@@ -1,7 +1,7 @@
 import type { GraphNodeOf } from "@promptgraph/shared";
 import { childEnv } from "../config/child-env.js";
 import { ptyLogPath, type PgPaths } from "../config/paths.js";
-import type { PtyHandle, PtyManager } from "../pty/pty-manager.js";
+import type { OwnedPtys, PtyHandle } from "../pty/pty-manager.js";
 import { stripAnsi, tailLines, errorMessage } from "../util/text.js";
 import type { NodeExecution, Runner, RunnerContext, RunnerResult } from "./types.js";
 
@@ -13,7 +13,7 @@ const TAIL_BUFFER_CHARS = 256 * 1024;
 const KILL_WAIT_MS = 2000;
 
 export interface ShellRunnerDeps {
-  ptys: PtyManager;
+  ptys: OwnedPtys;
   paths: PgPaths;
   /** Base env for childEnv; defaults to process.env. */
   env?: NodeJS.ProcessEnv;

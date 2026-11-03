@@ -64,15 +64,15 @@ function setup(keepWorktrees: KeepWorktrees, workspaceSetup?: string) {
   });
   const store = new Store(db);
   const bus = new EventBus();
-  const repoRef = { path: repo, name: path.basename(repo) };
+  const repoRef = { id: "repo-00000000", path: repo, name: path.basename(repo) };
   const lanes = new LaneManager({ store, bus, paths, repo: repoRef });
   const ptys = new PtyManager(bus, () => null);
-  const graphs = new GraphStore(repo, bus);
+  const graphs = new GraphStore(repo, bus, repoRef.id);
   const engine = new Engine({
     store,
     graphs,
     lanes,
-    ptys,
+    ptys: ptys.owned(repoRef.id),
     runners: { prompt: new WriteRunner(), merge: new MergeAllRunner(lanes) },
     claude: {} as ClaudeRunner,
     bus,

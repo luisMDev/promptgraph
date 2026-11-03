@@ -9,6 +9,8 @@ export default defineConfig({
     testTimeout: 20_000,
     hookTimeout: 20_000,
     pool: "forks",
+    // A fresh PG_HOME per run, so nothing falls back to the user's real ~/.promptgraph.
+    globalSetup: ["./vitest.global-setup.ts"],
     setupFiles: ["./packages/web/src/test-setup.ts"],
   },
 });

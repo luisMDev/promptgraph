@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { AppSettingsStore } from "../config/app-settings.js";
 import { getPaths, ptyLogPath, type PgPaths } from "../config/paths.js";
+import { repoIdFor } from "../config/repo-id.js";
 import { SUPPORTED_PHASE } from "../config/version.js";
 import { Engine } from "../engine/engine.js";
 import { EventBus } from "../events/bus.js";
@@ -21,6 +23,8 @@ export interface AppContext {
   paths: PgPaths;
   /** Random per-start session token (§14). */
   token: string;
+  /** Random per-start secret of the hook tokens (hookToken), memory only (DESIGN §7.1). */
+  hookSecret: string;
   /** Prerequisite warnings shown in the UI (RepoInfoResponse.warnings). */
   warnings: string[];
   bus: EventBus;
@@ -59,23 +63,27 @@ export async function createAppContext(opts: CreateAppContextOptions): Promise<A
   const store = new Store(openDatabase(paths.stateDb));
   fs.chmodSync(paths.stateDb, 0o600);
   const bus = new EventBus();
-  const repo: RepoRef = { path: opts.repoPath, name: path.basename(opts.repoPath) };
-  const graphs = new GraphStore(repo.path, bus);
+  const repo: RepoRef = { id: repoIdFor(opts.repoPath), path: opts.repoPath, name: path.basename(opts.repoPath) };
+  const graphs = new GraphStore(repo.path, bus, repo.id);
   const settings = new AppSettingsStore(paths.settingsFile);
   const ptys = new PtyManager(bus, (ptyId) => resolvePtyLogPath(store, paths, ptyId));
+  // The engine and the runners only see this repository's PTYs.
+  const repoPtys = ptys.owned(repo.id);
   const hooks = new HookRouter();
   const pgHookPath = installPgHook(paths);
   const lanes = new LaneManager({ store, bus, paths, repo });
+  const hookSecret = randomBytes(32).toString("base64url");
   // `ctx.port` is only read when a node starts, i.e. after the server is listening.
-  const claude = new ClaudeRunner({ ptys, hooks, paths, pgHookPath, endpoint: () => ({ port: ctx.port, token: opts.token }), env });
-  const runners = createRunnerRegistry({ claude, ptys, lanes, paths, env });
-  const engine = new Engine({ store, graphs, lanes, ptys, runners, claude, bus, paths, repo, phase: SUPPORTED_PHASE, env });
+  const claude = new ClaudeRunner({ ptys: repoPtys, hooks, paths, pgHookPath, endpoint: () => ({ port: ctx.port, hookSecret }), env });
+  const runners = createRunnerRegistry({ claude, ptys: repoPtys, lanes, paths, env });
+  const engine = new Engine({ store, graphs, lanes, ptys: repoPtys, runners, claude, bus, paths, repo, phase: SUPPORTED_PHASE, env });
   ptys.onUserInput((ptyId) => engine.handleUserInput(ptyId));
   const notifier = new Notifier({ bus, settings });
   const ctx: AppContext = {
     repo,
     paths,
     token: opts.token,
+    hookSecret,
     warnings: opts.warnings ?? [],
     bus,
     store,

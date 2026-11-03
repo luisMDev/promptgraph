@@ -24,6 +24,8 @@ import { checkpointIfDirty, isCheckpointMessage, squashMergeMessage } from "../r
 import type { Store } from "../store/store.js";
 
 export interface RepoRef {
+  /** repoId (`repoIdFor(path)`, DESIGN §4.2): tags bus events and owns the repository's PTYs. */
+  id: string;
   /** Absolute path of the main checkout (git top-level). */
   path: string;
   /** basename(path); used in worktree paths. */
@@ -68,7 +70,7 @@ export class LaneManager {
 
   /** Whether any branch `<prefix>/<shortId>/…` exists (kept branches of earlier runs carry work). */
   async shortIdHasBranches(graph: Graph, shortId: string): Promise<boolean> {
-    const res = await git(this.deps.repo.path, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/heads/${resolveBranchPrefix(graph)}/${shortId}/`]);
+    const res = await git(this.deps.repo.path, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/heads/${resolveBranchPrefix(graph)}/${shortId}/`], { readOnly: true });
     return res.code !== 0 || res.stdout.trim() !== "";
   }
 
@@ -270,7 +272,7 @@ export class LaneManager {
       );
       this.setStatus(lane, "removed");
     }
-    await this.withLaneLock(REPO_LOCK, () => git(repo.path, ["worktree", "prune"]));
+    await this.withLaneLock(REPO_LOCK, () => git(repo.path, ["worktree", "prune"], { readOnly: true }));
     fs.rmSync(path.join(paths.worktreesDir, repo.name, runId), { recursive: true, force: true });
     store.updateRun(runId, { cleanedUp: true });
   }
@@ -288,7 +290,7 @@ export class LaneManager {
 
   /** `git worktree prune` (server start). */
   async prune(): Promise<void> {
-    await this.withLaneLock(REPO_LOCK, () => gitOk(this.deps.repo.path, ["worktree", "prune"]));
+    await this.withLaneLock(REPO_LOCK, () => gitOk(this.deps.repo.path, ["worktree", "prune"], { readOnly: true }));
   }
 
   /** Serialises git writes per lane. */
@@ -321,7 +323,7 @@ async function removeLeftovers(repoPath: string, branch: string, dir: string, ba
     await git(repoPath, ["worktree", "remove", "--force", dir]);
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  await gitOk(repoPath, ["worktree", "prune"]);
+  await gitOk(repoPath, ["worktree", "prune"], { readOnly: true });
   const tip = await git(repoPath, ["rev-parse", "-q", "--verify", `refs/heads/${branch}^{commit}`]);
   if (tip.code !== 0) return;
   // Safe to delete only when every commit of the branch is also reachable from the new base.
@@ -356,8 +358,8 @@ async function worktreePatch(cwd: string, base: string, head: string, maxBytes: 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pg-diff-"));
   try {
     const env = { GIT_INDEX_FILE: path.join(tmp, "index") };
-    await gitOk(cwd, ["read-tree", "HEAD"], { env });
-    await gitOk(cwd, ["add", "-A"], { env });
+    await gitOk(cwd, ["read-tree", "HEAD"], { env, readOnly: true });
+    await gitOk(cwd, ["add", "-A"], { env, readOnly: true });
     return await lanePatch(cwd, ["diff", "--cached", ...DIFF_FLAGS, base], env, base, head, maxBytes);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -371,9 +373,9 @@ async function worktreePatch(cwd: string, base: string, head: string, maxBytes: 
 async function lanePatch(cwd: string, diffArgs: string[], env: Record<string, string>, base: string, head: string, maxBytes: number): Promise<DiffResponse> {
   const args = [...BIG_FILE_THRESHOLD, ...diffArgs];
   const [patchRes, numstat, nameStatus] = await Promise.all([
-    git(cwd, args, { env, maxStdoutBytes: maxBytes }),
-    git(cwd, [...args, "--numstat", "-z"], { env }),
-    git(cwd, [...args, "--name-status", "-z"], { env }),
+    git(cwd, args, { env, maxStdoutBytes: maxBytes, readOnly: true }),
+    git(cwd, [...args, "--numstat", "-z"], { env, readOnly: true }),
+    git(cwd, [...args, "--name-status", "-z"], { env, readOnly: true }),
   ]);
   if (nameStatus.code !== 0) throw new GitError([...args, "--name-status"], nameStatus.code, nameStatus.stderr);
   const patch = patchRes.code === 0 ? patchRes.stdout.trimEnd() : `(patch unavailable: ${patchRes.stderr.trim()})`;

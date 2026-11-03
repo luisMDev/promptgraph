@@ -70,7 +70,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   }
   ctx.port = (server.address() as AddressInfo).port;
   const stopNotifier = ctx.notifier.start();
-  const stopWatch = ctx.graphs.watch();
+  const watch = ctx.graphs.watch();
   const hub = new WsHub(ctx);
   hub.attach(server);
   // §19.1: lets local clients (promptgraph mcp) find this server and its token.
@@ -88,7 +88,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const close = async () => {
     removeServerInfo(paths, opts.repoPath);
     await ctx.engine.shutdown();
-    stopWatch();
+    // Anything the engine does not own (none today; the daemon has one PtyManager for every repository).
+    await ctx.ptys.killAll();
+    watch.stop();
     stopNotifier();
     await hub.close();
     await new Promise<void>((resolve) => {

@@ -83,4 +83,22 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE node_runs ADD COLUMN snapshot_start TEXT;
   ALTER TABLE node_runs ADD COLUMN snapshot_end TEXT;
   `,
+  // M7 daemon (DESIGN §4.2, §4.4, §11.2, §14): registered repositories, browser sessions, one-time steps.
+  `
+  CREATE TABLE repos (
+    id TEXT PRIMARY KEY,                 -- repoId, <slug>-<hash8>
+    path TEXT NOT NULL UNIQUE,           -- realpath of the git top level; = runs.repo_path
+    name TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    last_opened_at INTEGER
+  );
+  CREATE TABLE sessions (
+    id_hash TEXT PRIMARY KEY,            -- SHA-256 hex of the cookie value (the value is never stored)
+    label TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `,
 ];

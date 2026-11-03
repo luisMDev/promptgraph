@@ -87,7 +87,8 @@ export async function startBackgroundServer(
     const child = spawn(
       mcpEnv.serverCommand.command,
       [...mcpEnv.serverCommand.args, repoPath, "--no-open", "--port", String(opts.port ?? 0)],
-      { cwd: repoPath, detached: true, stdio: ["ignore", fd, fd], env: childEnv({}, mcpEnv.env) },
+      // childEnv strips PG_HOME (agents must not learn it): the server is promptgraph itself and must use ours.
+      { cwd: repoPath, detached: true, stdio: ["ignore", fd, fd], env: childEnv({ PG_HOME: mcpEnv.paths.home }, mcpEnv.env) },
     );
     child.once("exit", (code) => {
       exited = { code };

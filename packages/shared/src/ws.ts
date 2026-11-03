@@ -1,21 +1,28 @@
 import { z } from "zod";
+import { RepoIdSchema, RepoSummarySchema } from "./repos.js";
 import { LaneSchema, NodeRunSchema, RunSummarySchema } from "./run.js";
 
 /**
- * WebSocket protocol on /ws (§12.2). JSON text frames, one message per frame.
- * Auth: `pg_token` cookie or `?t=<token>` on the upgrade request.
+ * WebSocket protocol on /ws (DESIGN §12.2). JSON text frames, one message per frame.
  *
  * Delivery rules:
- * - `run:update` and `graphs:changed` are broadcast to every client.
+ * - `repo:status` and `repo:removed` go to every client.
+ * - `run:update` and `graphs:changed` go to clients subscribed to their repository (`repo:subscribe`).
  * - `node:update` / `lane:update` go to clients subscribed to that run.
  * - `pty:*` go to clients attached to that pty.
  */
+
+/** Close code when the token was rotated or the socket's session revoked: the client stops reconnecting. */
+export const WS_CLOSE_SIGNED_OUT = 4401;
 
 // --- server → client -------------------------------------------------------
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("hello"), version: z.string() }),
-  z.object({ type: z.literal("run:update"), run: RunSummarySchema }),
+  /** A repository's counters or state changed (debounced per repository). */
+  z.object({ type: z.literal("repo:status"), repo: RepoSummarySchema }),
+  z.object({ type: z.literal("repo:removed"), repoId: RepoIdSchema }),
+  z.object({ type: z.literal("run:update"), repoId: RepoIdSchema, run: RunSummarySchema }),
   z.object({ type: z.literal("node:update"), nodeRun: NodeRunSchema }),
   z.object({ type: z.literal("lane:update"), lane: LaneSchema }),
   /** Sent in reply to pty:attach before the replay. `live` = process still running (input accepted). */
@@ -26,7 +33,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   /** Unknown pty, attach failure, input to a dead pty, … */
   z.object({ type: z.literal("pty:error"), ptyId: z.string(), message: z.string() }),
   /** A graph file was saved, created or deleted (by this app or detected on disk). */
-  z.object({ type: z.literal("graphs:changed"), graphId: z.string() }),
+  z.object({ type: z.literal("graphs:changed"), repoId: RepoIdSchema, graphId: z.string() }),
   z.object({ type: z.literal("error"), message: z.string() }),
   z.object({ type: z.literal("pong") }),
 ]);
@@ -36,6 +43,9 @@ export type ServerMessageOf<T extends ServerMessage["type"]> = Extract<ServerMes
 // --- client → server -------------------------------------------------------
 
 export const ClientMessageSchema = z.discriminatedUnion("type", [
+  /** Receive run:update / graphs:changed of this repository (and activate it, DESIGN §4.2). */
+  z.object({ type: z.literal("repo:subscribe"), repoId: RepoIdSchema }),
+  z.object({ type: z.literal("repo:unsubscribe"), repoId: RepoIdSchema }),
   z.object({ type: z.literal("subscribe"), runId: z.string() }),
   z.object({ type: z.literal("unsubscribe"), runId: z.string() }),
   /** Server replies pty:attached, then the buffered output, then live output. Size applies if given. */

@@ -4,7 +4,7 @@ import { git, gitOk } from "./exec.js";
 export async function resolveRepoRoot(dir: string): Promise<string> {
   let res;
   try {
-    res = await git(dir, ["rev-parse", "--show-toplevel"]);
+    res = await git(dir, ["rev-parse", "--show-toplevel"], { readOnly: true });
   } catch {
     throw new Error("not a git repository");
   }
@@ -14,13 +14,13 @@ export async function resolveRepoRoot(dir: string): Promise<string> {
 }
 
 export async function currentBranch(repoPath: string): Promise<string | null> {
-  const res = await git(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const res = await git(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"], { readOnly: true });
   return res.code === 0 ? res.stdout.trim() || null : null;
 }
 
 /** Local branch names. */
 export async function listBranches(repoPath: string): Promise<string[]> {
-  const out = await gitOk(repoPath, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]);
+  const out = await gitOk(repoPath, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"], { readOnly: true });
   return out.split("\n").filter(Boolean);
 }
 
@@ -31,5 +31,5 @@ export function revParse(cwd: string, ref: string): Promise<string> {
 
 /** Uncommitted (incl. untracked) changes in the worktree at `cwd`. */
 export async function isDirty(cwd: string): Promise<boolean> {
-  return (await gitOk(cwd, ["status", "--porcelain", "--untracked-files=all"])) !== "";
+  return (await gitOk(cwd, ["status", "--porcelain", "--untracked-files=all"], { readOnly: true })) !== "";
 }

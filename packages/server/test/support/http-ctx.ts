@@ -4,6 +4,7 @@ import { vi, type Mock } from "vitest";
 import type { AppContext } from "../../src/app/context.js";
 import { AppSettingsStore } from "../../src/config/app-settings.js";
 import { getPaths } from "../../src/config/paths.js";
+import { repoIdFor } from "../../src/config/repo-id.js";
 import type { Engine } from "../../src/engine/engine.js";
 import { EventBus } from "../../src/events/bus.js";
 import { GraphStore } from "../../src/graphs/graph-store.js";
@@ -12,6 +13,8 @@ import { PtyManager } from "../../src/pty/pty-manager.js";
 import { openDatabase, Store } from "../../src/store/store.js";
 
 export const TEST_TOKEN = "test-token-123";
+/** Hook secret of the test context (hook tokens derive from it, never from the token). */
+export const TEST_HOOK_SECRET = "test-hook-secret-456";
 
 const ENGINE_METHODS = [
   "startRun",
@@ -57,14 +60,16 @@ export function createTestContext(repo: string, root: string, env: NodeJS.Proces
   fs.mkdirSync(paths.home, { recursive: true });
   const bus = new EventBus();
   const engine = mockEngine();
+  const repoId = repoIdFor(repo);
   const ctx = {
-    repo: { path: repo, name: path.basename(repo) },
+    repo: { id: repoId, path: repo, name: path.basename(repo) },
     paths,
     token: TEST_TOKEN,
+    hookSecret: TEST_HOOK_SECRET,
     warnings: ["gh not found: PR nodes will fail"],
     bus,
     store: new Store(openDatabase(":memory:")),
-    graphs: new GraphStore(repo, bus),
+    graphs: new GraphStore(repo, bus, repoId),
     settings: new AppSettingsStore(paths.settingsFile),
     ptys: new PtyManager(bus, () => null),
     hooks: new HookRouter(),

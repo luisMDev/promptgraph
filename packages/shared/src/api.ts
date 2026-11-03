@@ -39,6 +39,30 @@ export const RepoInfoResponseSchema = z.object({
 });
 export type RepoInfoResponse = z.infer<typeof RepoInfoResponseSchema>;
 
+/** GET /api/daemon — daemon-wide information shown on Home (DESIGN §12.1). */
+export const DaemonInfoResponseSchema = z.object({
+  version: z.string(),
+  pid: z.number().int().positive(),
+  port: z.number().int().positive(),
+  startedAt: z.number(),
+  /** Design phase the engine supports; the web validates with the same ValidateOptions.phase. */
+  phase: z.union([z.literal(1), z.literal(2)]),
+  /** Node types the engine can run; the web validates with ValidateOptions.supportedNodeTypes. */
+  supportedNodeTypes: z.array(NodeTypeSchema),
+  /** Prerequisite warnings checked against the daemon's environment. */
+  warnings: z.array(z.string()),
+  /** A desktop notifier (notify-send / WSL PowerShell) was found (§18 Q2). */
+  notificationsAvailable: z.boolean(),
+});
+export type DaemonInfoResponse = z.infer<typeof DaemonInfoResponseSchema>;
+
+/** POST /api/daemon/login-codes (Bearer only) — a one-time code: 32 bytes base64url, single use, 30 s. */
+export const LoginCodeResponseSchema = z.object({
+  code: z.string().min(43),
+  expiresAt: z.number(),
+});
+export type LoginCodeResponse = z.infer<typeof LoginCodeResponseSchema>;
+
 /** App-wide settings stored in ~/.promptgraph/settings.json. */
 export const AppSettingsSchema = z.object({
   /** Desktop notifications when a node needs attention (§18 Q2). */

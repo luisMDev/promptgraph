@@ -18,7 +18,7 @@ import { childEnv, claudeBin, type PgHookEnv } from "../../config/child-env.js";
 import { hooksSettingsPath, ptyLogPath, runDir, type PgPaths } from "../../config/paths.js";
 import type { HookMessage, HookRouter } from "../../hooks/hook-router.js";
 import { hookToken } from "../../hooks/hook-token.js";
-import type { PtyHandle, PtyManager } from "../../pty/pty-manager.js";
+import type { OwnedPtys, PtyHandle } from "../../pty/pty-manager.js";
 import type { NodeRunPatch } from "../../store/store.js";
 import { newId, newSessionId } from "../../util/ids.js";
 import { stripAnsi, errorMessage } from "../../util/text.js";
@@ -40,11 +40,13 @@ import { preTrustDirectory, TRUST_DIALOG_PATTERN } from "./trust.js";
 
 export interface ServerEndpoint {
   port: number;
-  token: string;
+  /** Per-start random secret the hook tokens derive from (never the API token, DESIGN §7.1). */
+  hookSecret: string;
 }
 
 export interface ClaudeRunnerDeps {
-  ptys: PtyManager;
+  /** The repository's PTYs: node PTYs and `reopen-` sessions are owned by it. */
+  ptys: OwnedPtys;
   hooks: HookRouter;
   paths: PgPaths;
   /** Absolute path of the installed pg-hook (installPgHook). */
@@ -103,9 +105,10 @@ export function isSessionId(id: string): boolean {
  * 3. message = buildInitialMessage (or INTERRUPTED_MESSAGE + --resume when previousAttempt was
  *    interrupted; context "resume" → --resume <predecessor sessionId>);
  * 4. spawn claudeBin() in a PTY (id = nodeRun.id, logPath ptyLogPath) with childEnv(PG_PORT,
- *    PG_HOOK_HEADER_FILE, PG_NODE_RUN_ID); update {ptyId, sessionId, transcriptPath?}. The session
- *    token never reaches the child: the header file (0600, in the run dir) holds the node run's
- *    hookToken, valid only for its own /hooks/<nodeRunId>/* routes, and keeps it out of curl's argv;
+ *    PG_HOOK_HEADER_FILE, PG_NODE_RUN_ID); update {ptyId, sessionId, transcriptPath?}. The API token
+ *    never reaches the child: the header file (0600, in the run dir) holds the node run's hookToken
+ *    (HMAC of the per-start hook secret), valid only for its own /hooks/<nodeRunId>/* routes, and keeps
+ *    it out of curl's argv;
  * 5. hooks: session-start → confirm sessionId/transcriptPath, status running; activity → activity text
  *    (describeToolActivity), waiting_input → running; notification → waiting_input {kind:"notification"};
  *    stop → output.text = last_assistant_message ?? transcript fallback, output.usage =
@@ -300,7 +303,7 @@ class ClaudeExecution {
       this.resumeIdle = plan.resumeIdle;
       if (plan.resumeSessionId && !isSessionId(plan.resumeSessionId)) throw new Error("The session to resume has an invalid id");
       this.cleanups.push(await this.sessions.claim(plan.sessionId));
-      const settingsPath = writeHooksSettings(hooksSettingsPath(this.deps.paths, run.id), this.deps.pgHookPath);
+      const settingsPath = writeHooksSettings(hooksSettingsPath(this.deps.paths, run.id), this.deps.pgHookPath, { pgHome: this.deps.paths.home });
       const autoTrust = run.graphSnapshot.settings.autoTrustWorktrees;
       if (autoTrust) await preTrustDirectory(lane.worktreePath, this.env);
       if (this.ending) return this.settle(this.endingResult(null));
@@ -322,7 +325,7 @@ class ClaudeExecution {
       this.resuming = plan.resumeSessionId !== undefined;
       if (this.resuming && plan.resumeTranscriptPath) this.usageBaseline = assistantMessageIds(plan.resumeTranscriptPath);
       const endpoint = this.deps.endpoint();
-      const headerFile = this.writeHookHeader(endpoint.token);
+      const headerFile = this.writeHookHeader(endpoint.hookSecret);
       const args = buildClaudeArgs({
         message: plan.message,
         sessionId: plan.sessionId,
@@ -539,12 +542,12 @@ class ClaudeExecution {
   }
 
   /** `Authorization: Bearer <hookToken>` for curl's `-H @file`, readable by the user only. */
-  private writeHookHeader(sessionToken: string): string {
+  private writeHookHeader(hookSecret: string): string {
     const { run, nodeRun } = this.ctx;
     const file = path.join(runDir(this.deps.paths, run.id), `hook-${nodeRun.id}.header`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.rmSync(file, { force: true });
-    fs.writeFileSync(file, `Authorization: Bearer ${hookToken(sessionToken, nodeRun.id)}\n`, { mode: 0o600 });
+    fs.writeFileSync(file, `Authorization: Bearer ${hookToken(hookSecret, nodeRun.id)}\n`, { mode: 0o600 });
     this.cleanups.push(() => fs.rmSync(file, { force: true }));
     return file;
   }

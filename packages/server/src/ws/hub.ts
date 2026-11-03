@@ -19,6 +19,8 @@ const MAX_MESSAGE_BYTES = 1024 * 1024;
 
 interface Client {
   ws: WebSocket;
+  /** Repositories subscribed with repo:subscribe (the daemon scopes run:update / graphs:changed by them). */
+  repos: Set<string>;
   runs: Set<string>;
   ptys: Set<string>;
   alive: boolean;
@@ -26,7 +28,8 @@ interface Client {
 
 /**
  * WebSocket hub on /ws (§12.2, protocol in shared/ws.ts). Upgrade requires localhost Host/Origin and
- * isAuthorized(). On connect sends `hello`. Bus → clients: run:update and graphs:changed to all;
+ * isAuthorized(). On connect sends `hello`. Bus → clients: run:update and graphs:changed (with their
+ * repoId) to all — one repository per server, so repo:subscribe/unsubscribe only maintain the client's set;
  * node:update/lane:update to subscribers of the run; pty:data (base64) / pty:exit to attached clients.
  * Client messages are validated with ClientMessageSchema; pty:attach replies pty:attached + replay;
  * pty:input → PtyManager.userInput (live only, else pty:error).
@@ -46,8 +49,8 @@ export class WsHub {
     server.on("upgrade", this.onUpgrade);
     const { bus } = this.ctx;
     this.unsubscribe.push(
-      bus.on("run:update", ({ run }) => this.broadcast({ type: "run:update", run }, () => true)),
-      bus.on("graphs:changed", ({ graphId }) => this.broadcast({ type: "graphs:changed", graphId }, () => true)),
+      bus.on("run:update", ({ repoId, run }) => this.broadcast({ type: "run:update", repoId, run }, () => true)),
+      bus.on("graphs:changed", ({ repoId, graphId }) => this.broadcast({ type: "graphs:changed", repoId, graphId }, () => true)),
       bus.on("node:update", ({ nodeRun }) => this.broadcast({ type: "node:update", nodeRun }, (c) => c.runs.has(nodeRun.runId))),
       bus.on("lane:update", ({ lane }) => this.broadcast({ type: "lane:update", lane }, (c) => c.runs.has(lane.runId))),
       bus.on("pty:data", ({ ptyId, data }) =>
@@ -79,7 +82,7 @@ export class WsHub {
   }
 
   private connect(ws: WebSocket): void {
-    const client: Client = { ws, runs: new Set(), ptys: new Set(), alive: true };
+    const client: Client = { ws, repos: new Set(), runs: new Set(), ptys: new Set(), alive: true };
     this.clients.add(client);
     ws.on("pong", () => (client.alive = true));
     ws.on("message", (raw, isBinary) => this.receive(client, raw, isBinary));
@@ -103,6 +106,12 @@ export class WsHub {
   private handle(client: Client, msg: ClientMessage): void {
     const { ptys } = this.ctx;
     switch (msg.type) {
+      case "repo:subscribe":
+        client.repos.add(msg.repoId);
+        return;
+      case "repo:unsubscribe":
+        client.repos.delete(msg.repoId);
+        return;
       case "subscribe":
         client.runs.add(msg.runId);
         return;

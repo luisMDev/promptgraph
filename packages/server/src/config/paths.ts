@@ -2,9 +2,15 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Root of promptgraph's own state. `PG_HOME` overrides `~/.promptgraph` (tests). */
+/**
+ * Root of promptgraph's own state. `PG_HOME` overrides `~/.promptgraph` (tests). Under vitest (`VITEST`
+ * is set, and inherited by every process a test spawns) a missing PG_HOME is an error instead of a
+ * fallback, so a test can never read or migrate the user's real state.
+ */
 export function pgHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PG_HOME ? path.resolve(env.PG_HOME) : path.join(os.homedir(), ".promptgraph");
+  if (env.PG_HOME) return path.resolve(env.PG_HOME);
+  if (env.VITEST ?? process.env.VITEST) throw new Error("PG_HOME must be set under vitest (refusing to fall back to ~/.promptgraph)");
+  return path.join(os.homedir(), ".promptgraph");
 }
 
 export interface PgPaths {

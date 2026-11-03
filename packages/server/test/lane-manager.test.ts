@@ -23,7 +23,7 @@ describe("LaneManager", () => {
     const db = openDatabase(paths.stateDb);
     cleanups.push(() => db.close());
     const store = new Store(db);
-    const lanes = new LaneManager({ store, bus: new EventBus(), paths, repo: { path: repo, name: path.basename(repo) } });
+    const lanes = new LaneManager({ store, bus: new EventBus(), paths, repo: { id: "repo-00000000", path: repo, name: path.basename(repo) } });
     const run = store.insertRun({ id: "r1", repoPath: repo, graph: createEmptyGraph("demo", "Demo"), graphHash: "h", shortId: "ab12", startedAt: 1 });
     const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
     return { repo, store, lanes, run, git };
