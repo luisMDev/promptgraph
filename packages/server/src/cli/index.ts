@@ -7,7 +7,7 @@ import { checkPrereqs } from "./prereqs.js";
 import { startServer } from "./server.js";
 
 /**
- * `promptgraph` bin (§4): parseCliArgs → resolveRepoRoot → checkPrereqs (errors exit 1, warnings
+ * `promptgraph` bin (§4). `promptgraph mcp` runs the MCP server instead (§19.2). Otherwise: parseCliArgs → resolveRepoRoot → checkPrereqs (errors exit 1, warnings
  * printed) → startServer → print + open (unless --no-open) the URL. SIGINT/SIGTERM → server.close()
  * (graceful /exit of Claude PTYs, ≤5s) → exit 0; a second SIGINT force-exits.
  */
@@ -25,6 +25,12 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   if (opts.version) {
     console.log(VERSION);
+    return 0;
+  }
+  if (opts.command === "mcp") {
+    // §19.2: MCP server on stdio for Claude Code. Loaded lazily; stdout is the protocol channel.
+    const { runMcpStdio } = await import("../mcp/server.js");
+    await runMcpStdio();
     return 0;
   }
 

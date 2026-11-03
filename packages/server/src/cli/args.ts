@@ -1,6 +1,8 @@
 import path from "node:path";
 
 export interface CliOptions {
+  /** "serve" (default) or "mcp": `promptgraph mcp` runs the MCP server on stdio (§19.2). */
+  command: "serve" | "mcp";
   /** Default cwd; resolved to the git top-level later. */
   repoDir: string;
   /** Default 4777 (`PG_PORT_DEFAULT` env overrides for tests). */
@@ -18,10 +20,13 @@ function parsePort(value: string | undefined): number {
   return port;
 }
 
-/** `promptgraph [repo-dir] [--port 4777] [--no-open] [--help] [--version]` (§4). @throws on bad args. */
+/**
+ * `promptgraph [repo-dir] [--port 4777] [--no-open] [--help] [--version]` (§4), or `promptgraph mcp`
+ * (§19.2; a repository directory named "mcp" is passed as `./mcp`). @throws on bad args.
+ */
 export function parseCliArgs(argv: readonly string[], cwd: string = process.cwd()): CliOptions {
   const envPort = process.env.PG_PORT_DEFAULT;
-  const opts: CliOptions = { repoDir: cwd, port: envPort ? parsePort(envPort) : DEFAULT_PORT, open: true, help: false, version: false };
+  const opts: CliOptions = { command: "serve", repoDir: cwd, port: envPort ? parsePort(envPort) : DEFAULT_PORT, open: true, help: false, version: false };
   let repoDir: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
@@ -31,11 +36,12 @@ export function parseCliArgs(argv: readonly string[], cwd: string = process.cwd(
     else if (arg === "--help" || arg === "-h") opts.help = true;
     else if (arg === "--version" || arg === "-v") opts.version = true;
     else if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
-    else if (repoDir === null) repoDir = arg;
+    else if (i === 0 && arg === "mcp") opts.command = "mcp";
+    else if (repoDir === null && opts.command === "serve") repoDir = arg;
     else throw new Error(`Unexpected argument: ${arg}`);
   }
   if (repoDir !== null) opts.repoDir = path.resolve(cwd, repoDir);
   return opts;
 }
 
-export const USAGE = `Usage: promptgraph [repo-dir] [--port 4777] [--no-open]`;
+export const USAGE = `Usage: promptgraph [repo-dir] [--port 4777] [--no-open]\n       promptgraph mcp    (MCP server on stdio, for Claude Code)`;
