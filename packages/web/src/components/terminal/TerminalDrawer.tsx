@@ -4,6 +4,8 @@ import { useRunStore } from "../../store/run-store";
 import { clampDrawerHeight, useUiStore } from "../../store/ui-store";
 import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons } from "../common/icons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { Button } from "../common/ui";
 import type { PtyState } from "./TerminalView";
 
@@ -41,7 +43,7 @@ export function TerminalDrawer() {
   const activeMeta = active ? meta[active] : undefined;
 
   return (
-    <div className="flex shrink-0 flex-col border-t border-zinc-800 bg-zinc-950" style={{ height: open ? height : undefined }}>
+    <div className="flex shrink-0 flex-col border-t bg-background" style={{ height: open ? height : undefined }}>
       {open && (
         <div
           className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-blue-500/50"
@@ -52,37 +54,59 @@ export function TerminalDrawer() {
           aria-orientation="horizontal"
         />
       )}
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-zinc-800 bg-zinc-900/80 px-2">
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-zinc-400 hover:text-zinc-100"
-          onClick={() => useUiStore.getState().setDrawerOpen(!open)}
-          title={open ? "Collapse" : "Expand"}
-        >
-          <Icons.terminal />
-          <Icons.chevronDown className={open ? "" : "rotate-180"} />
-        </button>
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b bg-card/80 px-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="gap-1.5 px-1.5 text-muted-foreground"
+              onClick={() => useUiStore.getState().setDrawerOpen(!open)}
+              aria-label={open ? "Collapse" : "Expand"}
+            >
+              <Icons.terminal />
+              <Icons.chevronDown className={open ? "" : "rotate-180"} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{open ? "Collapse" : "Expand"}</TooltipContent>
+        </Tooltip>
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {tabs.map((ptyId) => {
             const st = states[ptyId];
+            const closeHint = ptyId.startsWith("reopen-") ? "Close and end this reopened session" : "Close terminal";
+            // Plain buttons rather than Radix Tabs: a Radix trigger activates on mousedown and then takes focus,
+            // which would steal it from the xterm instance that focuses itself when its tab becomes visible.
             return (
               <div
                 key={ptyId}
-                className={`group flex shrink-0 items-center gap-1.5 rounded-md py-1 pr-1 pl-2.5 text-xs ${ptyId === active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/60"}`}
+                className={cn(
+                  "group flex shrink-0 items-center gap-0.5 rounded-md pr-0.5 text-xs",
+                  ptyId === active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60",
+                )}
               >
-                <button type="button" className="flex items-center gap-1.5" onClick={() => useUiStore.getState().setActiveTerminal(ptyId)}>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="gap-1.5 pl-2.5 font-normal text-inherit hover:bg-transparent hover:text-inherit dark:hover:bg-transparent"
+                  onClick={() => useUiStore.getState().setActiveTerminal(ptyId)}
+                >
                   <span className={`size-1.5 rounded-full ${st?.phase === "live" ? "bg-green-500" : st?.phase === "error" ? "bg-red-500" : "bg-zinc-500"}`} />
                   <span className="max-w-48 truncate">{meta[ptyId]?.title ?? ptyId}</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label="Close terminal"
-                  className="rounded p-0.5 text-zinc-500 opacity-60 group-hover:opacity-100 hover:bg-zinc-700 hover:text-zinc-100"
-                  title={ptyId.startsWith("reopen-") ? "Close and end this reopened session" : "Close terminal"}
-                  onClick={() => void closeTerminalTab(ptyId)}
-                >
-                  <Icons.x />
-                </button>
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Close terminal"
+                      className="size-5 text-muted-foreground opacity-60 group-hover:opacity-100 hover:text-foreground"
+                      onClick={() => void closeTerminalTab(ptyId)}
+                    >
+                      <Icons.x />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{closeHint}</TooltipContent>
+                </Tooltip>
               </div>
             );
           })}
@@ -92,7 +116,7 @@ export function TerminalDrawer() {
       <div className={`relative min-h-0 flex-1 ${open ? "" : "hidden"}`}>
         {tabs.map((ptyId) => (
           <div key={ptyId} className={ptyId === active ? "absolute inset-0" : "hidden"}>
-            <Suspense fallback={<p className="p-3 text-xs text-zinc-500">Loading terminal…</p>}>
+            <Suspense fallback={<p className="p-3 text-xs text-muted-foreground">Loading terminal…</p>}>
               <TerminalView ptyId={ptyId} visible={open && ptyId === active} onState={(s) => setState(ptyId, s)} />
             </Suspense>
           </div>
@@ -110,8 +134,8 @@ function TabStatus({ state, nodeRunId, title }: { state: PtyState | undefined; n
     <div className="flex shrink-0 items-center gap-2 pl-2 text-[11px]">
       <GraceCountdown nodeRun={nodeRun} compact />
       {state?.phase === "live" && <span className="text-green-400">Live — you can type</span>}
-      {state?.phase === "replay" && <span className="text-zinc-500">Read-only replay</span>}
-      {state?.phase === "connecting" && <span className="text-zinc-500">Connecting…</span>}
+      {state?.phase === "replay" && <span className="text-muted-foreground">Read-only replay</span>}
+      {state?.phase === "connecting" && <span className="text-muted-foreground">Connecting…</span>}
       {state?.phase === "error" && <span className="text-red-400">{state.message}</span>}
       {canReopen && nodeRunId && (
         <Button size="sm" onClick={() => void reopenSession(nodeRunId, title)} title="claude --resume in a new terminal (not part of the run)">

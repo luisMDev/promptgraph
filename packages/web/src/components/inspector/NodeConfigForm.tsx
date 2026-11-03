@@ -63,13 +63,13 @@ function CommandForm({ node, settings, disabled, patch }: FormProps<"command">) 
         label="Slash command"
         hint={match ? (match.description ?? `${match.kind} from ${match.source}`) + (match.argumentHint ? ` · args: ${match.argumentHint}` : "") : "Pick a command or skill; arguments may follow it."}
       >
-        <input
-          className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-          list="pg-commands"
+        <OptionalText
           value={node.config.command}
+          list="pg-commands"
           placeholder="/code-review high"
+          mono
           disabled={disabled}
-          onChange={(e) => patch({ command: e.target.value })}
+          onChange={(command) => patch({ command: command ?? "" })}
         />
         <datalist id="pg-commands">
           {(commands ?? []).map((c) => (
@@ -159,13 +159,13 @@ function PrForm({ node, settings, disabled, patch }: FormProps<"pr">) {
         label={
           <>
             Require approval before pushing
-            {!settings.allowPrWithoutApproval && node.config.requireApproval && <Icons.lock className="text-zinc-500" />}
+            {!settings.allowPrWithoutApproval && node.config.requireApproval && <Icons.lock className="text-muted-foreground" />}
           </>
         }
         onChange={(requireApproval) => patch({ requireApproval })}
       />
       {!settings.allowPrWithoutApproval && (
-        <p className="text-[11px] text-zinc-500">Nothing leaves the machine without approval. Unlock "Allow PR nodes without approval" in graph settings.</p>
+        <p className="text-[11px] text-muted-foreground">Nothing leaves the machine without approval. Unlock "Allow PR nodes without approval" in graph settings.</p>
       )}
     </div>
   );
@@ -188,21 +188,21 @@ function MergeForm({ node, disabled, patch }: FormProps<"merge">) {
   return (
     <div className="space-y-3">
       <div className="space-y-1">
-        <span className="block text-xs font-medium text-zinc-400">Merge order</span>
+        <span className="block text-xs font-medium text-muted-foreground">Merge order</span>
         {inputs.length < 2 ? (
-          <p className="text-[11px] text-zinc-500">Connect two or more parallel branches to this node.</p>
+          <p className="text-[11px] text-muted-foreground">Connect two or more parallel branches to this node.</p>
         ) : (
-          <ol className="space-y-0.5 rounded-md bg-zinc-950 px-2 py-1.5 text-xs ring-1 ring-zinc-800">
+          <ol className="space-y-0.5 rounded-md border bg-background px-2 py-1.5 text-xs">
             {inputs.map((label, i) => (
               <li key={i} className="flex gap-2">
-                <span className="w-3 text-right font-mono text-zinc-500">{i + 1}</span>
-                <span className="truncate text-zinc-200">{label}</span>
-                <span className="ml-auto shrink-0 text-[10px] text-zinc-500">{i === 0 ? "continues its lane" : "merged in"}</span>
+                <span className="w-3 text-right font-mono text-muted-foreground">{i + 1}</span>
+                <span className="truncate text-foreground">{label}</span>
+                <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{i === 0 ? "continues its lane" : "merged in"}</span>
               </li>
             ))}
           </ol>
         )}
-        <span className="block text-[11px] leading-snug text-zinc-500">Inputs follow canvas order (left to right, then top to bottom); move nodes to reorder.</span>
+        <span className="block text-[11px] leading-snug text-muted-foreground">Inputs follow canvas order (left to right, then top to bottom); move nodes to reorder.</span>
       </div>
       <Field label="Strategy" hint="Other lanes are merged one at a time, in the order above.">
         <Select
@@ -290,8 +290,8 @@ function ConditionForm({ node, settings, disabled, patch }: FormProps<"condition
           </div>
         </>
       )}
-      {ev.kind === "exitCode" && <p className="text-[11px] text-zinc-500">true when the preceding shell node exited with this code; a timeout counts as false.</p>}
-      {ev.kind === "regex" && <p className="text-[11px] text-zinc-500">true when the pattern matches the predecessor's output (its text, else the shell output tail).</p>}
+      {ev.kind === "exitCode" && <p className="text-[11px] text-muted-foreground">true when the preceding shell node exited with this code; a timeout counts as false.</p>}
+      {ev.kind === "regex" && <p className="text-[11px] text-muted-foreground">true when the pattern matches the predecessor's output (its text, else the shell output tail).</p>}
     </div>
   );
 }

@@ -4,8 +4,14 @@ import { api, ApiRequestError, errorMessage } from "../../api/rest";
 import { useAppStore } from "../../store/app-store";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
-import { TextArea } from "../common/fields";
-import { Button, Field, Modal, inputClass } from "../common/ui";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Icons } from "../common/icons";
+import { Button, Field, Modal } from "../common/ui";
 import { DiffView } from "./DiffView";
 
 /**
@@ -93,7 +99,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
       title={
         <span className="flex items-baseline gap-2">
           <span>{isPr ? "Approve pull request" : "Approval required"}</span>
-          {context && <span className="truncate text-xs font-normal text-zinc-500">{context}</span>}
+          {context && <span className="truncate text-xs font-normal text-muted-foreground">{context}</span>}
         </span>
       }
       onClose={close}
@@ -111,44 +117,70 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
         </>
       }
     >
-      {error && <p className="mb-3 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
-      {!info && !error && <p className="text-sm text-zinc-500">Loading…</p>}
+      {error && (
+        <Alert variant="destructive" className="mb-3">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {!info && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
       {info && (
         <div className="space-y-4">
-          {!pending && <p className="rounded-md bg-zinc-800 px-3 py-2 text-xs text-zinc-300">This gate is no longer waiting for approval.</p>}
-          {info.message && <p className="rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm whitespace-pre-wrap text-zinc-100">{info.message}</p>}
+          {!pending && (
+            <Alert role="status">
+              <AlertDescription className="text-xs">This gate is no longer waiting for approval.</AlertDescription>
+            </Alert>
+          )}
+          {info.message && (
+            <Alert role="status" className="border-violet-500/30 bg-violet-500/10">
+              <AlertDescription className="whitespace-pre-wrap text-foreground">{info.message}</AlertDescription>
+            </Alert>
+          )}
           {info.pr && (
-            <div className="space-y-3 rounded-lg border border-zinc-800 p-3">
-              <p className="text-xs text-zinc-500">
-                Pushes the lane branch and opens a {info.pr.draft ? "draft " : ""}PR into <span className="font-mono text-zinc-300">{info.pr.base}</span>
-              </p>
-              <Field label="Title" hint="Empty keeps the proposed title.">
-                <input className={inputClass} value={title} disabled={!pending} onChange={(e) => setTitle(e.target.value)} />
-              </Field>
-              <Field label="Body">
-                <TextArea value={body} rows={6} disabled={!pending} onChange={setBody} />
-              </Field>
-            </div>
+            <Card size="sm">
+              <CardContent className="space-y-3">
+                <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                  Pushes the lane branch and opens a {info.pr.draft && <Badge variant="secondary">draft</Badge>} PR into
+                  <Badge variant="outline" className="font-mono">
+                    {info.pr.base}
+                  </Badge>
+                </p>
+                <Field label="Title" hint="Empty keeps the proposed title.">
+                  <Input value={title} disabled={!pending} onChange={(e) => setTitle(e.target.value)} />
+                </Field>
+                <Field label="Body">
+                  <Textarea className="field-sizing-fixed min-h-0 resize-y leading-relaxed" value={body} rows={6} disabled={!pending} onChange={(e) => setBody(e.target.value)} />
+                </Field>
+              </CardContent>
+            </Card>
           )}
           {outputs.length > 0 && (
             <div className="space-y-2">
-              <h3 className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Previous steps</h3>
+              <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Previous steps</h3>
               {outputs.map((p) => (
-                <details key={p.nodeId} open={outputs.length === 1} className="rounded-md border border-zinc-800 bg-zinc-950">
-                  <summary className="cursor-pointer px-3 py-2 text-sm text-zinc-300">{p.label}</summary>
-                  <pre className="max-h-64 overflow-auto px-3 pb-3 text-xs whitespace-pre-wrap text-zinc-400">{p.text}</pre>
-                </details>
+                <Collapsible key={p.nodeId} defaultOpen={outputs.length === 1} className="group/output rounded-md border bg-background">
+                  <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-3 py-2 text-left text-sm text-foreground/85 outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+                    <Icons.chevronDown className="size-3.5 shrink-0 -rotate-90 transition-transform group-data-[state=open]/output:rotate-0" />
+                    {p.label}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <pre className="max-h-64 overflow-auto px-3 pb-3 text-xs whitespace-pre-wrap text-muted-foreground">{p.text}</pre>
+                  </CollapsibleContent>
+                </Collapsible>
               ))}
             </div>
           )}
           {info.showDiff &&
             (diff ? (
               <DiffView diff={diff} />
+            ) : diffError ? (
+              <Alert variant="destructive">
+                <AlertDescription className="text-xs">Could not load the diff: {diffError}</AlertDescription>
+              </Alert>
             ) : (
-              <p className={`text-xs ${diffError ? "text-red-300" : "text-zinc-500"}`}>{diffError ? `Could not load the diff: ${diffError}` : "Loading diff…"}</p>
+              <p className="text-xs text-muted-foreground">Loading diff…</p>
             ))}
           <Field label={pending ? "Comment (optional, passed on with the decision)" : "Comment"}>
-            <TextArea value={comment} rows={2} disabled={!pending} onChange={setComment} />
+            <Textarea className="field-sizing-fixed min-h-0 resize-y leading-relaxed" value={comment} rows={2} disabled={!pending} onChange={(e) => setComment(e.target.value)} />
           </Field>
         </div>
       )}

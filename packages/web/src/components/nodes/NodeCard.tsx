@@ -1,12 +1,14 @@
 import { formatCostUsd, isActiveNodeStatus, type GraphNode, type NodeRun, nodeDisplayLabel } from "@promptgraph/shared";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { memo } from "react";
+import { memo, type ComponentProps } from "react";
 import { elapsed, formatTokens, prLabel } from "../../lib/format";
 import { NODE_TYPE_META, configPreview } from "../../lib/node-meta";
 import { laneSwatch, type NodeLane } from "../../lib/lanes";
 import { cardNote, type NoteTone } from "../../lib/run-view";
 import { nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
@@ -29,10 +31,10 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
   const border = style
     ? style.card
     : hasErrors
-      ? "border-red-500 bg-zinc-900 ring-1 ring-red-500/60"
+      ? "border-red-500 bg-card ring-1 ring-red-500/60"
       : hasWarnings
-        ? "border-amber-500/80 bg-zinc-900"
-        : "border-zinc-700 bg-zinc-900";
+        ? "border-amber-500/80 bg-card"
+        : "border-zinc-700 bg-card";
 
   return (
     <div
@@ -47,15 +49,15 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
           <NodeTypeIcon type={node.type} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] leading-tight font-semibold text-zinc-100">{node.label?.trim() || <span className="text-zinc-500 italic">{nodeDisplayLabel(node)}</span>}</div>
-          <div className="text-[10px] tracking-wide text-zinc-500 uppercase">{meta.title}</div>
+          <div className="truncate text-[13px] leading-tight font-semibold text-foreground">{node.label?.trim() || <span className="text-muted-foreground italic">{nodeDisplayLabel(node)}</span>}</div>
+          <div className="text-[10px] tracking-wide text-muted-foreground uppercase">{meta.title}</div>
         </div>
         {(hasErrors || hasWarnings) && (
           <Icons.alert className={`shrink-0 text-sm ${hasErrors ? "text-red-400" : "text-amber-400"}`} />
         )}
       </div>
 
-      <div className={`truncate px-3 pt-1.5 pb-2.5 text-xs text-zinc-400 ${mono ? "font-mono" : ""} ${portPad}`}>{configPreview(node)}</div>
+      <div className={`truncate px-3 pt-1.5 pb-2.5 text-xs text-muted-foreground ${mono ? "font-mono" : ""} ${portPad}`}>{configPreview(node)}</div>
 
       {mergeInputs.length > 1 && <MergeOrder inputs={mergeInputs} />}
 
@@ -112,12 +114,12 @@ function PortHandle({ id, top, color, label, labelColor, runMode, taken }: { id:
 /** Merge order (§18 Q4): the first input keeps its lane, the others are merged into it one at a time. */
 function MergeOrder({ inputs }: { inputs: string[] }) {
   return (
-    <ol className="space-y-0.5 px-3 pb-2.5 text-[11px] text-zinc-400" title="Merge order: the first input keeps its lane, the others are merged into it one at a time">
+    <ol className="space-y-0.5 px-3 pb-2.5 text-[11px] text-muted-foreground" title="Merge order: the first input keeps its lane, the others are merged into it one at a time">
       {inputs.map((label, i) => (
         <li key={i} className="flex items-center gap-1.5">
-          <span className="w-3 text-right font-mono text-zinc-500">{i + 1}</span>
+          <span className="w-3 text-right font-mono text-muted-foreground/80">{i + 1}</span>
           <span className="truncate">{label}</span>
-          {i === 0 && <span className="ml-auto text-[10px] text-zinc-500">base lane</span>}
+          {i === 0 && <span className="ml-auto text-[10px] text-muted-foreground/80">base lane</span>}
         </li>
       ))}
     </ol>
@@ -150,11 +152,11 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
       <div className="flex items-center gap-2 text-[11px]">
         <span className={`inline-block size-2 rounded-full ${style.dot} ${live ? "animate-pulse" : ""}`} />
         <span className={`font-medium ${style.text}`}>{style.label}</span>
-        {time && <span className="ml-auto font-mono text-zinc-400 tabular-nums">{time}</span>}
+        {time && <span className="ml-auto font-mono text-muted-foreground tabular-nums">{time}</span>}
       </div>
       <GraceCountdown nodeRun={nodeRun} compact />
       {note && <div className={`rounded px-1.5 py-1 text-[11px] leading-snug ${NOTE_TONE[note.tone]}`}>{note.text}</div>}
-      {!note && activity && live && <div className="truncate font-mono text-[11px] text-zinc-400" title={activity}>{activity}</div>}
+      {!note && activity && live && <div className="truncate font-mono text-[11px] text-muted-foreground" title={activity}>{activity}</div>}
       {prUrl && (
         <a
           href={prUrl}
@@ -172,30 +174,35 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
       <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
         {lane && <LaneBadge id={lane.id} index={lane.index} title={`Lane ${lane.id}`} />}
         {nodeRun && nodeRun.iteration > 0 && (
-          <span className="rounded bg-violet-900/50 px-1.5 py-0.5 text-violet-200" title="Loop iteration (previous iterations are in the inspector)">
+          <Pill className="bg-violet-900/50 text-violet-200" title="Loop iteration (previous iterations are in the inspector)">
             iter {nodeRun.iteration + 1}
-          </span>
+          </Pill>
         )}
-        {nodeRun && nodeRun.attempt > 0 && <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">try {nodeRun.attempt + 1}</span>}
-        {nodeRun?.hold && <span className="rounded bg-sky-900/60 px-1.5 py-0.5 text-sky-200">hold</span>}
+        {nodeRun && nodeRun.attempt > 0 && <Pill className="bg-secondary text-secondary-foreground">try {nodeRun.attempt + 1}</Pill>}
+        {nodeRun?.hold && <Pill className="bg-sky-900/60 text-sky-200">hold</Pill>}
         {nodeRun?.laneSetup === "running" && (
-          <span className="animate-pulse rounded bg-blue-900/60 px-1.5 py-0.5 text-blue-200" title="Workspace setup is running in the new worktree">
+          <Pill className="animate-pulse bg-blue-900/60 text-blue-200" title="Workspace setup is running in the new worktree">
             setting up…
-          </span>
+          </Pill>
         )}
         {nodeRun?.laneSetup === "failed" && (
-          <span className="rounded bg-red-900/60 px-1.5 py-0.5 text-red-200" title="Workspace setup failed; see its log in the inspector">
+          <Pill className="bg-red-900/60 text-red-200" title="Workspace setup failed; see its log in the inspector">
             setup failed
-          </span>
+          </Pill>
         )}
         {usage && tokens > 0 && (
-          <span className="ml-auto font-mono text-zinc-400" title={`${usage.inputTokens} in · ${usage.outputTokens} out · ${usage.cacheCreationTokens} cache write · ${usage.cacheReadTokens} cache read`}>
+          <span className="ml-auto font-mono text-muted-foreground" title={`${usage.inputTokens} in · ${usage.outputTokens} out · ${usage.cacheCreationTokens} cache write · ${usage.cacheReadTokens} cache read`}>
             {formatTokens(tokens)} tok · {formatCostUsd(usage.costUsd)}
           </span>
         )}
       </div>
     </div>
   );
+}
+
+/** Small run-footer pill: a shadcn Badge sized like the lane badge next to it. */
+function Pill({ className, ...props }: ComponentProps<typeof Badge>) {
+  return <Badge className={cn("h-auto rounded border-0 px-1.5 py-0.5 text-[10px] font-normal", className)} {...props} />;
 }
 
 export const nodeTypes = { pg: NodeCard };

@@ -62,7 +62,7 @@ describe("ApprovalDialog", () => {
     expect(document.querySelector(".d2h-file-wrapper")).toBeTruthy();
     expect(document.querySelector(".d2h-file-side-diff")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Side by side" }));
     expect(document.querySelector(".d2h-file-side-diff")).toBeTruthy();
 
     fireEvent.change(screen.getByDisplayValue("Add API"), { target: { value: "Add users API" } });

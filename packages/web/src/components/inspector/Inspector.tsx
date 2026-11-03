@@ -21,7 +21,8 @@ import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
 import { Select } from "../common/fields";
 import { NodeTypeIcon } from "../common/icons";
-import { Button, Checkbox, Field, Section, StatusDot, inputClass } from "../common/ui";
+import { Button, Checkbox, Field, Section, StatusDot } from "../common/ui";
+import { Input } from "@/components/ui/input";
 import { GraphSettingsForm } from "../settings/GraphSettingsForm";
 import { LaneLegend } from "./LaneLegend";
 import { NodeConfigForm } from "./NodeConfigForm";
@@ -53,7 +54,7 @@ function EditInspector() {
   if (count > 1) {
     return (
       <Section title="Selection">
-        <p className="text-sm text-zinc-300">
+        <p className="text-sm text-foreground/85">
           {selectedNodeIds.length} nodes, {selectedEdgeIds.length} edges selected.
         </p>
         <Button variant="danger" size="sm" disabled={readOnly} onClick={() => useEditorStore.getState().removeSelection()}>
@@ -89,26 +90,26 @@ function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean 
 
   return (
     <div>
-      <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
+      <div className="flex items-center gap-2 border-b px-4 py-3">
         <span className={`flex size-7 items-center justify-center rounded-md ${meta.accent}`}>
           <NodeTypeIcon type={node.type} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-zinc-100">{meta.title}</div>
-          <div className="truncate text-[11px] text-zinc-500">{meta.description}</div>
+          <div className="text-sm font-semibold text-foreground">{meta.title}</div>
+          <div className="truncate text-[11px] text-muted-foreground">{meta.description}</div>
         </div>
         <Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([node.id], [])}>
           Delete
         </Button>
       </div>
       {(nodeIssues.errors.length > 0 || nodeIssues.warnings.length > 0) && (
-        <div className="border-b border-zinc-800 px-2 py-2">
+        <div className="border-b px-2 py-2">
           <ValidationList validation={nodeIssues} />
         </div>
       )}
       <Section title="Node">
         <Field label="Label">
-          <input className={inputClass} value={node.label} disabled={disabled} onChange={(e) => update((n) => ({ ...n, label: e.target.value }))} />
+          <Input value={node.label} disabled={disabled} onChange={(e) => update((n) => ({ ...n, label: e.target.value }))} />
         </Field>
         <Field label="On error" hint={phase === 2 ? "Applies only when no failure edge (error port) handles the failure." : undefined}>
           <Select value={node.onError ?? "pause"} options={ON_ERROR_OPTIONS} disabled={disabled} onChange={(onError) => update((n) => ({ ...n, onError }))} />
@@ -149,11 +150,10 @@ function MaxIterationsInput({ value, disabled, onChange }: { value: number; disa
     return t.trim() !== "" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
   };
   return (
-    <input
+    <Input
       type="number"
       min={1}
       max={100}
-      className={inputClass}
       value={text}
       disabled={disabled}
       onChange={(ev) => {
@@ -177,11 +177,11 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
   return (
     <>
       <Section title={edge.loop ? "Loop edge" : "Edge"} actions={<Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([], [edge.id])}>Delete</Button>}>
-        <p className="text-sm text-zinc-300">
-          {label(edge.source)} <span className={errorPort ? "text-red-400" : "text-zinc-500"}>({PORT_LABEL[edge.sourcePort]})</span> → {label(edge.target)}
+        <p className="text-sm text-foreground/85">
+          {label(edge.source)} <span className={errorPort ? "text-red-400" : "text-muted-foreground"}>({PORT_LABEL[edge.sourcePort]})</span> → {label(edge.target)}
         </p>
         {(edgeIssues.errors.length > 0 || edgeIssues.warnings.length > 0) && <ValidationList validation={edgeIssues} />}
-        {phase < 2 && <p className="text-[11px] text-zinc-500">Edge conditions, error ports and loops need phase 2.</p>}
+        {phase < 2 && <p className="text-[11px] text-muted-foreground">Edge conditions, error ports and loops need phase 2.</p>}
       </Section>
       {phase === 2 && (
         <Section title="Condition">
@@ -211,11 +211,11 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
               update((e) => setEdgeLoop(e, on ? { ...(lastLoopSpec.get(edge.id) ?? DEFAULT_LOOP) } : null));
             }}
           />
-          <p className="text-[11px] leading-snug text-zinc-500">
+          <p className="text-[11px] leading-snug text-muted-foreground">
             A loop edge points back to an earlier node: when it activates, the nodes from its target to its source run again as a new iteration.
           </p>
           {edge.loop && (
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-[11px] text-muted-foreground">
               Loops back at most {edge.loop.maxIterations} time{edge.loop.maxIterations === 1 ? "" : "s"}; the run shows the count as a badge on the edge.
             </p>
           )}
@@ -239,7 +239,7 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
             </div>
           )}
           {edge.loop && (
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-[11px] text-muted-foreground">
               {edge.loop.onExhausted === "fail"
                 ? "When exhausted, the edge's source node fails (route it with a failure edge, or the run pauses)."
                 : "When exhausted, the edge delivers a skip and the flow continues on the other branches."}
@@ -288,14 +288,14 @@ function RunOverview() {
         <div className="flex items-center gap-2 text-sm">
           <StatusDot className={style.dot} />
           <span className={`font-medium ${style.text}`}>{style.label}</span>
-          <span className="font-mono text-xs text-zinc-500">#{run.shortId}</span>
-          <span className="ml-auto text-xs text-zinc-400 tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
+          <span className="font-mono text-xs text-muted-foreground">#{run.shortId}</span>
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
         </div>
         {run.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-200">{run.error}</pre>}
         {run.status === "paused" && (
           <p className="text-xs text-amber-200/90">The run is paused: select a failed or interrupted node to retry or skip it, or cancel the run.</p>
         )}
-        <p className="text-xs text-zinc-500">Click a node to see its details and open its terminal.</p>
+        <p className="text-xs text-muted-foreground">Click a node to see its details and open its terminal.</p>
       </Section>
       <LaneLegend />
       <UsageSection usage={run.usage} title={`Usage · ${formatCostUsd(run.usage.costUsd)}`} />

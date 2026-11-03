@@ -3,6 +3,9 @@ import { html as diffHtml } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
 import type { ColorSchemeType } from "diff2html/lib/types";
 import { useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Button } from "../common/ui";
 
 type Layout = "line-by-line" | "side-by-side";
 
@@ -12,7 +15,7 @@ const STATUS_MARK: Record<DiffFile["status"], { mark: string; className: string 
   deleted: { mark: "D", className: "text-red-400" },
   renamed: { mark: "R", className: "text-sky-300" },
   copied: { mark: "C", className: "text-sky-300" },
-  other: { mark: "?", className: "text-zinc-400" },
+  other: { mark: "?", className: "text-muted-foreground" },
 };
 
 /**
@@ -38,7 +41,7 @@ export function DiffView({ diff, title, emptyText = "No changes in this lane." }
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-3">
-        <h3 className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">
+        <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
           {title ?? (
             <>
               Changes since base{" "}
@@ -48,61 +51,61 @@ export function DiffView({ diff, title, emptyText = "No changes in this lane." }
             </>
           )}
         </h3>
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-muted-foreground">
           {diff.files.length} file{diff.files.length === 1 ? "" : "s"} · <span className="text-green-400">+{additions}</span>{" "}
           <span className="text-red-400">−{deletions}</span>
         </span>
         {diff.patch && (
-          <div className="ml-auto flex rounded-md ring-1 ring-zinc-700" role="group" aria-label="Diff layout">
-            <LayoutButton active={layout === "line-by-line"} onClick={() => setLayout("line-by-line")}>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            spacing={0}
+            className="ml-auto"
+            aria-label="Diff layout"
+            value={layout}
+            onValueChange={(v) => v && setLayout(v as Layout)}
+          >
+            <ToggleGroupItem value="line-by-line" className="text-xs">
               Unified
-            </LayoutButton>
-            <LayoutButton active={layout === "side-by-side"} onClick={() => setLayout("side-by-side")}>
+            </ToggleGroupItem>
+            <ToggleGroupItem value="side-by-side" className="text-xs">
               Side by side
-            </LayoutButton>
-          </div>
+            </ToggleGroupItem>
+          </ToggleGroup>
         )}
       </div>
-      {diff.truncated && <p className="text-xs text-amber-300">The diff is too large and was truncated.</p>}
+      {diff.truncated && (
+        <Alert role="status" className="border-amber-500/30">
+          <AlertDescription className="text-xs text-amber-300">The diff is too large and was truncated.</AlertDescription>
+        </Alert>
+      )}
       {diff.files.length === 0 ? (
-        <p className="text-xs text-zinc-500">{emptyText}</p>
+        <p className="text-xs text-muted-foreground">{emptyText}</p>
       ) : (
-        <ul className="max-h-40 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 py-1 text-xs">
+        <ul className="max-h-40 overflow-y-auto rounded-md border bg-background py-1 text-xs">
           {diff.files.map((f) => (
             <li key={f.path}>
-              <button type="button" onClick={() => jumpTo(f)} className="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-zinc-800/70">
+              <Button variant="ghost" size="xs" onClick={() => jumpTo(f)} className="w-full justify-start gap-2 rounded-none px-3 text-left font-normal">
                 <span className={`w-3 font-mono font-semibold ${STATUS_MARK[f.status].className}`} title={f.status}>
                   {STATUS_MARK[f.status].mark}
                 </span>
-                <span className="min-w-0 flex-1 truncate font-mono text-zinc-200">
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground/90">
                   {f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
                 </span>
                 {f.binary ? (
-                  <span className="text-zinc-500">binary</span>
+                  <span className="text-muted-foreground">binary</span>
                 ) : (
                   <span className="font-mono tabular-nums">
                     <span className="text-green-400">+{f.additions}</span> <span className="text-red-400">−{f.deletions}</span>
                   </span>
                 )}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       )}
       {markup && <div ref={bodyRef} className="pg-diff overflow-auto rounded-md" dangerouslySetInnerHTML={{ __html: markup }} />}
     </div>
-  );
-}
-
-function LayoutButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`px-2.5 py-1 text-xs first:rounded-l-md last:rounded-r-md ${active ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
-    >
-      {children}
-    </button>
   );
 }

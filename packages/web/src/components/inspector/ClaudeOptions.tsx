@@ -80,7 +80,7 @@ export function ClaudeOptions({
           onChange={(permissionMode) => onChange({ permissionMode })}
         />
       </Field>
-      <Field label="Allowed tools" hint={<>One per line, e.g. <code className="text-zinc-400">Bash(pnpm test:*)</code>. Empty = graph default.</>}>
+      <Field label="Allowed tools" hint={<>One per line, e.g. <code className="text-foreground">Bash(pnpm test:*)</code>. Empty = graph default.</>}>
         <LinesInput
           key={nodeId}
           value={value.allowedTools}

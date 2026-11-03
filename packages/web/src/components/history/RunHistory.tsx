@@ -9,6 +9,10 @@ import { useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import { Button, StatusDot } from "../common/ui";
+import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * Run history of the current graph: status, start, duration, cost; expand for lanes, branches, pushed state
@@ -20,15 +24,15 @@ export function RunHistory() {
 
   return (
     <div className="flex h-full flex-col">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         onClick={() => void useRunStore.getState().selectRun(null)}
-        className={`mx-2 mt-2 rounded-md px-2 py-1.5 text-left text-[13px] ${selectedRunId === null ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/60"}`}
+        className={`mx-2 mt-2 justify-start px-2 text-[13px] font-normal ${selectedRunId === null ? "bg-accent text-accent-foreground" : "text-muted-foreground"}`}
       >
         Editor (current graph)
-      </button>
+      </Button>
       <div className="mt-2 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
-        {runs.length === 0 && <p className="px-2 py-3 text-xs text-zinc-500">No runs yet.</p>}
+        {runs.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">No runs yet.</p>}
         {runs.map((run) => (
           <RunRow key={run.id} run={run} selected={run.id === selectedRunId} />
         ))}
@@ -44,21 +48,28 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
   const style = RUN_STATUS_STYLE[run.status];
   const attention = run.pendingApprovals + run.waitingInput;
   const [expanded, setExpanded] = useState(false);
+  const expandLabel = expanded ? "Hide lanes and PRs" : "Show lanes, branches and PRs";
   const [cleaning, setCleaning] = useState(false);
   const open = () => void useRunStore.getState().selectRun(run.id);
   return (
     // The card is clickable for the mouse; keyboard and screen readers use the header button, so the
     // nested controls (expand, Clean up) are not inside another interactive element.
-    <div
+    <Collapsible
+      open={expanded}
+      onOpenChange={(next) => {
+        if (next) void useRunStore.getState().loadRunInfo(run.id);
+        setExpanded(next);
+      }}
       onClick={open}
-      className={`cursor-pointer rounded-md border px-2.5 py-2 text-xs ${selected ? "border-blue-500/60 bg-blue-500/10" : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50"}`}
+      className={`cursor-pointer rounded-md border px-2.5 py-2 text-xs ${selected ? "border-blue-500/60 bg-blue-500/10" : "hover:border-ring/40 hover:bg-accent/50"}`}
     >
       <div className="flex items-center gap-2">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="xs"
           aria-current={selected || undefined}
           aria-label={`Open run #${run.shortId} (${style.label})`}
-          className="flex items-center gap-2 rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-blue-500"
+          className="h-auto gap-2 px-0 text-xs font-normal hover:bg-transparent dark:hover:bg-transparent"
           onClick={(e) => {
             e.stopPropagation();
             open();
@@ -66,31 +77,37 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         >
           <StatusDot className={`${style.dot} ${run.status === "running" ? "animate-pulse" : ""}`} />
           <span className={`font-medium ${style.text}`}>{style.label}</span>
-          <span className="font-mono text-zinc-500">#{run.shortId}</span>
-        </button>
-        {attention > 0 && <span className="rounded-full bg-amber-500/20 px-1.5 text-[10px] text-amber-300">{attention} waiting</span>}
-        <button
-          type="button"
-          aria-expanded={expanded}
-          title={expanded ? "Hide lanes and PRs" : "Show lanes, branches and PRs"}
-          className="ml-auto rounded p-0.5 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!expanded) void useRunStore.getState().loadRunInfo(run.id);
-            setExpanded(!expanded);
-          }}
-        >
-          <Icons.chevronDown className={expanded ? "rotate-180" : ""} />
-        </button>
+          <span className="font-mono text-muted-foreground">#{run.shortId}</span>
+        </Button>
+        {attention > 0 && <Badge className="h-4 bg-amber-500/20 px-1.5 text-[10px] font-normal text-amber-300">{attention} waiting</Badge>}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={expandLabel}
+                className="ml-auto text-muted-foreground"
+                // The card behind opens the run; expanding must not.
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Icons.chevronDown className={expanded ? "rotate-180" : ""} />
+              </Button>
+            </CollapsibleTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{expandLabel}</TooltipContent>
+        </Tooltip>
       </div>
-      <div className="mt-1 flex items-center gap-2 text-zinc-400">
+      <div className="mt-1 flex items-center gap-2 text-muted-foreground">
         <span className="whitespace-nowrap">{formatDateTime(run.startedAt)}</span>
-        <span className="text-zinc-600">·</span>
+        <span className="text-muted-foreground/60">·</span>
         <span className="whitespace-nowrap tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
         <span className="ml-auto font-mono">{formatCostUsd(run.usage.costUsd)}</span>
       </div>
       {run.error && <div className={`mt-1 line-clamp-2 ${run.status === "paused" ? "text-amber-300/90" : "text-red-300/90"}`}>{run.error}</div>}
-      {expanded && <RunRowDetails runId={run.id} />}
+      <CollapsibleContent>
+        <RunRowDetails runId={run.id} />
+      </CollapsibleContent>
       <div className="mt-1.5 flex items-center gap-2">
         <Button
           size="sm"
@@ -106,7 +123,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         </Button>
         {final &&
           (run.cleanedUp ? (
-            <span className="text-[11px] text-zinc-500">Worktrees cleaned up</span>
+            <span className="text-[11px] text-muted-foreground">Worktrees cleaned up</span>
           ) : (
             <Button
               size="sm"
@@ -124,16 +141,17 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
             </Button>
           ))}
       </div>
-    </div>
+    </Collapsible>
   );
 }
 
 /** Lanes (colour, branch, state, pushed) and PR links of a run. */
 function RunRowDetails({ runId }: { runId: string }) {
   const info = useRunStore((s) => s.runInfo[runId]);
-  if (!info) return <p className="mt-1.5 text-[11px] text-zinc-500">Loading…</p>;
+  if (!info) return <p className="mt-1.5 text-[11px] text-muted-foreground">Loading…</p>;
   return (
-    <div className="mt-1.5 space-y-1 border-t border-zinc-800 pt-1.5" onClick={(e) => e.stopPropagation()}>
+    <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+      <Separator className="mb-1.5" />
       {info.prs.map((pr) => (
         <a key={pr.nodeId} href={pr.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-400 hover:underline" title={`${pr.label}: ${pr.url}`}>
           <Icons.pr className="shrink-0" />
@@ -141,15 +159,15 @@ function RunRowDetails({ runId }: { runId: string }) {
           <Icons.externalLink className="shrink-0 text-[10px]" />
         </a>
       ))}
-      {info.lanes.length === 0 && <p className="text-[11px] text-zinc-500">No lanes.</p>}
+      {info.lanes.length === 0 && <p className="text-[11px] text-muted-foreground">No lanes.</p>}
       {info.lanes.map((lane) => (
         <div key={lane.id} className="flex items-center gap-1.5">
           <LaneBadge id={lane.id} index={lane.index} />
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300" title={lane.branch}>
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/85" title={lane.branch}>
             {lane.branch}
           </span>
-          {lane.pushed && <span className="rounded bg-indigo-500/20 px-1 text-[10px] text-indigo-200">pushed</span>}
-          <span className="text-[10px] text-zinc-500">{lane.status}</span>
+          {lane.pushed && <Badge className="h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] font-normal text-indigo-200">pushed</Badge>}
+          <span className="text-[10px] text-muted-foreground">{lane.status}</span>
         </div>
       ))}
     </div>

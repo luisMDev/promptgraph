@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nodeRunOf, runDetailOf, testFixLoopGraph } from "../../test-fixtures";
 import { setRunStoreDeps, useRunStore } from "../../store/run-store";
@@ -14,7 +15,8 @@ describe("inspector (phase 2)", () => {
   });
   afterEach(cleanup);
 
-  it("browses previous loop iterations of a node; older ones are read-only", () => {
+  it("browses previous loop iterations of a node; older ones are read-only", async () => {
+    const user = userEvent.setup();
     const detail = runDetailOf(testFixLoopGraph(), [
       nodeRunOf({ id: "t0", nodeId: "test", status: "failed", ptyId: "t0", output: { exitCode: 1, stdoutTail: "1 failing" }, startedAt: 1, finishedAt: 2 }),
       nodeRunOf({ id: "t1", nodeId: "test", iteration: 1, status: "failed", ptyId: "t1", output: { exitCode: 2, stdoutTail: "2 failing" } }),
@@ -27,19 +29,20 @@ describe("inspector (phase 2)", () => {
     expect(screen.getByText("2 failing")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("tab", { name: /#1/ }));
+    await user.click(screen.getByRole("tab", { name: /#1/ }));
     expect(useRunStore.getState().selectedIteration).toBe(0);
     expect(screen.getByText("Iteration 1 of 2")).toBeTruthy();
     expect(screen.getByText("1 failing")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.getByRole("button", { name: /Terminal/ })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Latest" }));
+    await user.click(screen.getByRole("button", { name: "Latest" }));
     expect(useRunStore.getState().selectedIteration).toBeNull();
     expect(screen.getByText("2 failing")).toBeTruthy();
   });
 
-  it("the terminal drawer follows the selected iteration when it shows this node", () => {
+  it("the terminal drawer follows the selected iteration when it shows this node", async () => {
+    const user = userEvent.setup();
     const detail = runDetailOf(testFixLoopGraph(), [
       nodeRunOf({ id: "t0", nodeId: "test", status: "failed", ptyId: "t0", output: { exitCode: 1 } }),
       nodeRunOf({ id: "t1", nodeId: "test", iteration: 1, status: "failed", ptyId: "t1", output: { exitCode: 2 } }),
@@ -49,13 +52,13 @@ describe("inspector (phase 2)", () => {
     useRunStore.getState().selectNode("test");
     render(<Inspector />);
     // Closed drawer: selecting an iteration opens nothing.
-    fireEvent.click(screen.getByRole("tab", { name: /#1/ }));
+    await user.click(screen.getByRole("tab", { name: /#1/ }));
     expect(useUiStore.getState().drawerOpen).toBe(false);
 
     useUiStore.getState().openTerminal("t1", { title: "Run tests", nodeRunId: "t1" });
-    fireEvent.click(screen.getByRole("tab", { name: /#1/ }));
+    await user.click(screen.getByRole("tab", { name: /#1/ }));
     expect(useUiStore.getState().activeTerminal).toBe("t0");
-    fireEvent.click(screen.getByRole("button", { name: "Latest" }));
+    await user.click(screen.getByRole("button", { name: "Latest" }));
     expect(useUiStore.getState().activeTerminal).toBe("t1");
     useUiStore.getState().closeAllTerminals();
   });

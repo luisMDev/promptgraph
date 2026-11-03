@@ -18,6 +18,11 @@ import { useUiStore } from "../../store/ui-store";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import { Button, StatusDot } from "../common/ui";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** Re-fetch at most this often while the run changes (run:update arrives on every node status change). */
 const REFRESH_MS = 1000;
@@ -65,13 +70,13 @@ export function RunReport({ runId }: { runId: string }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-zinc-950">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
       <div className="mx-auto w-full max-w-5xl space-y-6 px-6 py-5">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-semibold text-zinc-100">Run report</h1>
+            <h1 className="text-lg font-semibold text-foreground">Run report</h1>
             {report && (
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 {report.run.graphName} · run <span className="font-mono">#{report.run.shortId}</span> · started {formatDateTime(report.run.startedAt)}
               </p>
             )}
@@ -79,13 +84,22 @@ export function RunReport({ runId }: { runId: string }) {
           <Button size="sm" onClick={() => showOnCanvas()}>
             Show on canvas
           </Button>
-          <Button size="sm" variant="ghost" onClick={close} aria-label="Close report">
-            <Icons.x />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="icon-sm" variant="ghost" onClick={close} aria-label="Close report">
+                <Icons.x />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Close report</TooltipContent>
+          </Tooltip>
         </div>
 
-        {error && <p className="rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-200">Could not load the report: {error}</p>}
-        {!report && !error && <p className="text-sm text-zinc-500">Loading report…</p>}
+        {error && (
+          <Alert variant="destructive" className="border-red-500/30 bg-red-500/10">
+            <AlertDescription className="text-xs text-red-200!">Could not load the report: {error}</AlertDescription>
+          </Alert>
+        )}
+        {!report && !error && <p className="text-sm text-muted-foreground">Loading report…</p>}
         {report && (
           <>
             <Summary report={report} />
@@ -98,7 +112,7 @@ export function RunReport({ runId }: { runId: string }) {
                       <a href={pr.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-blue-400 hover:underline">
                         <Icons.pr /> {prLabel(pr.url)} <Icons.externalLink className="text-[10px]" />
                       </a>
-                      <span className="ml-2 text-xs text-zinc-500">{pr.label}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">{pr.label}</span>
                     </li>
                   ))}
                 </ul>
@@ -149,24 +163,30 @@ function Summary({ report }: { report: RunReportResponse }) {
           {[...counts].map(([status, n]) => `${n} ${status.replace("_", " ")}`).join(" · ")}
         </span>
       </Stat>
-      {run.error && <p className="col-span-full rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-200">{run.error}</p>}
+      {run.error && (
+        <Alert variant="destructive" className="col-span-full border-red-500/30 bg-red-500/10">
+          <AlertDescription className="text-xs whitespace-pre-wrap text-red-200!">{run.error}</AlertDescription>
+        </Alert>
+      )}
     </div>
   );
 }
 
 function Stat({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5" title={hint}>
-      <div className="text-[10px] font-semibold tracking-wider text-zinc-500 uppercase">{label}</div>
-      <div className="mt-1 text-base font-medium text-zinc-100 tabular-nums">{children}</div>
-    </div>
+    <Card size="sm" className="gap-1" title={hint}>
+      <CardHeader>
+        <CardTitle className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[size=sm]/card:text-[10px]">{label}</CardTitle>
+      </CardHeader>
+      <CardContent className="text-base font-medium text-foreground tabular-nums">{children}</CardContent>
+    </Card>
   );
 }
 
 const STALL_STYLE: Record<ReportStall["kind"], { label: string; className: string }> = {
   failed: { label: "Failed", className: "bg-red-500/15 text-red-200" },
   interrupted: { label: "Interrupted", className: "bg-orange-500/15 text-orange-200" },
-  cancelled: { label: "Cancelled", className: "bg-zinc-700/50 text-zinc-200" },
+  cancelled: { label: "Cancelled", className: "bg-muted text-foreground/85" },
   waiting: { label: "Waiting for you", className: "bg-amber-500/15 text-amber-200" },
   slow_wait: { label: "Long wait", className: "bg-sky-500/15 text-sky-200" },
 };
@@ -175,26 +195,28 @@ function Stalls({ stalls, status, nodes, onShow }: { stalls: ReportStall[]; stat
   const nodeIdOf = (nodeRunId: string) => nodes.find((n) => n.nodeRun.id === nodeRunId)?.nodeRun.nodeId;
   return (
     <ReportSection title={isFinalRunStatus(status) ? "Where it stopped or waited" : "Needs attention / waited"}>
-      <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-900/60">
-        {stalls.map((s) => {
-          const nodeId = nodeIdOf(s.nodeRunId);
-          return (
-            <li key={`${s.kind}-${s.nodeRunId}`} className="flex items-start gap-3 px-3 py-2 text-sm">
-              <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${STALL_STYLE[s.kind].className}`}>{STALL_STYLE[s.kind].label}</span>
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-zinc-100">{s.label}</div>
-                <div className="text-xs whitespace-pre-wrap text-zinc-400">{s.message}</div>
-              </div>
-              {s.waitingMs > 0 && <span className="shrink-0 font-mono text-xs text-zinc-400 tabular-nums" title="Time spent waiting for you">{formatDuration(s.waitingMs)}</span>}
-              {nodeId && (
-                <Button size="sm" variant="ghost" onClick={() => onShow(nodeId)}>
-                  Show
-                </Button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+      <Card className="gap-0 py-0">
+        <ul className="divide-y">
+          {stalls.map((s) => {
+            const nodeId = nodeIdOf(s.nodeRunId);
+            return (
+              <li key={`${s.kind}-${s.nodeRunId}`} className="flex items-start gap-3 px-3 py-2 text-sm">
+                <Badge className={`mt-0.5 h-auto rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase ${STALL_STYLE[s.kind].className}`}>{STALL_STYLE[s.kind].label}</Badge>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-foreground">{s.label}</div>
+                  <div className="text-xs whitespace-pre-wrap text-muted-foreground">{s.message}</div>
+                </div>
+                {s.waitingMs > 0 && <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums" title="Time spent waiting for you">{formatDuration(s.waitingMs)}</span>}
+                {nodeId && (
+                  <Button size="sm" variant="ghost" onClick={() => onShow(nodeId)}>
+                    Show
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </Card>
     </ReportSection>
   );
 }
@@ -202,9 +224,9 @@ function Stalls({ stalls, status, nodes, onShow }: { stalls: ReportStall[]; stat
 function Nodes({ nodes, onShow }: { nodes: ReportNode[]; onShow: (nodeId: string) => void }) {
   return (
     <ReportSection title="Steps">
-      <div className="overflow-x-auto rounded-lg border border-zinc-800">
+      <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-left text-xs">
-          <thead className="bg-zinc-900 text-[10px] tracking-wider text-zinc-500 uppercase">
+          <thead className="bg-muted/50 text-[10px] tracking-wider text-muted-foreground uppercase">
             <tr>
               <th className="px-3 py-2 font-semibold">Step</th>
               <th className="px-3 py-2 font-semibold">Result</th>
@@ -215,7 +237,7 @@ function Nodes({ nodes, onShow }: { nodes: ReportNode[]; onShow: (nodeId: string
               <th className="px-3 py-2 font-semibold">Output</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-800 bg-zinc-900/40">
+          <tbody className="divide-y bg-card/60">
             {nodes.map((n) => (
               <NodeRow key={n.nodeRun.id} node={n} onShow={onShow} />
             ))}
@@ -233,38 +255,45 @@ function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) 
   return (
     <tr className="align-top">
       <td className="px-3 py-2">
-        <button type="button" className="flex items-center gap-2 text-left hover:underline" onClick={() => onShow(nr.nodeId)} title="Show on canvas">
+        <Button
+          variant="ghost"
+          size="xs"
+          className="h-auto justify-start gap-2 px-0 text-left text-xs font-normal hover:bg-transparent hover:underline dark:hover:bg-transparent"
+          onClick={() => onShow(nr.nodeId)}
+          title="Show on canvas"
+        >
           <span className={`flex size-5 shrink-0 items-center justify-center rounded text-[11px] ${NODE_TYPE_META[node.type].accent}`}>
             <NodeTypeIcon type={node.type} />
           </span>
-          <span className="font-medium text-zinc-100">{node.label}</span>
-        </button>
-        {node.attempts > 1 && <span className="ml-7 text-[10px] text-zinc-500">{node.attempts} attempts</span>}
+          <span className="font-medium text-foreground">{node.label}</span>
+        </Button>
+        {node.attempts > 1 && <span className="ml-7 text-[10px] text-muted-foreground">{node.attempts} attempts</span>}
       </td>
       <td className="px-3 py-2">
         <span className={`flex items-center gap-1.5 whitespace-nowrap ${style.text}`}>
           <StatusDot className={style.dot} /> {style.label}
         </span>
       </td>
-      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-zinc-300 tabular-nums">{node.durationMs === null ? "—" : formatDuration(node.durationMs)}</td>
-      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-zinc-400 tabular-nums">{node.waitingMs > 0 ? formatDuration(node.waitingMs) : "—"}</td>
+      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-foreground/85 tabular-nums">{node.durationMs === null ? "—" : formatDuration(node.durationMs)}</td>
+      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-muted-foreground tabular-nums">{node.waitingMs > 0 ? formatDuration(node.waitingMs) : "—"}</td>
       <td className="px-3 py-2 whitespace-nowrap">
         {node.changes ? (
-          <button
-            type="button"
-            className="rounded hover:bg-zinc-800 disabled:cursor-default disabled:hover:bg-transparent"
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-mx-1 h-auto px-1 text-xs font-normal disabled:opacity-100"
             disabled={node.changes.files === 0}
             onClick={() => useUiStore.getState().openDiff({ kind: "node", nodeRunId: nr.id, title: `Changes · ${node.label}` })}
             title={node.changes.files ? "Show what this step changed" : "This step changed no files"}
           >
             <Stats changes={node.changes} />
-          </button>
+          </Button>
         ) : (
-          <span className="text-zinc-600">—</span>
+          <span className="text-muted-foreground/60">—</span>
         )}
       </td>
-      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-zinc-300">{o?.usage ? formatCostUsd(o.usage.costUsd) : "—"}</td>
-      <td className="max-w-80 px-3 py-2 text-zinc-300">
+      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-foreground/85">{o?.usage ? formatCostUsd(o.usage.costUsd) : "—"}</td>
+      <td className="max-w-80 px-3 py-2 text-foreground/85">
         {o?.prUrl && (
           <a href={o.prUrl} target="_blank" rel="noreferrer" className="block text-blue-400 hover:underline">
             {prLabel(o.prUrl)}
@@ -272,15 +301,15 @@ function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) 
         )}
         {o?.sha && (
           <span className="block truncate" title={o.message}>
-            <span className="font-mono text-zinc-400">{o.sha.slice(0, 8)}</span> {o.message?.split("\n")[0]}
+            <span className="font-mono text-muted-foreground">{o.sha.slice(0, 8)}</span> {o.message?.split("\n")[0]}
           </span>
         )}
-        {o?.noop && <span className="block text-zinc-500">Nothing to commit</span>}
+        {o?.noop && <span className="block text-muted-foreground">Nothing to commit</span>}
         {o?.approved !== undefined && <span className="block">{o.approved ? "Approved" : "Rejected"}{o.comment ? ` — ${o.comment}` : ""}</span>}
         {o?.port && <span className="block">Branch: {o.port}</span>}
         {o?.exitCode !== undefined && o.exitCode !== 0 && <span className="block text-red-300">Exit code {o.exitCode ?? "killed"}</span>}
         {nr.error && nr.status === "failed" && <span className="line-clamp-2 block text-red-300" title={nr.error}>{nr.error}</span>}
-        {!o?.sha && !o?.prUrl && o?.text && nr.status !== "failed" && <span className="line-clamp-2 block text-zinc-400" title={o.text}>{o.text}</span>}
+        {!o?.sha && !o?.prUrl && o?.text && nr.status !== "failed" && <span className="line-clamp-2 block text-muted-foreground" title={o.text}>{o.text}</span>}
       </td>
     </tr>
   );
@@ -292,40 +321,43 @@ function Lanes({ runId, lanes }: { runId: string; lanes: ReportLane[] }) {
     <ReportSection title="Lanes">
       <div className="grid gap-3 md:grid-cols-2">
         {lanes.map(({ lane, changes, commits, head }) => (
-          <div key={lane.id} className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 text-xs">
-            <div className="flex items-center gap-2">
-              <LaneBadge id={lane.id} index={lane.index} />
-              <span className="min-w-0 flex-1 truncate font-mono text-zinc-200" title={lane.branch}>
-                {lane.branch}
-              </span>
-              {lane.pushed && <span className="rounded bg-indigo-500/20 px-1 text-[10px] text-indigo-200">pushed</span>}
-              <span className="text-[10px] text-zinc-500">{lane.status}</span>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
-              <Stats changes={changes} />
-              <Button
-                size="sm"
-                variant="ghost"
-                className="ml-auto"
-                disabled={!head}
-                onClick={() => useUiStore.getState().openDiff({ kind: "lane", runId, laneId: lane.id, title: `Lane ${lane.id} · ${lane.branch}` })}
-              >
-                View diff
-              </Button>
-            </div>
-            {commits.length > 0 ? (
-              <ul className="mt-2 space-y-0.5 border-t border-zinc-800 pt-2">
-                {commits.map((c) => (
-                  <li key={c.sha} className={`flex gap-2 ${c.checkpoint ? "text-zinc-500" : "text-zinc-300"}`} title={c.checkpoint ? "Automatic checkpoint (§9.3)" : undefined}>
-                    <span className="font-mono text-zinc-500">{c.sha.slice(0, 8)}</span>
-                    <span className="truncate">{c.subject}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 border-t border-zinc-800 pt-2 text-zinc-500">No commits.</p>
-            )}
-          </div>
+          <Card key={lane.id} size="sm" className="gap-2 text-xs">
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <LaneBadge id={lane.id} index={lane.index} />
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground/90" title={lane.branch}>
+                  {lane.branch}
+                </span>
+                {lane.pushed && <Badge className="h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] font-normal text-indigo-200">pushed</Badge>}
+                <span className="text-[10px] text-muted-foreground">{lane.status}</span>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <Stats changes={changes} />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
+                  disabled={!head}
+                  onClick={() => useUiStore.getState().openDiff({ kind: "lane", runId, laneId: lane.id, title: `Lane ${lane.id} · ${lane.branch}` })}
+                >
+                  View diff
+                </Button>
+              </div>
+              <Separator className="mt-2" />
+              {commits.length > 0 ? (
+                <ul className="mt-2 space-y-0.5">
+                  {commits.map((c) => (
+                    <li key={c.sha} className={`flex gap-2 ${c.checkpoint ? "text-muted-foreground" : "text-foreground/85"}`} title={c.checkpoint ? "Automatic checkpoint (§9.3)" : undefined}>
+                      <span className="font-mono text-muted-foreground">{c.sha.slice(0, 8)}</span>
+                      <span className="truncate">{c.subject}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-muted-foreground">No commits.</p>
+              )}
+            </CardContent>
+          </Card>
         ))}
       </div>
     </ReportSection>
@@ -333,7 +365,7 @@ function Lanes({ runId, lanes }: { runId: string; lanes: ReportLane[] }) {
 }
 
 function Stats({ changes }: { changes: ChangeStats }) {
-  if (changes.files === 0) return <span className="text-zinc-500">No changes</span>;
+  if (changes.files === 0) return <span className="text-muted-foreground">No changes</span>;
   return (
     <span className="font-mono tabular-nums">
       {changes.files} file{changes.files === 1 ? "" : "s"} <span className="text-green-400">+{changes.additions}</span>{" "}
@@ -345,7 +377,7 @@ function Stats({ changes }: { changes: ChangeStats }) {
 function ReportSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h2 className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">{title}</h2>
+      <h2 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</h2>
       {children}
     </section>
   );

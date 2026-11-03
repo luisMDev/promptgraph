@@ -383,7 +383,7 @@ function onDragOver(e: DragEvent, readOnly: boolean): void {
 function EmptyHint({ readOnly }: { readOnly: boolean }) {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-      <div className="rounded-lg border border-dashed border-zinc-700 bg-zinc-900/70 px-6 py-4 text-center text-sm text-zinc-400">
+      <div className="rounded-lg border border-dashed bg-card/70 px-6 py-4 text-center text-sm text-muted-foreground">
         {readOnly ? "This graph is empty." : "Drag a node from the palette to start, then connect the ports."}
       </div>
     </div>
@@ -391,5 +391,5 @@ function EmptyHint({ readOnly }: { readOnly: boolean }) {
 }
 
 function CenteredMessage({ children, tone }: { children: ReactNode; tone?: "error" }) {
-  return <div className={`flex h-full items-center justify-center text-sm ${tone === "error" ? "text-red-300" : "text-zinc-500"}`}>{children}</div>;
+  return <div className={`flex h-full items-center justify-center text-sm ${tone === "error" ? "text-red-300" : "text-muted-foreground"}`}>{children}</div>;
 }

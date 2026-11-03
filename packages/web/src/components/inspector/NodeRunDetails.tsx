@@ -23,6 +23,8 @@ import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import { Button, DetailRow, Field, Section, StatusDot } from "../common/ui";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** Run-mode inspector for one node: status, session, branch, timings, output, usage, manual controls. */
 export function NodeRunDetails({
@@ -46,17 +48,17 @@ export function NodeRunDetails({
   const attempts = iterations.find((e) => e.nodeRun.id === nodeRun?.id)?.attempts ?? 1;
   return (
     <div>
-      <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
+      <div className="flex items-center gap-2 border-b px-4 py-3">
         <span className={`flex size-7 items-center justify-center rounded-md ${NODE_TYPE_META[node.type].accent}`}>
           <NodeTypeIcon type={node.type} />
         </span>
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-zinc-100">{label}</div>
-          <div className="text-[11px] text-zinc-500">{NODE_TYPE_META[node.type].title}</div>
+          <div className="truncate text-sm font-semibold text-foreground">{label}</div>
+          <div className="text-[11px] text-muted-foreground">{NODE_TYPE_META[node.type].title}</div>
         </div>
       </div>
       {!nodeRun ? (
-        <p className="px-4 py-4 text-sm text-zinc-500">This node has not been scheduled yet.</p>
+        <p className="px-4 py-4 text-sm text-muted-foreground">This node has not been scheduled yet.</p>
       ) : (
         <>
           {iterations.length > 1 && <IterationSelector iterations={iterations} shown={nodeRun.iteration} historical={historical} label={label} />}
@@ -83,16 +85,16 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
       <div className="flex items-center gap-2 text-sm">
         <StatusDot className={style.dot} />
         <span className={`font-medium ${style.text}`}>{style.label}</span>
-        {nodeRun.hold && <span className="rounded bg-sky-900/60 px-1.5 py-0.5 text-[10px] text-sky-200">hold</span>}
+        {nodeRun.hold && <Badge className="h-4 rounded-sm bg-sky-900/60 px-1.5 text-[10px] text-sky-200">hold</Badge>}
       </div>
       <GraceCountdown nodeRun={nodeRun} />
       {nodeRun.waitingReason && <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">{nodeRun.waitingReason.message}</p>}
-      {nodeRun.activity && isActiveNodeStatus(nodeRun.status) && <p className="truncate font-mono text-xs text-zinc-400">{nodeRun.activity}</p>}
+      {nodeRun.activity && isActiveNodeStatus(nodeRun.status) && <p className="truncate font-mono text-xs text-muted-foreground">{nodeRun.activity}</p>}
       <div className="space-y-1.5">
         {lane ? (
           <DetailRow label="Lane">
             <LaneBadge id={lane.id} index={lane.index} /> <span className="font-mono">{lane.branch}</span>
-            {lane.pushed && <span className="ml-1.5 text-[10px] text-indigo-300">pushed</span>}
+            {lane.pushed && <Badge className="ml-1.5 h-4 rounded-sm bg-indigo-500/20 px-1 text-[10px] text-indigo-200">pushed</Badge>}
           </DetailRow>
         ) : (
           nodeRun.laneId && <DetailRow label="Lane">{nodeRun.laneId}</DetailRow>
@@ -119,7 +121,7 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
         )}
       </div>
       {mergeShell && (
-        <p className="text-[11px] text-zinc-400">Resolve the conflicts in the merge shell (edit, then <span className="font-mono">git add</span>), then click Done.</p>
+        <p className="text-[11px] text-muted-foreground">Resolve the conflicts in the merge shell (edit, then <span className="font-mono">git add</span>), then click Done.</p>
       )}
       {nodeRun.error && <pre className="rounded-md bg-red-500/10 px-2 py-1.5 text-xs whitespace-pre-wrap text-red-200">{nodeRun.error}</pre>}
     </Section>
@@ -203,7 +205,7 @@ function ChangesSection({ nodeRun, label }: { nodeRun: NodeRun; label: string })
   return (
     <Section title="Changes">
       <div className="flex items-center gap-2">
-        <span className="text-xs text-zinc-400">{nodeRun.snapshotEnd ? "What this step changed in its worktree." : "Changes so far in this step."}</span>
+        <span className="text-xs text-muted-foreground">{nodeRun.snapshotEnd ? "What this step changed in its worktree." : "Changes so far in this step."}</span>
         <Button size="sm" className="ml-auto shrink-0" onClick={() => useUiStore.getState().openDiff({ kind: "node", nodeRunId: nodeRun.id, title: `Changes · ${label}` })}>
           View diff
         </Button>
@@ -236,8 +238,8 @@ function OutputSection({ nodeRun, reasonShown }: { nodeRun: NodeRun; reasonShown
         {o.port && !reasonShown && <DetailRow label="Branch taken">{o.port}</DetailRow>}
         {o.conflictedFiles?.length ? <DetailRow label="Conflicts"><span className="font-mono text-[11px]">{o.conflictedFiles.join(", ")}</span></DetailRow> : null}
       </div>
-      {text && <pre className="max-h-80 overflow-auto rounded-md bg-zinc-950 p-2 text-xs leading-relaxed whitespace-pre-wrap text-zinc-200 ring-1 ring-zinc-800">{text}</pre>}
-      {o.stdoutTail && <pre className="max-h-80 overflow-auto rounded-md bg-zinc-950 p-2 font-mono text-[11px] whitespace-pre-wrap text-zinc-300 ring-1 ring-zinc-800">{o.stdoutTail}</pre>}
+      {text && <pre className="max-h-80 overflow-auto rounded-md bg-background p-2 text-xs leading-relaxed whitespace-pre-wrap text-foreground/90 ring-1 ring-border">{text}</pre>}
+      {o.stdoutTail && <pre className="max-h-80 overflow-auto rounded-md bg-background p-2 font-mono text-[11px] whitespace-pre-wrap text-foreground/85 ring-1 ring-border">{o.stdoutTail}</pre>}
     </Section>
   );
 }
@@ -246,18 +248,18 @@ export function UsageSection({ usage, title = "Usage" }: { usage: NonNullable<No
   return (
     <Section title={title}>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-        <span className="text-zinc-500">Input</span>
+        <span className="text-muted-foreground">Input</span>
         <span className="text-right font-mono">{formatTokens(usage.inputTokens)}</span>
-        <span className="text-zinc-500">Output</span>
+        <span className="text-muted-foreground">Output</span>
         <span className="text-right font-mono">{formatTokens(usage.outputTokens)}</span>
-        <span className="text-zinc-500">Cache write</span>
+        <span className="text-muted-foreground">Cache write</span>
         <span className="text-right font-mono">{formatTokens(usage.cacheCreationTokens)}</span>
-        <span className="text-zinc-500">Cache read</span>
+        <span className="text-muted-foreground">Cache read</span>
         <span className="text-right font-mono">{formatTokens(usage.cacheReadTokens)}</span>
-        <span className="font-medium text-zinc-300">Estimated cost</span>
-        <span className="text-right font-mono font-medium text-zinc-100">{formatCostUsd(usage.costUsd)}</span>
+        <span className="font-medium text-foreground/85">Estimated cost</span>
+        <span className="text-right font-mono font-medium text-foreground">{formatCostUsd(usage.costUsd)}</span>
       </div>
-      {usage.model && <p className="text-[11px] text-zinc-500">Model: {usage.model}</p>}
+      {usage.model && <p className="text-[11px] text-muted-foreground">Model: {usage.model}</p>}
     </Section>
   );
 }
@@ -286,28 +288,29 @@ function IterationSelector({ iterations, shown, historical, label }: { iteration
         ) : undefined
       }
     >
-      <div className="flex flex-wrap gap-1" role="tablist" aria-label="Loop iterations">
-        {iterations.map((e) => {
-          const style = nodeRunStyle(e.nodeRun);
-          const active = e.iteration === shown;
-          return (
-            <button
-              key={e.iteration}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              title={`Iteration ${e.iteration + 1}: ${style.label}${e.attempts > 1 ? ` (${e.attempts} attempts)` : ""}`}
-              onClick={() => select(e.iteration === latest ? null : e.iteration)}
-              className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs tabular-nums ring-1 ${
-                active ? "bg-zinc-700 text-zinc-100 ring-zinc-500" : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800"
-              }`}
-            >
-              <StatusDot className={style.dot} />#{e.iteration + 1}
-            </button>
-          );
-        })}
-      </div>
-      {historical && <p className="text-[11px] text-zinc-500">Previous iteration: read-only.</p>}
+      {/* Only the tab list: the panel is the rest of the inspector, which follows the selected iteration. */}
+      {/* Manual activation: selecting an iteration opens its terminal, so arrow keys only move focus (otherwise
+          the next keystroke would land in the Claude session). Enter/Space/click select. */}
+      <Tabs value={String(shown)} activationMode="manual" onValueChange={(v) => select(Number(v) === latest ? null : Number(v))}>
+        <TabsList aria-label="Loop iterations" className="h-auto flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+          {iterations.map((e) => {
+            const style = nodeRunStyle(e.nodeRun);
+            return (
+              <TabsTrigger
+                key={e.iteration}
+                value={String(e.iteration)}
+                title={`Iteration ${e.iteration + 1}: ${style.label}${e.attempts > 1 ? ` (${e.attempts} attempts)` : ""}`}
+                // Radix only reports a change of tab; clicking the shown one again re-syncs the drawer too.
+                onClick={() => select(e.iteration === latest ? null : e.iteration)}
+                className="h-6 flex-none px-2 text-xs tabular-nums"
+              >
+                <StatusDot className={style.dot} />#{e.iteration + 1}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+      </Tabs>
+      {historical && <p className="text-[11px] text-muted-foreground">Previous iteration: read-only.</p>}
     </Section>
   );
 }
@@ -324,17 +327,17 @@ function ConditionResult({ node, nodeRun }: { node: GraphNodeOf<"condition">; no
         </DetailRow>
         <DetailRow label="Result">
           {result === undefined ? (
-            <span className="text-zinc-500">{isActiveNodeStatus(nodeRun.status) ? "Evaluating…" : "Not evaluated"}</span>
+            <span className="text-muted-foreground">{isActiveNodeStatus(nodeRun.status) ? "Evaluating…" : "Not evaluated"}</span>
           ) : (
-            <span className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold ${result ? "bg-green-500/15 text-green-300" : "bg-zinc-700/50 text-zinc-200"}`}>
+            <Badge variant="secondary" className={`h-auto rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-semibold ${result ? "bg-green-500/15 text-green-300" : ""}`}>
               {result ? "true" : "false"}
-            </span>
+            </Badge>
           )}
         </DetailRow>
       </div>
       {o?.text && (
         <Field label="Reason">
-          <pre className="max-h-60 overflow-auto rounded-md bg-zinc-950 p-2 text-xs leading-relaxed whitespace-pre-wrap text-zinc-200 ring-1 ring-zinc-800">{o.text}</pre>
+          <pre className="max-h-60 overflow-auto rounded-md bg-background p-2 text-xs leading-relaxed whitespace-pre-wrap text-foreground/90 ring-1 ring-border">{o.text}</pre>
         </Field>
       )}
     </Section>

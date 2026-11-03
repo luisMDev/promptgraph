@@ -2,6 +2,8 @@ import type { DiffResponse, DiffScope } from "@promptgraph/shared";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../api/rest";
 import { useUiStore, type DiffTarget } from "../../store/ui-store";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Modal } from "../common/ui";
 import { DiffView } from "./DiffView";
 
@@ -34,17 +36,28 @@ export function DiffDialog({ target }: { target: DiffTarget }) {
     <Modal title={target.title} onClose={close} wide>
       <div className="space-y-3">
         {target.kind === "node" && (
-          <div className="flex rounded-md ring-1 ring-zinc-700" role="group" aria-label="Diff scope" style={{ width: "fit-content" }}>
-            <ScopeButton active={scope === "node"} onClick={() => setScope("node")} title="What this step changed, from when it started to when it finished">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            spacing={0}
+            aria-label="Diff scope"
+            value={scope}
+            // Ignore the deselect ("") so one scope is always selected.
+            onValueChange={(v) => v && setScope(v as DiffScope)}
+          >
+            <ToggleGroupItem value="node" className="text-xs" title="What this step changed, from when it started to when it finished">
               This step
-            </ScopeButton>
-            <ScopeButton active={scope === "lane"} onClick={() => setScope("lane")} title="Everything the lane changed since the base branch">
+            </ToggleGroupItem>
+            <ToggleGroupItem value="lane" className="text-xs" title="Everything the lane changed since the base branch">
               Whole lane
-            </ScopeButton>
-          </div>
+            </ToggleGroupItem>
+          </ToggleGroup>
         )}
         {error ? (
-          <p className="text-xs text-red-300">Could not load the diff: {error}</p>
+          <Alert variant="destructive">
+            <AlertDescription className="text-xs">Could not load the diff: {error}</AlertDescription>
+          </Alert>
         ) : diff ? (
           <DiffView
             diff={diff}
@@ -52,23 +65,9 @@ export function DiffDialog({ target }: { target: DiffTarget }) {
             emptyText={nodeScope ? "This step changed no files." : "No changes in this lane."}
           />
         ) : (
-          <p className="text-xs text-zinc-500">Loading diff…</p>
+          <p className="text-xs text-muted-foreground">Loading diff…</p>
         )}
       </div>
     </Modal>
-  );
-}
-
-function ScopeButton({ active, onClick, title, children }: { active: boolean; onClick: () => void; title: string; children: string }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      title={title}
-      onClick={onClick}
-      className={`px-2.5 py-1 text-xs first:rounded-l-md last:rounded-r-md ${active ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
-    >
-      {children}
-    </button>
   );
 }

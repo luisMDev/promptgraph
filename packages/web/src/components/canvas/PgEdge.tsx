@@ -35,10 +35,10 @@ export function PgEdge(props: EdgeProps<PgFlowEdge>) {
           <div
             className={`nodrag nopan pointer-events-none absolute rounded px-1.5 py-0.5 text-[10px] ring-1 ${
               data?.badge
-                ? `font-mono font-semibold ${data.runState === "dead" && !data.looped ? "bg-zinc-900 text-zinc-500 ring-zinc-700" : "bg-violet-950 text-violet-200 ring-violet-500/60"}`
+                ? `font-mono font-semibold ${data.runState === "dead" && !data.looped ? "bg-card text-muted-foreground ring-border" : "bg-violet-950 text-violet-200 ring-violet-500/60"}`
                 : data?.loop
-                  ? "bg-zinc-900 text-violet-300 ring-violet-500/40"
-                  : "bg-zinc-900 text-zinc-300 ring-zinc-700"
+                  ? "bg-card text-violet-300 ring-violet-500/40"
+                  : "bg-card text-foreground/80 ring-border"
             }`}
             title={data?.badge ? "Times looped back / maximum" : undefined}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}

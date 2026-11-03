@@ -1,6 +1,8 @@
 import type { ValidationIssue, ValidationResult } from "@promptgraph/shared";
 import { useEditorStore } from "../../store/editor-store";
+import { cn } from "@/lib/utils";
 import { Icons } from "../common/icons";
+import { Button } from "../common/ui";
 
 /** Errors (block Run) and warnings (informational); clicking an issue selects its node/edge. */
 export function ValidationList({ validation }: { validation: ValidationResult }) {
@@ -23,15 +25,19 @@ function IssueRow({ issue, tone }: { issue: ValidationIssue; tone: "error" | "wa
   const target = issue.nodeId || issue.edgeId;
   return (
     <li>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         disabled={!target}
         onClick={() => useEditorStore.getState().setSelection(issue.nodeId ? [issue.nodeId] : [], issue.edgeId ? [issue.edgeId] : [])}
-        className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs enabled:hover:bg-zinc-800 ${tone === "error" ? "text-red-300" : "text-amber-300"}`}
+        className={cn(
+          "h-auto w-full items-start justify-start gap-2 rounded-md px-2 py-1.5 text-left text-xs font-normal whitespace-normal hover:bg-accent disabled:opacity-100",
+          tone === "error" ? "text-red-300 hover:text-red-300" : "text-amber-300 hover:text-amber-300",
+        )}
       >
         <Icons.alert className="mt-0.5 shrink-0" />
         <span>{issue.message}</span>
-      </button>
+      </Button>
     </li>
   );
 }
