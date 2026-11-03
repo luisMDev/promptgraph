@@ -1,3 +1,4 @@
+import { Separator } from "@/components/ui/separator";
 import { resolveBranchPrefix, type GraphSettings, type KeepWorktrees } from "@promptgraph/shared";
 import { CompletionEditor, EFFORT_OPTIONS, InheritSelect, MODEL_SUGGESTIONS, PERMISSION_OPTIONS } from "../inspector/ClaudeOptions";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea } from "../common/fields";
@@ -60,7 +61,8 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
         onChange={(allowPrWithoutApproval) => update({ allowPrWithoutApproval })}
       />
 
-      <h4 className="pt-2 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Claude defaults</h4>
+      <Separator className="mt-1" />
+      <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Claude defaults</h4>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Model">
           <OptionalText value={settings.defaults.model} list="pg-models-defaults" placeholder="Claude Code default" disabled={disabled} onChange={(model) => updateDefaults({ model })} />

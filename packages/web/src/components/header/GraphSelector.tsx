@@ -1,10 +1,21 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { createGraph, deleteGraph, selectGraph, uniqueGraphId } from "../../store/app-actions";
 import { useAppStore } from "../../store/app-store";
 import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { ConfirmDialog, PromptDialog } from "../common/PromptDialog";
 import { Icons } from "../common/icons";
-import { useDismiss } from "../common/ui";
+import { Button } from "../common/ui";
 
 type Dialog = "create" | "rename" | "delete" | null;
 
@@ -14,79 +25,99 @@ export function GraphSelector() {
   const graph = useEditorStore((s) => s.graph);
   const loadError = useEditorStore((s) => s.loadError);
   const readOnly = useEditorStore(isReadOnly);
-  const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, open, () => setOpen(false));
+  // A dialog picked from the menu opens only once the menu has closed and returned focus to the trigger: the
+  // dialog then traps focus without racing the menu's focus restore, and gives focus back to the trigger.
+  const pendingDialog = useRef<Dialog>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const renameRef = useRef<HTMLButtonElement>(null);
+  // Modal has no Radix DialogTrigger to return focus to, so give it back to whatever opened the dialog.
+  const closeDialog = () => {
+    const opener = dialog === "rename" ? renameRef : triggerRef;
+    setDialog(null);
+    setTimeout(() => opener.current?.focus(), 0);
+  };
+  const openFromMenu = (d: Exclude<Dialog, null>) => {
+    pendingDialog.current = d;
+  };
   const currentId = useEditorStore((s) => s.graphId);
 
   return (
-    <div ref={ref} className="relative flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex h-8 max-w-72 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-zinc-100 ring-1 ring-zinc-800 ring-inset hover:bg-zinc-800"
-      >
-        <Icons.layers className="shrink-0 text-zinc-400" />
-        <span className="truncate">{graph?.name ?? (loadError ? "Invalid graph" : graphs.length ? "Select a graph" : "No graphs")}</span>
-        <Icons.chevronDown className="shrink-0 text-zinc-500" />
-      </button>
-      {graph && (
-        <button
-          type="button"
-          title="Rename graph"
-          disabled={readOnly}
-          onClick={() => setDialog("rename")}
-          className="flex size-8 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
+    <div className="flex items-center gap-1">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button ref={triggerRef} variant="ghost" className="max-w-72 gap-2 px-2.5 font-medium ring-1 ring-border ring-inset">
+            <Icons.layers className="shrink-0 text-muted-foreground" />
+            <span className="truncate">{graph?.name ?? (loadError ? "Invalid graph" : graphs.length ? "Select a graph" : "No graphs")}</span>
+            <Icons.chevronDown className="shrink-0 text-muted-foreground" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          className="w-80 p-0"
+          onCloseAutoFocus={(e) => {
+            const next = pendingDialog.current;
+            if (!next) return;
+            pendingDialog.current = null;
+            e.preventDefault();
+            triggerRef.current?.focus();
+            setDialog(next);
+          }}
         >
-          <Icons.pencil />
-        </button>
-      )}
-      {open && (
-        <div className="absolute top-10 left-0 z-40 w-80 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 shadow-xl">
           <div className="max-h-80 overflow-y-auto p-1">
-            {graphs.length === 0 && <p className="px-3 py-2 text-xs text-zinc-500">No graphs in this repository yet.</p>}
-            {graphs.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  if (g.id !== currentId) void selectGraph(g.id);
-                }}
-                className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-zinc-800 ${g.id === currentId ? "bg-zinc-800/70" : ""}`}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className={`block truncate ${g.loadError ? "text-red-300" : "text-zinc-100"}`}>{g.name ?? g.id}</span>
-                  <span className="block truncate font-mono text-[11px] text-zinc-500">{g.loadError ? g.loadError : `${g.id}.json`}</span>
-                </span>
-                {g.loadError && <Icons.alert className="shrink-0 text-red-400" />}
-              </button>
-            ))}
-          </div>
-          <div className="flex gap-1 border-t border-zinc-800 p-1">
-            <MenuAction
-              onClick={() => {
-                setOpen(false);
-                setDialog("create");
+            {graphs.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">No graphs in this repository yet.</p>}
+            <DropdownMenuRadioGroup
+              value={currentId ?? ""}
+              onValueChange={(id) => {
+                if (id !== currentId) void selectGraph(id);
               }}
             >
+              {graphs.map((g) => (
+                <DropdownMenuRadioItem key={g.id} value={g.id} className="gap-2 py-2 pr-8 pl-3">
+                  <span className="min-w-0 flex-1">
+                    <span className={cn("block truncate", g.loadError ? "text-red-300" : "text-foreground")}>{g.name ?? g.id}</span>
+                    <span className="block truncate font-mono text-[11px] text-muted-foreground">{g.loadError ? g.loadError : `${g.id}.json`}</span>
+                  </span>
+                  {g.loadError && <Icons.alert className="shrink-0 text-red-400" />}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </div>
+          <DropdownMenuSeparator className="mx-0 my-0" />
+          <div className="flex gap-1 p-1">
+            <DropdownMenuItem className="flex-1 justify-center text-xs font-medium" onSelect={() => openFromMenu("create")}>
               <Icons.plus /> New graph
-            </MenuAction>
+            </DropdownMenuItem>
             {(graph || loadError) && (
-              <MenuAction
-                danger
+              <DropdownMenuItem
+                variant="destructive"
                 disabled={readOnly && !loadError}
-                onClick={() => {
-                  setOpen(false);
-                  setDialog("delete");
-                }}
+                className="flex-1 justify-center text-xs font-medium"
+                onSelect={() => openFromMenu("delete")}
               >
                 <Icons.trash /> Delete
-              </MenuAction>
+              </DropdownMenuItem>
             )}
           </div>
-        </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {graph && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              ref={renameRef}
+              variant="ghost"
+              size="icon"
+              aria-label="Rename graph"
+              disabled={readOnly}
+              onClick={() => setDialog("rename")}
+              className="text-muted-foreground"
+            >
+              <Icons.pencil />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Rename graph</TooltipContent>
+        </Tooltip>
       )}
       {dialog === "create" && (
         <PromptDialog
@@ -95,7 +126,7 @@ export function GraphSelector() {
           submitLabel="Create"
           hint={(v) => (v.trim() ? `Saved as .promptgraph/graphs/${uniqueGraphId(v, graphs.map((g) => g.id))}.json` : null)}
           onSubmit={(name) => void createGraph(name)}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
         />
       )}
       {dialog === "rename" && graph && (
@@ -106,7 +137,7 @@ export function GraphSelector() {
           submitLabel="Rename"
           hint={() => "The file name (id) stays the same."}
           onSubmit={(name) => useEditorStore.getState().rename(name)}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
         />
       )}
       {dialog === "delete" && (
@@ -117,22 +148,9 @@ export function GraphSelector() {
           onConfirm={() => {
             if (currentId) void deleteGraph(currentId);
           }}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
         />
       )}
     </div>
-  );
-}
-
-function MenuAction({ children, onClick, danger, disabled }: { children: ReactNode; onClick: () => void; danger?: boolean; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium disabled:opacity-40 ${danger ? "text-red-300 hover:bg-red-500/10" : "text-zinc-300 hover:bg-zinc-800"}`}
-    >
-      {children}
-    </button>
   );
 }
