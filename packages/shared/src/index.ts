@@ -10,3 +10,4 @@ export * from "./ws.js";
 export * from "./topology.js";
 export * from "./validation/types.js";
 export * from "./validation/validate.js";
+export * from "./server-info.js";
