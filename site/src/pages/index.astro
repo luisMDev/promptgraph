@@ -1,0 +1,902 @@
+---
+import { Image } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import FlowDiagram from '../components/FlowDiagram.astro';
+
+import fanout from '../assets/screens/m4-fanout-lanes.png';
+import terminal from '../assets/screens/m2-terminal.png';
+import editor from '../assets/screens/m6-editor.png';
+import prDialog from '../assets/screens/m4-pr-dialog.png';
+import loop from '../assets/screens/m6-run-loop.png';
+import report from '../assets/screens/run-report.png';
+
+const repo = 'https://github.com/luisMDev/promptgraph';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const pageUrl = new URL(`${base}/`, Astro.site).href;
+
+const title = 'promptgraph: visual workflows for Claude Code, run in parallel git worktrees';
+const description =
+  'Draw a graph of Claude Code prompts, slash commands, shell steps, commits, approvals and pull requests. Run it locally: parallel branches get their own git worktree, and every step opens a real Claude Code terminal.';
+
+const features = [
+  {
+    title: 'Parallel lanes in git worktrees',
+    body: 'When the graph fans out, each branch runs in its own worktree on its own branch. Your checkout is never touched. A merge step joins the lanes back together.',
+    color: 'var(--blue)',
+  },
+  {
+    title: 'The real Claude Code terminal',
+    body: 'Click any step to open its interactive Claude Code session. Watch it work, answer a permission prompt, or type a follow-up. Nothing is hidden behind a wrapper.',
+    color: 'var(--ink)',
+  },
+  {
+    title: 'Approvals before anything leaves',
+    body: 'Pull-request steps are gated by default. You see the exact diff, the title and the body, and nothing is pushed until you approve.',
+    color: 'var(--amber)',
+  },
+  {
+    title: 'Conditions and loops',
+    body: 'Branch on an exit code, a regex, or a yes/no question answered by Claude. Loop back on failure: run tests, let Claude fix, run them again, up to a limit you set.',
+    color: 'var(--violet)',
+  },
+  {
+    title: 'Per-step diffs and run reports',
+    body: 'Every step is snapshotted when it starts and finishes, so you can see exactly what it changed. The run report shows results, timing, commits, PR links and cost.',
+    color: 'var(--green)',
+  },
+  {
+    title: 'Token usage and cost per step',
+    body: 'Input, output and cache tokens are read from each session transcript, with an estimated cost per step and per run. No guessing what a workflow costs.',
+    color: 'var(--muted)',
+  },
+];
+
+const nodeTypes = [
+  ['Prompt', 'A Claude Code session started with your prompt'],
+  ['Command', 'A slash command or skill, such as /code-review high'],
+  ['Shell', 'Any shell command in the step’s worktree; exit code 0 means success'],
+  ['Commit', 'Stage and commit, with a fixed or Claude-generated message'],
+  ['Pull request', 'Push the branch and open a draft PR with gh, behind an approval'],
+  ['Approval', 'Pause the run until you approve, with the diff and earlier outputs'],
+  ['Merge', 'Join parallel lanes; conflicts resolved by Claude or by you'],
+  ['Condition', 'Pick the true or false branch from an exit code, a regex or a judge'],
+];
+
+const faqs = [
+  {
+    q: 'What is promptgraph?',
+    a: 'promptgraph is a local tool for orchestrating Claude Code. You draw a graph where each node is a step (a prompt, a slash command, a shell command, a commit, an approval, a merge or a pull request) and run it. Independent branches run in parallel, each in its own git worktree.',
+  },
+  {
+    q: 'Does it replace Claude Code?',
+    a: 'No. Every Claude step is a real, interactive Claude Code session started with the flags you configure. promptgraph decides what runs when and where, and gives you a canvas to watch it. You can open any step’s terminal and take over.',
+  },
+  {
+    q: 'Is my code sent anywhere?',
+    a: 'promptgraph runs on your machine and its server listens on 127.0.0.1 only, behind a per-start token. Your prompts go to Claude Code exactly as they would if you typed them. Nothing is pushed to a remote without an approval step you accept.',
+  },
+  {
+    q: 'Can Claude run in parallel without the sessions stepping on each other?',
+    a: 'Yes. Each parallel branch gets its own git worktree and branch, forked from the state of the lane before it. Sessions never share a working directory. A merge node brings the lanes back together.',
+  },
+  {
+    q: 'Which platforms are supported?',
+    a: 'Linux and WSL, with Node.js 22 or newer, git and a logged-in Claude Code. The GitHub CLI is optional and only needed for pull-request steps.',
+  },
+  {
+    q: 'Can Claude Code drive promptgraph itself?',
+    a: 'Yes. promptgraph ships an MCP server and a Claude Code plugin with design-graph, run-graph and review-run skills. Claude can design and run graphs and read their results. Approvals always stay with you, in the UI.',
+  },
+];
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'promptgraph',
+    url: pageUrl,
+    description,
+    applicationCategory: 'DeveloperApplication',
+    operatingSystem: 'Linux, Windows Subsystem for Linux',
+    image: new URL(`${base}/og.png`, Astro.site).href,
+    codeRepository: repo,
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faqs.map(({ q, a }) => ({
+      '@type': 'Question',
+      name: q,
+      acceptedAnswer: { '@type': 'Answer', text: a },
+    })),
+  },
+];
+---
+
+<Base title={title} description={description} jsonLd={jsonLd}>
+  <a class="sr-only" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href={`${base}/`} aria-label="promptgraph home">
+        <img src={`${base}/favicon.svg`} alt="" width="28" height="28" />
+        <span>promptgraph</span>
+      </a>
+      <nav aria-label="Primary">
+        <ul>
+          <li><a href="#how-it-works">How it works</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#claude-code">MCP plugin</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </nav>
+      <a class="btn btn-primary btn-sm" href={repo}>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"
+          ><path
+            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+          ></path></svg
+        >
+        GitHub
+      </a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="container hero-inner">
+        <p class="pill"><span class="dot"></span> Local tool for Claude Code · Linux &amp; WSL</p>
+        <h1>Draw your Claude Code workflow. <span class="nowrap">Run it in parallel.</span></h1>
+        <p class="lead">
+          promptgraph turns prompts, slash commands, shell steps, commits, approvals and pull requests
+          into a graph you can run. Independent branches run side by side in their own git worktrees,
+          and every step opens the real Claude Code terminal.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#get-started">Get started</a>
+          <a class="btn btn-ghost" href={repo}>View on GitHub</a>
+        </div>
+        <pre class="install" aria-label="Start command"><code><span class="prompt">$</span> promptgraph ~/code/my-app</code></pre>
+      </div>
+
+      <div class="container">
+        <figure class="window">
+          <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <Image
+            src={fanout}
+            alt="promptgraph canvas during a run: a planning step fans out into three parallel Claude Code steps that merge, then commit, review and open a pull request"
+            widths={[640, 1024, 1600]}
+            sizes="(max-width: 1200px) 100vw, 1160px"
+            loading="eager"
+            fetchpriority="high"
+          />
+        </figure>
+      </div>
+    </section>
+
+    <section class="problem">
+      <div class="container narrow">
+        <h2>One Claude session at a time doesn’t scale</h2>
+        <p>
+          Plan, implement, test, fix, review, commit, open a PR. You already run this sequence by
+          hand, one terminal at a time, copying context between sessions and hoping two agents don’t
+          edit the same files. promptgraph writes that sequence down as a graph, runs the independent
+          parts at once in isolated worktrees, and stops where you want a say.
+        </p>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="section">
+      <div class="container">
+        <span class="eyebrow">How it works</span>
+        <h2>From a sketch to a pull request in three steps</h2>
+        <div class="steps-layout">
+          <ol class="steps">
+            <li>
+              <h3>Draw the graph</h3>
+              <p>
+                Drop nodes on the canvas and connect them. Each Claude step picks its model, effort,
+                permission mode and how much context it inherits. The graph is saved as JSON in your
+                repo, so you can commit and share it.
+              </p>
+            </li>
+            <li>
+              <h3>Run it</h3>
+              <p>
+                Steps light up as they progress. Straight paths share a lane; fan-outs get a new lane
+                and worktree each. Click any node to open its live Claude Code terminal.
+              </p>
+            </li>
+            <li>
+              <h3>Approve and ship</h3>
+              <p>
+                Approval steps pause the run with the diff in front of you. Approve the PR step and
+                promptgraph pushes that exact commit and opens a draft pull request with
+                <code>gh</code>.
+              </p>
+            </li>
+          </ol>
+          <FlowDiagram />
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section alt">
+      <div class="container">
+        <span class="eyebrow">Features</span>
+        <h2>Orchestration that stays out of Claude’s way</h2>
+        <ul class="grid">
+          {
+            features.map((f) => (
+              <li class="card">
+                <span class="swatch" style={`background:${f.color}`} aria-hidden="true" />
+                <h3>{f.title}</h3>
+                <p>{f.body}</p>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container showcase">
+        <div>
+          <span class="eyebrow">Interactive by design</span>
+          <h2>Every step is a real terminal you can take over</h2>
+          <p>
+            promptgraph never scrapes the Claude Code TUI. It starts each session with its own flags
+            and follows it through Claude Code’s hooks and transcript. When Claude needs input, the
+            node turns yellow and a desktop notification tells you which step is waiting.
+          </p>
+          <ul class="checks">
+            <li><strong>auto</strong>: continue a few seconds after Claude finishes, with a Hold button</li>
+            <li><strong>manual</strong>: wait until you click Done</li>
+            <li><strong>marker</strong>: succeed only when Claude ends with a token you choose</li>
+          </ul>
+        </div>
+        <figure class="window">
+          <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <Image
+            src={terminal}
+            alt="The interactive Claude Code terminal of a step, opened from the promptgraph canvas"
+            widths={[640, 1024]}
+            sizes="(max-width: 900px) 100vw, 640px"
+          />
+        </figure>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="container">
+        <span class="eyebrow">Building blocks</span>
+        <h2>Eight node types cover the whole loop</h2>
+        <dl class="nodes">
+          {
+            nodeTypes.map(([name, desc]) => (
+              <div>
+                <dt>{name}</dt>
+                <dd>{desc}</dd>
+              </div>
+            ))
+          }
+        </dl>
+        <div class="gallery">
+          <figure>
+            <Image src={editor} alt="The graph editor with the node palette and the inspector" widths={[480, 800]} sizes="(max-width: 900px) 100vw, 380px" />
+            <figcaption>Editor with node palette and inspector</figcaption>
+          </figure>
+          <figure>
+            <Image src={loop} alt="A test-fix loop on the canvas with its iteration counter" widths={[480, 800]} sizes="(max-width: 900px) 100vw, 380px" />
+            <figcaption>Test-fix loop with an iteration limit</figcaption>
+          </figure>
+          <figure>
+            <Image src={report} alt="Run report of a fan-out run that opened a pull request" widths={[480, 800]} sizes="(max-width: 900px) 100vw, 380px" />
+            <figcaption>Run report with per-step results and cost</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container showcase reverse">
+        <figure class="window">
+          <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <Image
+            src={prDialog}
+            alt="Pull request approval dialog showing the diff, title and body before anything is pushed"
+            widths={[640, 1024]}
+            sizes="(max-width: 900px) 100vw, 640px"
+          />
+        </figure>
+        <div>
+          <span class="eyebrow">Safe defaults</span>
+          <h2>Nothing leaves your machine without your approval</h2>
+          <ul class="checks">
+            <li>The server binds to <code>127.0.0.1</code> and every request needs a per-start token.</li>
+            <li>Pull-request steps are gated by an approval unless you explicitly turn that off.</li>
+            <li>Steps never run in your checkout; worktrees live under <code>~/.promptgraph</code>.</li>
+            <li><code>bypassPermissions</code> is never offered. The default is <code>acceptEdits</code>.</li>
+            <li>Checkpoint commits before every fork and merge, so no work is lost.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="claude-code" class="section dark">
+      <div class="container showcase">
+        <div>
+          <span class="eyebrow">MCP server + Claude Code plugin</span>
+          <h2>Let Claude design and run the graph for you</h2>
+          <p>
+            Ask “split this refactor into parallel steps and run it” or “what happened in the last
+            run?”. The bundled plugin registers the promptgraph MCP server and adds three skills:
+            <code>design-graph</code>, <code>run-graph</code> and <code>review-run</code>. Claude can
+            save graphs, start runs and read diffs. Approvals still go through you.
+          </p>
+        </div>
+        <pre class="code"><code><span class="c"># inside Claude Code</span>
+/plugin marketplace add /path/to/promptgraph
+/plugin install promptgraph@promptgraph
+
+<span class="c"># or register the MCP server by hand</span>
+claude mcp add promptgraph -- promptgraph mcp</code></pre>
+      </div>
+    </section>
+
+    <section id="get-started" class="section">
+      <div class="container narrow">
+        <span class="eyebrow">Get started</span>
+        <h2>Running in under a minute</h2>
+        <p>
+          Requires Linux or WSL, Node.js 22+, pnpm, git and a logged-in Claude Code. The GitHub CLI is
+          only needed for pull-request steps.
+        </p>
+        <pre class="code light"><code>git clone {repo}.git
+cd promptgraph
+pnpm install && pnpm build
+cd packages/server && pnpm link --global
+
+<span class="c"># open the UI for any git repository</span>
+promptgraph ~/code/my-app</code></pre>
+        <div class="cta-row center">
+          <a class="btn btn-primary" href={repo}>Read the docs on GitHub</a>
+          <a class="btn btn-ghost" href={`${repo}/tree/main/docs/examples`}>Browse example graphs</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq" class="section alt">
+      <div class="container narrow">
+        <span class="eyebrow">FAQ</span>
+        <h2>Frequently asked questions</h2>
+        <div class="faq">
+          {
+            faqs.map(({ q, a }) => (
+              <details>
+                <summary>
+                  <h3>{q}</h3>
+                </summary>
+                <p>{a}</p>
+              </details>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="final">
+      <div class="container narrow">
+        <h2>Stop babysitting terminals. Draw the flow once.</h2>
+        <p>Your Claude Code workflow, as a graph you can run, watch and repeat.</p>
+        <div class="cta-row center">
+          <a class="btn btn-primary" href={repo}>Get promptgraph on GitHub</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <span class="brand">
+        <img src={`${base}/favicon.svg`} alt="" width="22" height="22" />
+        promptgraph
+      </span>
+      <nav aria-label="Footer">
+        <a href={repo}>GitHub</a>
+        <a href={`${repo}/blob/main/docs/DESIGN.md`}>Design</a>
+        <a href={`${repo}/tree/main/docs/examples`}>Examples</a>
+        <a href={`${repo}/issues`}>Issues</a>
+      </nav>
+      <p class="fine">Not affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
+    </div>
+  </footer>
+</Base>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    height: 64px;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 18px;
+    text-decoration: none;
+    letter-spacing: -0.01em;
+  }
+  .brand img {
+    border-radius: 7px;
+    box-shadow: 0 0 0 1px var(--line);
+  }
+  .nav ul {
+    display: flex;
+    gap: 28px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .nav ul a {
+    text-decoration: none;
+    color: var(--ink-2);
+    font-size: 15px;
+  }
+  .nav ul a:hover {
+    color: var(--ink);
+  }
+  .btn-sm {
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+  @media (max-width: 760px) {
+    .nav nav {
+      display: none;
+    }
+  }
+
+  .hero {
+    padding: 72px 0 40px;
+    background:
+      radial-gradient(60% 50% at 50% 0%, #fff 0%, transparent 70%),
+      var(--bg);
+  }
+  .hero-inner {
+    text-align: center;
+    max-width: 860px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 24px;
+    padding: 6px 14px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: 14px;
+    color: var(--ink-2);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 20%, transparent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      box-shadow: 0 0 0 7px color-mix(in srgb, var(--blue) 5%, transparent);
+    }
+  }
+  h1 {
+    font-size: clamp(38px, 6vw, 64px);
+    font-weight: 750;
+    letter-spacing: -0.035em;
+    text-wrap: balance;
+  }
+  .nowrap {
+    white-space: nowrap;
+  }
+  .lead {
+    font-size: clamp(17px, 2vw, 20px);
+    color: var(--ink-2);
+    margin: 24px auto 32px;
+    max-width: 680px;
+  }
+  .cta-row {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .install {
+    display: inline-block;
+    margin: 28px 0 48px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    background: var(--ink);
+    color: #f4f4f4;
+    font-size: 15px;
+  }
+  .prompt {
+    color: #8b8b8b;
+    margin-right: 6px;
+  }
+
+  .window {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 0.04),
+      0 24px 60px -20px rgb(60 40 20 / 0.25);
+  }
+  .window-bar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-soft);
+  }
+  .window-bar span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #d6cec4;
+  }
+
+  .problem {
+    padding: 72px 0 24px;
+    text-align: center;
+  }
+  .narrow {
+    max-width: 760px;
+  }
+  .problem h2,
+  .section h2,
+  .final h2 {
+    font-size: clamp(28px, 4vw, 40px);
+    font-weight: 700;
+  }
+  .problem p {
+    color: var(--ink-2);
+    font-size: 19px;
+    margin-top: 18px;
+  }
+
+  .section {
+    padding: 88px 0;
+  }
+  .section > .container > h2 {
+    max-width: 720px;
+  }
+  .alt {
+    background: var(--bg-soft);
+    border-block: 1px solid var(--line);
+  }
+
+  .steps-layout {
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    gap: 48px;
+    align-items: center;
+    margin-top: 40px;
+  }
+  .steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    counter-reset: step;
+    display: grid;
+    gap: 28px;
+  }
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding-left: 56px;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    background: var(--ink);
+    color: #fff;
+    font-weight: 700;
+  }
+  .steps h3 {
+    font-size: 20px;
+  }
+  .steps p {
+    margin: 6px 0 0;
+    color: var(--ink-2);
+  }
+
+  .grid {
+    list-style: none;
+    padding: 0;
+    margin: 40px 0 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px;
+  }
+  .swatch {
+    display: block;
+    width: 28px;
+    height: 6px;
+    border-radius: 3px;
+    margin-bottom: 18px;
+  }
+  .card h3 {
+    font-size: 19px;
+  }
+  .card p {
+    margin: 10px 0 0;
+    color: var(--ink-2);
+    font-size: 16px;
+  }
+
+  .showcase {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 56px;
+    align-items: center;
+  }
+  .showcase.reverse {
+    grid-template-columns: 1.2fr 1fr;
+  }
+  .showcase p {
+    color: var(--ink-2);
+    margin: 18px 0 0;
+  }
+  .checks {
+    list-style: none;
+    padding: 0;
+    margin: 22px 0 0;
+    display: grid;
+    gap: 12px;
+  }
+  .checks li {
+    position: relative;
+    padding-left: 30px;
+    color: var(--ink-2);
+  }
+  .checks li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 5px;
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    background: var(--green)
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      center / 14px no-repeat;
+  }
+  :not(pre) > code {
+    font-size: 0.9em;
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+  }
+
+  .nodes {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    margin: 40px 0 0;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .nodes div {
+    background: var(--surface);
+    padding: 20px;
+  }
+  .nodes dt {
+    font-weight: 700;
+  }
+  .nodes dd {
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 15px;
+  }
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-top: 40px;
+  }
+  .gallery figure {
+    margin: 0;
+  }
+  .gallery img {
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    object-position: center;
+  }
+  .gallery figcaption {
+    font-size: 14px;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+
+  .dark {
+    background: var(--ink);
+    color: #f5f5f5;
+  }
+  .dark .eyebrow {
+    color: #a3a3a3;
+  }
+  .dark p {
+    color: #d4d4d4;
+  }
+  .dark :not(pre) > code {
+    background: #1f1f1f;
+    border-color: #333;
+    color: #fff;
+  }
+  .code {
+    margin: 0;
+    padding: 24px;
+    border-radius: var(--radius);
+    background: #161616;
+    border: 1px solid #2a2a2a;
+    color: #f0f0f0;
+    font-size: 14.5px;
+    line-height: 1.75;
+    overflow-x: auto;
+  }
+  .code.light {
+    margin: 28px 0 32px;
+    background: var(--ink);
+  }
+  .c {
+    color: #8a8a8a;
+  }
+  .center {
+    justify-content: flex-start;
+  }
+  #get-started p {
+    color: var(--ink-2);
+    margin-top: 16px;
+  }
+
+  .faq {
+    margin-top: 32px;
+    display: grid;
+    gap: 12px;
+  }
+  details {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0 22px;
+  }
+  summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 18px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::after {
+    content: '+';
+    font-size: 22px;
+    color: var(--muted);
+    transition: transform 0.2s ease;
+  }
+  details[open] summary::after {
+    transform: rotate(45deg);
+  }
+  summary h3 {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  details p {
+    margin: 0 0 20px;
+    color: var(--ink-2);
+  }
+
+  .final {
+    padding: 96px 0;
+    text-align: center;
+  }
+  .final p {
+    color: var(--ink-2);
+    font-size: 19px;
+    margin: 14px 0 28px;
+  }
+  .final .center {
+    justify-content: center;
+  }
+
+  .footer {
+    border-top: 1px solid var(--line);
+    padding: 32px 0 40px;
+  }
+  .footer-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px 32px;
+  }
+  .footer nav {
+    display: flex;
+    gap: 22px;
+  }
+  .footer nav a {
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 15px;
+  }
+  .fine {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 960px) {
+    .steps-layout,
+    .showcase,
+    .showcase.reverse {
+      grid-template-columns: 1fr;
+      gap: 36px;
+    }
+    .grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .nodes {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (max-width: 640px) {
+    .grid,
+    .gallery,
+    .nodes {
+      grid-template-columns: 1fr;
+    }
+    .section {
+      padding: 64px 0;
+    }
+  }
+</style>

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://luismdev.github.io/promptgraph/sitemap-index.xml

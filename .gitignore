@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .vite/
+.astro/
 coverage/
 *.log
 # promptgraph runtime state inside a target repo; graph files are committed
