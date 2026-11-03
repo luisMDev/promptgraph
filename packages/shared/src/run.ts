@@ -84,6 +84,17 @@ export const NodeRunSchema = z.object({
   hold: z.boolean(),
   /** Workspace setup badge for the first node of a new lane. */
   laneSetup: LaneSetupStateSchema.nullable(),
+  /**
+   * completion "auto" (§7.4): epoch ms when the grace timer started by Claude's Stop expires and the node
+   * succeeds; null when no countdown is running. Typing, new activity or Hold cancels it.
+   */
+  graceUntil: z.number().nullable(),
+  /**
+   * §9.7: snapshot commits of the worktree when the node started / finished (hidden refs, never on the lane
+   * branch); their difference is what this node changed. Null when not taken (e.g. the node never ran).
+   */
+  snapshotStart: z.string().nullable(),
+  snapshotEnd: z.string().nullable(),
   output: NodeRunOutputSchema.nullable(),
   error: z.string().nullable(),
   startedAt: z.number().nullable(),

@@ -103,6 +103,9 @@ interface NodeRunRow {
   waiting_reason: string | null;
   hold: number;
   lane_setup: NodeRun["laneSetup"];
+  grace_until: number | null;
+  snapshot_start: string | null;
+  snapshot_end: string | null;
   output: string | null;
   error: string | null;
   started_at: number | null;
@@ -157,6 +160,9 @@ function nodeRunFromRow(r: NodeRunRow): NodeRun {
     waitingReason: parseJson(r.waiting_reason),
     hold: r.hold === 1,
     laneSetup: r.lane_setup,
+    graceUntil: r.grace_until,
+    snapshotStart: r.snapshot_start,
+    snapshotEnd: r.snapshot_end,
     output: parseJson<NodeRunOutput>(r.output),
     error: r.error,
     startedAt: r.started_at,
@@ -176,6 +182,9 @@ const NODE_RUN_COLUMNS: { [K in keyof NodeRunPatch]-?: [string, (v: NodeRunPatch
   waitingReason: ["waiting_reason", json],
   hold: ["hold", (v) => (v ? 1 : 0)],
   laneSetup: ["lane_setup", (v) => v],
+  graceUntil: ["grace_until", (v) => v],
+  snapshotStart: ["snapshot_start", (v) => v],
+  snapshotEnd: ["snapshot_end", (v) => v],
   output: ["output", json],
   error: ["error", (v) => v],
   startedAt: ["started_at", (v) => v],

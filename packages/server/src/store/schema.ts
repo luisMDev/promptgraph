@@ -77,4 +77,10 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // Phase 2 (§15.4): JSON LoopState[] (one per loop edge of the snapshot); NULL for graphs without loops.
   `ALTER TABLE runs ADD COLUMN loops TEXT;`,
+  // §7.4 visible auto-completion countdown; §9.7 per-node worktree snapshots (commit shas).
+  `
+  ALTER TABLE node_runs ADD COLUMN grace_until INTEGER;
+  ALTER TABLE node_runs ADD COLUMN snapshot_start TEXT;
+  ALTER TABLE node_runs ADD COLUMN snapshot_end TEXT;
+  `,
 ];
