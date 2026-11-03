@@ -1,6 +1,6 @@
 # promptgraph — Design Document
 
-> Status: M0–M6 implemented; M7–M9 (daemon, multi-repo UI with tabs, desktop app) designed in §4, §13, §20 · Scope: Phase 0–1 (Core), Phase 2 (Control flow) · Audience: personal use (single user, Linux/WSL)
+> Status: M0–M9 implemented (M7 daemon §4, M8 multi-repo UI with tabs §13, M9 desktop app §20; the desktop shell's Rust side is not yet built or run, §20.5) · Scope: Phase 0–1 (Core), Phase 2 (Control flow) · Audience: personal use (single user, Linux/WSL)
 
 `promptgraph` is a local tool that runs as one background **daemon** per user, bound to `127.0.0.1`, managing any number of git repositories. It is started from the terminal (`promptgraph [repo-dir]` registers a repository and opens it) and serves a React UI that runs in the browser or in a small desktop window (Tauri, §20). In it you draw a flow diagram where each box is a step (a Claude Code prompt, a slash command, a shell command, a commit, a PR…), run it, and watch each box progress in real time. Clicking a box opens the **real, interactive Claude Code terminal** of that step. Graphs, runs and terminals of different repositories can be open side by side in in-app tabs (§13.4).
 
@@ -676,6 +676,8 @@ The web app has a small router of its own (`lib/router`, no dependency). The URL
 ### 13.3 Home
 
 Lists every registered repository with: name and path, availability, active runs, nodes waiting for approval, nodes waiting for input (incl. `idle`), last run time, and links to its graphs and active runs. Actions: **Open** (link to `/r/<repoId>`), **Add repository** (an absolute path field, `~/…` accepted → `POST /api/repos`; there is no file picker in a browser; the field says that graphs in a repository can run commands, §14), **Remove** (`DELETE /api/repos/:repoId`, with the 409 explained and a "Remove anyway" that sends `force`). It updates live from `repo:status` / `repo:removed` (§12.2). It also shows daemon-wide information: version and prerequisite warnings (`GET /api/daemon`). The first tab of a fresh profile is Home.
+
+![Home with two registered repositories](screenshots/home.png)
 
 `RepoSummary` = `{ id, path, name, available, active, error, addedAt, lastOpenedAt, lastRunAt, runs: { running, paused }, waiting: { approval, input } }` (`error`: the last activation failure, or null), computed from the DB (one grouped query), so inactive repositories have counters too.
 

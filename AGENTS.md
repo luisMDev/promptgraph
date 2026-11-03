@@ -10,7 +10,7 @@ Guidance for coding agents (Claude Code, Codex, etc.) working in this repository
 
 ## Status
 
-Milestones M0–M6 are implemented (`docs/CONTRACTS.md` documents the module boundaries). M7 (daemon managing many repositories), M8 (router, Home, in-app tabs) and M9 (Tauri desktop shell) are designed in `docs/DESIGN.md` §4, §11–§14, §19 and §20.
+Milestones M0–M9 are implemented: M7 (daemon managing many repositories, `docs/DESIGN.md` §4, §11–§14, §19), M8 (router, Home, in-app tabs, §13) and M9 (Tauri desktop shell, §20). `docs/CONTRACTS.md` documents the module boundaries as built. The desktop shell's Rust code has not been compiled or run yet (no Rust toolchain on the development machine): its first build and the manual checklist in `packages/desktop/README.md` are still open (§17 D1–D5, §20.5).
 
 ## Stack
 
@@ -39,12 +39,17 @@ docs/
 
 ## Commands
 
-- Install: `pnpm install`
-- Build: `pnpm build` (shared, server, web; never needs Rust)
-- Typecheck: `pnpm typecheck`
-- Test: `pnpm test` (root vitest; tests use temp repos and a temp `PG_HOME`)
-- Dev: `pnpm --filter @promptgraph/server dev` (the daemon in the foreground) + `pnpm --filter @promptgraph/web dev` (vite; its proxy adds no credentials: sign in with `promptgraph open --print-url --web-port <vite port>`)
-- Desktop (needs Rust + WebKitGTK): `pnpm --filter @promptgraph/desktop tauri:dev`
+- Install: `pnpm install` (CI and final checks: `pnpm install --frozen-lockfile`)
+- Build: `pnpm build` (shared, server, web and the Astro site; never needs Rust)
+- Typecheck: `pnpm typecheck`. The `video` package typechecks only once `video/scripts/record.mjs` has generated
+  `video/public/recording/manifest.json` (git-ignored); without it use `pnpm -r --filter '!@promptgraph/video' typecheck`
+- Test: `pnpm test` (root vitest; tests use temp repos and a temp `PG_HOME`); one package: `pnpm --filter @promptgraph/<name> test`
+- Dev: `pnpm --filter @promptgraph/server dev` (the daemon in the foreground, `tsx watch`) + `pnpm --filter @promptgraph/web dev`
+  (vite; it proxies to the daemon on `PG_DEV_PORT`, default 4777, and adds no credentials: sign in with
+  `promptgraph open --print-url --web-port <vite port>`). Use a separate `PG_HOME` when a promptgraph daemon already runs
+- Manual runs of the daemon or CLI: always with a temp `PG_HOME`, temp repositories, `PG_DAEMON_SHELL_ENV=0` and
+  `PG_PORT_DEFAULT=0`, never against the user's `~/.promptgraph`
+- Desktop (needs Rust + WebKitGTK): `pnpm --filter @promptgraph/desktop tauri:dev`; its TypeScript contract test runs in `pnpm test`
 
 ## Conventions
 

@@ -13,14 +13,17 @@ The tools come from the `promptgraph` MCP server.
 
 ## Start
 
-1. Call `server_status`. If nothing is running, call `start_server`.
+1. Call `server_status`. If the daemon is not running, call `start_server` (it starts it in the
+   background and registers this repository). If it reports a version mismatch, ask the user to run
+   `promptgraph stop` in a terminal, then call `start_server`.
 2. Pick the graph. If the user did not name one, call `list_graphs` and ask. Call `validate_graph`.
    If it reports errors, fix the graph (see the design-graph skill) or report the errors. Do not run
    a graph that has errors.
 3. Unless the user already said "run it", tell them in one line what the run will do (number of
    Claude steps, parallel lanes, whether it ends in a PR) and get a go-ahead.
 4. Call `start_run`. Save the `runId`. Offer `open_ui` so the user can watch the canvas and the live
-   terminals.
+   terminals: it opens their browser already signed in and returns only the plain page address, so
+   never ask the user for a sign-in link.
 
 ## Supervise
 
@@ -33,7 +36,7 @@ needs someone. Each result has a `next` hint and an `attention` list. Handle eac
 | `waiting_input` | A Claude session shows a permission prompt, a trust dialog or a question in its terminal. Tell the user the step name and the `waiting` message, and ask them to answer it in the UI. If the step's work is already done, ask the user whether to mark it `done`. |
 | `idle` | Claude finished its turn, but the step waits for a manual Done (manual completion or Hold). Read its output with `get_node_output`, summarise it, and ask the user, or call `node_action done` if they told you to continue. |
 | run `paused`, step `failed` | Read `get_node_output` (the error, the shell tail, Claude's last message). Explain the cause. Then propose `node_action retry` (after a fix, for example a flaky test or a missing dependency) or `skip`, or a change to the graph for the next run. |
-| run `paused`, step `interrupted` | promptgraph was restarted. Propose `node_action retry` on the step, or `resume_run`. |
+| run `paused`, step `interrupted` | The promptgraph daemon was stopped (`promptgraph stop`) or crashed while the step ran. If `server_status` says it is not running, call `start_server`. Then propose `node_action retry` on the step, or `resume_run`. |
 | `timedOut: true` | Nothing changed within the timeout. Say briefly what is running (the `activity` field) and call `wait_for_run` again. |
 
 Keep the user informed between waits with one line about what is running and what finished. Do not
@@ -53,3 +56,5 @@ to remove the worktrees.
   `allowPrWithoutApproval` so that a run can continue.
 - A graph cannot be saved while one of its runs is active. Change it after the run ends or is
   cancelled.
+- Never stop or kill the promptgraph daemon: it also runs other repositories' work. If it must be
+  restarted, ask the user to run `promptgraph stop`.

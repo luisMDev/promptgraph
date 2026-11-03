@@ -517,7 +517,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     "resume_run",
     {
       title: "Resume run",
-      description: "Continues a paused run (e.g. after promptgraph restarted). Failed or interrupted steps still need node_action retry or skip.",
+      description: "Continues a paused run (e.g. after the promptgraph daemon was stopped or crashed). Failed or interrupted steps still need node_action retry or skip.",
       inputSchema: { ...repoArg, runId: runIdArg },
       annotations: WRITE,
     },

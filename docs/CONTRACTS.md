@@ -1,8 +1,9 @@
 # promptgraph — Internal contracts
 
 > Audience: maintainers. `DESIGN.md` is the product spec, `SPIKE.md` overrides it where they differ. This
-> file fixes **module boundaries, file paths and interfaces**. Milestones M0–M6 are implemented: every
-> module listed here is complete, and its doc comment is part of the contract. Change a signature only
+> file fixes **module boundaries, file paths and interfaces**. Milestones M0–M9 are implemented (M9's Rust side
+> is written but not compiled on the development machine, DESIGN §20.5): every module listed here exists, and its
+> doc comment is part of the contract. Change a signature only
 > together with all its callers and this file. User documentation is in the top-level `README.md`.
 
 ## 1. Workspace
@@ -15,22 +16,24 @@ vitest.config.ts        one root config; tests in packages/*/test/**/*.test.ts(x
 packages/shared         @promptgraph/shared — zod schemas, types, validator, topology, pricing, WS protocol
 packages/server         @promptgraph/server — bin `promptgraph` (dist/cli/index.js), assets/pg-hook
 packages/web            @promptgraph/web — React 19 + Vite + Tailwind v4 (built to packages/web/dist)
-packages/desktop        @promptgraph/desktop — Tauri v2 shell for Linux (§12.6); typecheck/test only, Rust in src-tauri/
+packages/desktop        @promptgraph/desktop — Tauri v2 shell for Linux (§1.1); typecheck/test only, Rust in src-tauri/
 plugins/promptgraph     Claude Code plugin: .mcp.json (runs `promptgraph mcp`) + skills (DESIGN §19.4)
 .claude-plugin          marketplace.json listing plugins/promptgraph
 ```
 
-All dependencies for M1–M6 are installed. **Do not run `pnpm add`**; if something is truly missing, say so.
-M7–M9 add **no npm dependency** (hand-written router; the web reaches Tauri through `window.__TAURI__`; the Tauri
-CLI is installed with cargo). `packages/desktop` (`@promptgraph/desktop`) joins the workspace with `typecheck`/`test`
+All dependencies are installed. **Do not run `pnpm add`**; if something is truly missing, say so.
+M7–M9 add no new package to the workspace store: the router is hand-written, the web reaches Tauri through
+`window.__TAURI__` and the Tauri CLI is installed with cargo; the web package only declares `zod` (already in the
+store through shared) for its local tab-storage schema. `packages/desktop` (`@promptgraph/desktop`) joins the workspace with `typecheck`/`test`
 only — no `build` script, so `pnpm -r build` never runs cargo — and its only devDependency is `@promptgraph/shared`
-(`workspace:*`); Rust crates live in `packages/desktop/src-tauri/Cargo.toml` (§12.6).
+(`workspace:*`); Rust crates live in `packages/desktop/src-tauri/Cargo.toml` (§1.1).
 
 | Package | Runtime deps | Dev deps |
 |---|---|---|
 | shared | zod 4 | typescript 7, @types/node |
 | server | hono, @hono/node-server, ws, node-pty, better-sqlite3, zod, nanoid, open, @modelcontextprotocol/sdk (`promptgraph mcp`, §19) | tsx, @types/ws, @types/better-sqlite3, @types/node |
-| web | react 19, react-dom, @xyflow/react, @xterm/xterm, @xterm/addon-fit, @xterm/addon-web-links, zustand, diff2html | vite 8, @vitejs/plugin-react, tailwindcss 4, @tailwindcss/vite, jsdom, @testing-library/react |
+| web | react 19, react-dom, @xyflow/react, @xterm/xterm, @xterm/addon-fit, @xterm/addon-web-links, zustand, zod, diff2html, radix-ui + shadcn helpers (class-variance-authority, cn, lucide-react, tw-animate-css, @fontsource-variable/geist) | vite 8, @vitejs/plugin-react, @types/react, @types/react-dom, tailwindcss 4, @tailwindcss/vite, jsdom, @testing-library/react, @testing-library/user-event, shadcn |
+| desktop | — (Rust crates in `src-tauri/Cargo.toml`, §1.1) | @promptgraph/shared |
 | root | — | vitest 5, typescript 7 |
 
 **Resolving `@promptgraph/shared`.** Its `exports` has a `source` condition → `src/index.ts`, `types` →
@@ -40,6 +43,54 @@ only — no `build` script, so `pnpm -r build` never runs cargo — and its only
 
 Notes: zod is **v4** (`z.looseObject`, `.prefault()`, `z.input`/`z.infer`). TypeScript is 7 (native `tsc`).
 Imports inside shared/server use `.js` extensions (NodeNext). Web uses bundler resolution, no extensions.
+
+### 1.1 Desktop package (`packages/desktop`)
+
+The Tauri v2 shell of DESIGN §20. It holds no TypeScript beyond its contract test; the web side of the shell (the
+`DesktopBridge`, the relogin store, the title bar) is in §9.
+
+```
+package.json           @promptgraph/desktop: scripts typecheck, test, tauri:dev (cargo tauri dev), tauri:build (cargo tauri
+                       build --bundles deb,appimage); no build script; devDependencies: @promptgraph/shared (workspace) only
+splash/index.html      static "Starting promptgraph…" (inline CSS, no external resources); error block + Retry
+splash/splash.js       window.__pgSplashError(message) shows the error block; Retry → location.reload(). A file (served from
+                       'self') rather than an inline script, so the splash CSP needs no hashes
+src-tauri/Cargo.toml   tauri "~2.12" (pinned minor; on_new_window ≥ 2.8, add_capability/CapabilityBuilder via the default
+                       dynamic-acl feature), tauri-plugin-opener 2, serde (derive), serde_json, libc 0.2 (setsid, kill);
+                       build-dep tauri-build 2;
+                       bin promptgraph-desktop
+src-tauri/build.rs     tauri_build::try_build(Attributes::new().app_manifest(AppManifest::new().commands(&["relogin"])))
+src-tauri/tauri.conf.json  productName promptgraph, identifier dev.promptgraph.desktop, build.frontendDist ../splash (no devUrl:
+                       `tauri dev` serves it from its built-in dev server), app.withGlobalTauri true, app.windows [] (built in
+                       code), app.security.csp for the splash (default-src 'none'; script-src 'self'; …), bundle deb/appimage
+src-tauri/icons/       32x32, 128x128, 128x128@2x, icon.png (RGBA, from site/public/favicon.svg)
+src-tauri/capabilities/    absent: no static capability at all; the remote one is added at run time
+src-tauri/src/main.rs  window `main` built in code (title promptgraph, 1280×800, min 900×600, decorations(true) for the
+                       splash; customTitleBar from PG_DESKTOP_DECORATIONS, default native when WSL_DISTRO_NAME is set, kept in
+                       Shared.custom; initialization script window.__PG_DESKTOP__ = Object.freeze({customTitleBar}));
+                       on_page_load(Finished, splash URL = scheme tauri or the dev server's origin) → thread: run_cli via
+                       login_shell(): `$SHELL -ilc 'exec "$0" "$@"' <PROMPTGRAPH_BIN | promptgraph> open --print-url --json
+                       [--next p] [repo]` for sh/bash/zsh/dash/ash/ksh/mksh, `fish -ilc 'exec $argv' …` for fish, `/bin/sh -lc
+                       'exec "$0" "$@"' …` for any other shell (stdin null, stripped env, setsid in pre_exec, output appended to
+                       buffers as it arrives and used 500 ms after exit even without EOF, then SIGKILL to the whole session on
+                       every path, so jobs of start-up files close the pipes; 30 s timeout → timeout message; exit 127 (only:
+                       stderr text is never matched, it carries start-up files' messages) → not-found message; exit 2, no JSON object line or v != 1 → "promptgraph ≥
+                       <crate version> is required"; other non-zero → stderr tail; last stdout line that parses as a JSON
+                       object) → go(): the URL's origin must be http://127.0.0.1:<port> (#[cfg(debug_assertions)]
+                       dev_rewrite: PG_DESKTOP_ORIGIN replaces it), add_capability(CapabilityBuilder "remote-<port>", window
+                       main, local(false), remote origin and origin/*, DESKTOP_PERMISSIONS with opener:allow-open-url scoped
+                       to {url: "https://*"}) once per origin, then `origin.lock().replace(origin)`, showing_splash = false,
+                       set_decorations(!custom), navigate (fixed error text; on failure the previous origin and
+                       showing_splash are restored). Errors →
+                       set_decorations(true), eval window.__pgSplashError(<json>).
+                       on_navigation: splash only while showing_splash; the allowed origin; https → opener; else cancel.
+                       on_new_window: https → opener; always Deny. #[tauri::command] async relogin(next) → validates next
+                       (leading '/', no '//', no '\', no control chars) → run_cli(None, --next) → go(); Result<(), String>,
+                       never a URL. One CLI call at a time (Mutex<()>; the splash skips while one runs)
+test/contract.test.ts  lexes main.rs/build.rs (comments stripped, string literals collected) and reads the JSON/TOML/HTML/JS as
+                       text; checks DESIGN §20.5 against packages/shared/src/desktop.ts
+README.md              prerequisites, the pinned Tauri version, commands, environment and the manual checklist (D1, D2, D4, D5…)
+```
 
 ## 2. Shared package (`packages/shared/src`)
 
@@ -741,12 +792,9 @@ recent attach/resize drives PTY size.
   refused everywhere else. It is the only credential Claude PTYs receive.
 - The session cookie is sent to every server on 127.0.0.1 (cookies are not port-scoped): its value is random,
   revocable and no Bearer credential, and it cannot derive hook tokens or mint login codes.
-- (Replaced by DESIGN §13.5 in M8.) The web client treats a 401 (REST, or a WS connect that fails while
-  `/api/daemon` answers 401) as fatal: it stops reconnecting and the header says the session ended.
-- (Temporary web shim, replaced by the router in M8.) `api/rest.ts` `currentRepoId()`: the `/r/<repoId>` prefix of
-  the page URL, else the most recently opened registered repository (`GET /api/repos`); every repository call goes
-  through `API.repo(id)`; the app store boots from `GET /api/daemon` + `GET /api/repos/:repoId` (`RepoView`), and
-  `wsClient.subscribeRepo(id)` sends `repo:subscribe` (re-sent after a reconnect).
+- The web side of these rules is in §9: every repository call goes through `repoApi(repoId)` (`API.repo(id)`),
+  a 401 goes to `onUnauthorized` and a socket closed with 4401 means signed out (DESIGN §13.5); a repository view
+  sends `repo:subscribe` through `wsClient.subscribeRepo(id)` (ref-counted, re-sent after a reconnect).
 - `DaemonContext.env`: the daemon's base env (commands discovery, `PG_WEB_DIST`, every child). `resolvePtyLogPath(store,
   paths, ptyId)` in `daemon/context.ts` maps node PTYs, `setup-`/`shell-<nodeRunId>` and (by scanning run dirs)
   `reopen-*` PTYs to their logs after a restart.
@@ -1109,56 +1157,3 @@ exit 1; `FAKE_GH_EXISTS=1` → gh's "already exists" error with the URL; `FAKE_G
   `PG_DAEMON_SHELL_ENV=0` (no login-shell resolution) and `PG_PORT_DEFAULT=0` (no fixed port). `PG_VERSION_OVERRIDE`
   (read only by `config/version.ts`) starts a daemon that reports another version (version-handshake tests).
   Desktop contract tests (`packages/desktop/test`) read files only and never need Rust.
-
-## 12. Daemon, multi-repo UI and desktop (M7–M9, DESIGN §4, §11–§14, §19, §20)
-
-Implemented. Each workstream folded the part it implemented into the sections above.
-
-§12.1 (shared), §12.2 (server composition), §12.3 (HTTP and WS) and §12.4 (CLI and MCP) are implemented and
-folded into §2, §4, §8 and §11; §12.5 (web, including the desktop bridge) into §9. §12.6 stays here as the map of
-`packages/desktop`.
-
-### 12.6 Desktop (`packages/desktop`)
-
-```
-package.json           @promptgraph/desktop: scripts typecheck, test, tauri:dev (cargo tauri dev), tauri:build (cargo tauri
-                       build --bundles deb,appimage); no build script; devDependencies: @promptgraph/shared (workspace) only
-splash/index.html      static "Starting promptgraph…" (inline CSS, no external resources); error block + Retry
-splash/splash.js       window.__pgSplashError(message) shows the error block; Retry → location.reload(). A file (served from
-                       'self') rather than an inline script, so the splash CSP needs no hashes
-src-tauri/Cargo.toml   tauri "~2.12" (pinned minor; on_new_window ≥ 2.8, add_capability/CapabilityBuilder via the default
-                       dynamic-acl feature), tauri-plugin-opener 2, serde (derive), serde_json, libc 0.2 (setsid, kill);
-                       build-dep tauri-build 2;
-                       bin promptgraph-desktop
-src-tauri/build.rs     tauri_build::try_build(Attributes::new().app_manifest(AppManifest::new().commands(&["relogin"])))
-src-tauri/tauri.conf.json  productName promptgraph, identifier dev.promptgraph.desktop, build.frontendDist ../splash (no devUrl:
-                       `tauri dev` serves it from its built-in dev server), app.withGlobalTauri true, app.windows [] (built in
-                       code), app.security.csp for the splash (default-src 'none'; script-src 'self'; …), bundle deb/appimage
-src-tauri/icons/       32x32, 128x128, 128x128@2x, icon.png (RGBA, from site/public/favicon.svg)
-src-tauri/capabilities/    absent: no static capability at all; the remote one is added at run time
-src-tauri/src/main.rs  window `main` built in code (title promptgraph, 1280×800, min 900×600, decorations(true) for the
-                       splash; customTitleBar from PG_DESKTOP_DECORATIONS, default native when WSL_DISTRO_NAME is set, kept in
-                       Shared.custom; initialization script window.__PG_DESKTOP__ = Object.freeze({customTitleBar}));
-                       on_page_load(Finished, splash URL = scheme tauri or the dev server's origin) → thread: run_cli via
-                       login_shell(): `$SHELL -ilc 'exec "$0" "$@"' <PROMPTGRAPH_BIN | promptgraph> open --print-url --json
-                       [--next p] [repo]` for sh/bash/zsh/dash/ash/ksh/mksh, `fish -ilc 'exec $argv' …` for fish, `/bin/sh -lc
-                       'exec "$0" "$@"' …` for any other shell (stdin null, stripped env, setsid in pre_exec, output appended to
-                       buffers as it arrives and used 500 ms after exit even without EOF, then SIGKILL to the whole session on
-                       every path, so jobs of start-up files close the pipes; 30 s timeout → timeout message; exit 127 (only:
-                       stderr text is never matched, it carries start-up files' messages) → not-found message; exit 2, no JSON object line or v != 1 → "promptgraph ≥
-                       <crate version> is required"; other non-zero → stderr tail; last stdout line that parses as a JSON
-                       object) → go(): the URL's origin must be http://127.0.0.1:<port> (#[cfg(debug_assertions)]
-                       dev_rewrite: PG_DESKTOP_ORIGIN replaces it), add_capability(CapabilityBuilder "remote-<port>", window
-                       main, local(false), remote origin and origin/*, DESKTOP_PERMISSIONS with opener:allow-open-url scoped
-                       to {url: "https://*"}) once per origin, then `origin.lock().replace(origin)`, showing_splash = false,
-                       set_decorations(!custom), navigate (fixed error text; on failure the previous origin and
-                       showing_splash are restored). Errors →
-                       set_decorations(true), eval window.__pgSplashError(<json>).
-                       on_navigation: splash only while showing_splash; the allowed origin; https → opener; else cancel.
-                       on_new_window: https → opener; always Deny. #[tauri::command] async relogin(next) → validates next
-                       (leading '/', no '//', no '\', no control chars) → run_cli(None, --next) → go(); Result<(), String>,
-                       never a URL. One CLI call at a time (Mutex<()>; the splash skips while one runs)
-test/contract.test.ts  lexes main.rs/build.rs (comments stripped, string literals collected) and reads the JSON/TOML/HTML/JS as
-                       text; checks DESIGN §20.5 against packages/shared/src/desktop.ts
-README.md              prerequisites, the pinned Tauri version, commands, environment and the manual checklist (D1, D2, D4, D5…)
-```

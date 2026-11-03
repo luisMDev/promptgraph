@@ -28,8 +28,16 @@ With this plugin, Claude Code can design, run and supervise [promptgraph](../../
    ```
 
 3. In a git repository, ask something like: "design a promptgraph graph that implements TODO.md
-   with a test-fix loop and opens a draft PR". To check that the server is running, use
-   `/mcp` or ask Claude to call `server_status`.
+   with a test-fix loop and opens a draft PR". To check that promptgraph is running and that the
+   repository is registered, use `/mcp` or ask Claude to call `server_status`.
 
-If no promptgraph server is running for the repository, Claude can start one in the background. It
-keeps running after the session ends; stop it with `kill <pid>` (`server_status` shows the pid).
+The MCP server talks to the promptgraph **daemon**, the one background process that serves every
+repository (it finds it through `~/.promptgraph/daemon.json` and `~/.promptgraph/token`). The
+repository Claude Code runs in is registered with it on first use. If no daemon is running, Claude can
+start one in the background (`start_server`, no browser). It keeps running after the session ends,
+because runs can take longer than one conversation; stop it with `promptgraph stop`. `open_ui` opens the
+canvas in your browser, already signed in; the tool result only holds the plain
+`http://127.0.0.1:<port>/r/<repo-id>` address.
+
+If a tool reports that another promptgraph version is running (after an upgrade), run
+`promptgraph stop` in a terminal and try again.

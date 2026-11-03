@@ -1,7 +1,7 @@
 import { DESKTOP_COMMANDS } from "@promptgraph/shared";
 
 /**
- * The desktop bridge (DESIGN §20.2, CONTRACTS §12.5): what the page may ask of the Tauri shell, through the
+ * The desktop bridge (DESIGN §20.2, CONTRACTS §9): what the page may ask of the Tauri shell, through the
  * global API it injects (`withGlobalTauri`) and the runtime capability of the daemon's origin. The web
  * package does not depend on `@tauri-apps/api`: the few calls it makes are typed here. In a browser the
  * bridge is inert and nothing desktop-specific renders.

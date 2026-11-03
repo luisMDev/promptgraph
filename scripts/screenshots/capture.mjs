@@ -2,7 +2,7 @@
 // Regenerates the UI screenshots of docs/screenshots (dark theme) against a throwaway demo repository,
 // the fake claude CLI and the fake gh CLI. See README.md next to this file.
 //
-//   node scripts/screenshots/capture.mjs <out-dir> [--keep] [--scene add-feature,ship-feature,test-fix]
+//   node scripts/screenshots/capture.mjs <out-dir> [--keep] [--scene add-feature,ship-feature,test-fix,home]
 //   node scripts/screenshots/capture.mjs <out-dir> --real-claude   (m2-real-claude-replay.png, real Claude Code)
 //
 // Never touches the user's ~/.promptgraph, ~/.claude.json or real repositories: everything lives in a temp dir.
@@ -18,6 +18,7 @@ import {
   DEFAULT_CHROME,
   FAKE_CLAUDE,
   freePort,
+  git,
   loadPlaywright,
   removeCredentials,
   SERVER_CLI,
@@ -29,7 +30,7 @@ import {
 } from "./demo-env.mjs";
 
 const VIEWPORT = { width: 1600, height: 900 };
-const SCENES = ["add-feature", "ship-feature", "test-fix"];
+const SCENES = ["add-feature", "ship-feature", "test-fix", "home"];
 /** Opt-in scene (--real-claude): a real Claude Code session with haiku and minimal prompts. */
 const REAL_SCENE = "real-claude";
 
@@ -244,7 +245,7 @@ const GRAPHS = {
 
 // ---------------------------------------------------------------------------- scenes
 
-function makeScenes({ api, page, outDir, server }) {
+function makeScenes({ api, page, outDir, server, root, env }) {
   const shot = async (name) => {
     await sleep(400); // Let transitions (fitView, dialogs, toasts) settle.
     await page.screenshot({ path: path.join(outDir, name) });
@@ -265,7 +266,8 @@ function makeScenes({ api, page, outDir, server }) {
     await page.getByRole("tab", { name: "Nodes" }).click();
     await blur();
     await node(GRAPHS[id].nodes[0].id).waitFor();
-    await page.getByText("Saved").or(page.getByText("No problems found.")).first().waitFor();
+    // Validation has run: either no problems, or the problems button ("1 warning", "2 errors").
+    await page.getByText("No problems found.").or(page.getByRole("button", { name: /^\d+ (warning|error)/ })).first().waitFor();
   }
 
   async function startRun(graphId) {
@@ -452,6 +454,23 @@ function makeScenes({ api, page, outDir, server }) {
       await page.getByText("Exit code 0 equals 0.").first().waitFor();
       await shot("m6-condition-result.png");
     },
+
+    async home() {
+      // A second repository, so Home lists more than one (registered like `promptgraph <dir>` does).
+      const other = path.join(root, "docs-site");
+      fs.mkdirSync(other);
+      git(other, env, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(other, "README.md"), "# docs-site\n");
+      git(other, env, "add", "-A");
+      git(other, env, "commit", "-qm", "Initial commit");
+      await api("POST", "/api/repos", { path: other });
+      // Opening "/" activates the window's Home tab (or opens one); the earlier scenes' tabs stay in the strip.
+      await page.goto(`${server.base}/`);
+      await page.getByRole("heading", { name: "Repositories" }).waitFor();
+      await page.getByRole("listitem", { name: "demo-app" }).waitFor();
+      await page.getByRole("listitem", { name: "docs-site" }).waitFor();
+      await shot("home.png");
+    },
   };
 }
 
@@ -487,7 +506,7 @@ async function main() {
     const api = apiClient(server);
     // No desktop notifications from the demo runs.
     await api("PUT", "/api/settings", { ...(await api("GET", "/api/settings")), notifications: false });
-    for (const id of opts.scenes) await api("PUT", `/graphs/${id}`, GRAPHS[id]);
+    for (const id of opts.scenes) if (GRAPHS[id]) await api("PUT", `/graphs/${id}`, GRAPHS[id]);
 
     browser = await chromium.launch({ executablePath: chrome, headless: true });
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: "dark" });
@@ -497,7 +516,7 @@ async function main() {
     await page.goto(await server.loginUrl());
     await page.getByRole("button", { name: "Settings" }).waitFor();
 
-    const scenes = makeScenes({ api, page, outDir, server });
+    const scenes = makeScenes({ api, page, outDir, server, root, env });
     for (const id of opts.scenes) {
       log("scene", id);
       await scenes[id]();
