@@ -3,17 +3,20 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { setTheme, type Theme, useTheme } from "../../lib/theme";
 import { useAppStore } from "../../store/app-store";
 import { useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
 /**
- * App settings menu (desktop notifications toggle, repo/version info). A Radix dropdown menu whose open state
+ * App settings menu (theme, desktop notifications toggle, repo/version info). A Radix dropdown menu whose open state
  * lives in the UI store (`settingsOpen`): keyboard navigation, focus return to the trigger, Escape and
  * outside-click dismissal come from Radix. The info text is static content, so it is not focusable.
  */
@@ -22,6 +25,7 @@ export function SettingsMenu() {
   const settings = useAppStore((s) => s.settings);
   const repo = useAppStore((s) => s.repo);
   const notifyAvailable = repo?.notificationsAvailable ?? true;
+  const theme = useTheme();
 
   const toggleNotifications = (notifications: boolean) => {
     useAppStore
@@ -44,6 +48,16 @@ export function SettingsMenu() {
       </Tooltip>
       <DropdownMenuContent align="end" className="w-72 p-2">
         <DropdownMenuLabel className="text-[11px] font-semibold tracking-wider uppercase">Settings</DropdownMenuLabel>
+        <DropdownMenuLabel className="pt-0 pb-1 text-xs font-normal text-muted-foreground">Theme</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as Theme)}>
+          <DropdownMenuRadioItem value="dark" onSelect={(e) => e.preventDefault()}>
+            Dark
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="light" onSelect={(e) => e.preventDefault()}>
+            Light
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
         <DropdownMenuCheckboxItem
           checked={notifyAvailable && (settings?.notifications ?? true)}
           disabled={!settings || !notifyAvailable}

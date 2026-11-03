@@ -228,6 +228,11 @@ Retrying a Claude step that was interrupted resumes its session.
 When a step needs you (a question, a permission prompt, an approval, Claude idle in manual mode), the
 UI marks it and promptgraph sends a desktop notification. Turn notifications off in the settings menu.
 
+### Theme
+
+The UI is dark by default. Switch to the light theme in the settings menu; the choice is remembered in
+your browser.
+
 ### Tokens and cost
 
 Every Claude step shows its token usage (input, output, cache) and an estimated cost, read from Claude

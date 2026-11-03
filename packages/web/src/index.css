@@ -8,8 +8,9 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Theme: warm light, after the README banner and the logo (docs/assets): cream canvas, off-white cards with soft
- * shadows, near-black ink and primary, rounded corners. Node status colours (§8.2), shared by canvas nodes,
+ * Themes: dark (default) after the dark README banner, near-black canvas and surfaces with hairline borders; and
+ * warm light, cream canvas and off-white cards with soft shadows. The `dark` class on <html> selects the dark
+ * theme (index.html sets it before the first paint, lib/theme.ts switches it). Node status colours (§8.2), shared by canvas nodes,
  * badges and history.
  */
 @theme {
@@ -41,6 +42,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.dark body {
+  color-scheme: dark;
+}
+
 /* Running node: rotating gradient border (§8.2 "animated border"). */
 @property --pg-angle {
   syntax: "<angle>";
@@ -54,6 +59,12 @@ body {
     linear-gradient(#eff6ff, #eff6ff) padding-box,
     conic-gradient(from var(--pg-angle), #bfdbfe, #2563eb 20%, #bfdbfe 40%, #bfdbfe) border-box;
   animation: pg-spin 2.2s linear infinite;
+}
+
+.dark .pg-running {
+  background:
+    linear-gradient(var(--color-blue-50), var(--color-blue-50)) padding-box,
+    conic-gradient(from var(--pg-angle), #1e3a8a, #60a5fa 20%, #1e3a8a 40%, #1e3a8a) border-box;
 }
 
 @keyframes pg-spin {
@@ -89,6 +100,15 @@ body {
   --xy-edge-stroke: var(--color-stone-400);
   --xy-edge-stroke-selected: var(--foreground);
   --xy-connectionline-stroke: var(--foreground);
+  /* Read by <Background> and <MiniMap> in Canvas.tsx. */
+  --pg-canvas-dots: #d6cdbf;
+  --pg-minimap-mask: rgb(245 241 235 / 0.7);
+}
+
+.dark .react-flow {
+  --xy-edge-stroke: var(--color-stone-500);
+  --pg-canvas-dots: #2c2c31;
+  --pg-minimap-mask: rgb(10 10 11 / 0.7);
 }
 
 .react-flow__controls,
@@ -127,6 +147,20 @@ body {
 }
 
 /* diff2html in the approval dialog. */
+.dark .pg-diff {
+  /* diff2html's dark scheme is GitHub's blue-grey: align its surfaces with the neutral dark tokens. */
+  --d2h-dark-bg-color: var(--card);
+  --d2h-dark-file-header-bg-color: var(--secondary);
+  --d2h-dark-file-header-border-color: var(--border);
+  --d2h-dark-border-color: var(--border);
+  --d2h-dark-line-border-color: var(--border);
+  --d2h-dark-info-bg-color: var(--muted);
+  --d2h-dark-info-border-color: var(--border);
+  --d2h-dark-empty-placeholder-bg-color: var(--muted);
+  --d2h-dark-empty-placeholder-border-color: var(--border);
+  --d2h-dark-dim-color: var(--muted-foreground);
+}
+
 .pg-diff .d2h-wrapper {
   font-size: 12px;
 }
@@ -241,6 +275,141 @@ body {
   --sidebar-accent-foreground: oklch(0.18 0.006 60);
   --sidebar-border: oklch(0.9 0.011 75);
   --sidebar-ring: oklch(0.62 0.014 62);
+}
+
+.dark {
+  /* Near-black neutrals after the dark banner and the landing page. */
+  --background: oklch(0.155 0.002 286);
+  --foreground: oklch(0.96 0.002 286);
+  --card: oklch(0.195 0.003 286);
+  --card-foreground: oklch(0.96 0.002 286);
+  --popover: oklch(0.205 0.003 286);
+  --popover-foreground: oklch(0.96 0.002 286);
+  --primary: oklch(0.97 0.001 286);
+  --primary-foreground: oklch(0.17 0.003 286);
+  --secondary: oklch(0.245 0.004 286);
+  --secondary-foreground: oklch(0.93 0.002 286);
+  --muted: oklch(0.245 0.004 286);
+  --muted-foreground: oklch(0.68 0.01 286);
+  --accent: oklch(0.27 0.005 286);
+  --accent-foreground: oklch(0.96 0.002 286);
+  --destructive: oklch(0.65 0.2 22);
+  --border: oklch(0.29 0.005 286);
+  --input: oklch(0.33 0.006 286);
+  --ring: oklch(0.55 0.01 286);
+  --chart-1: oklch(0.35 0.005 286);
+  --chart-2: oklch(0.5 0.008 286);
+  --chart-3: oklch(0.62 0.01 286);
+  --chart-4: oklch(0.75 0.008 286);
+  --chart-5: oklch(0.88 0.004 286);
+  --sidebar: oklch(0.175 0.003 286);
+  --sidebar-foreground: oklch(0.96 0.002 286);
+  --sidebar-primary: oklch(0.97 0.001 286);
+  --sidebar-primary-foreground: oklch(0.17 0.003 286);
+  --sidebar-accent: oklch(0.25 0.004 286);
+  --sidebar-accent-foreground: oklch(0.96 0.002 286);
+  --sidebar-border: oklch(0.29 0.005 286);
+  --sidebar-ring: oklch(0.55 0.01 286);
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 18px -6px rgb(0 0 0 / 0.5);
+  --shadow-lifted: 0 2px 4px rgb(0 0 0 / 0.4), 0 14px 32px -10px rgb(0 0 0 / 0.7);
+
+  /*
+   * Palette remap: the components use light-theme shades (status card tints *-50/100, text *-600/700/800, stone
+   * neutrals). In the dark theme the tints become dark washes of the hue and the text shades become light ones,
+   * so the same class names stay readable on both themes.
+   */
+  --color-red-50: color-mix(in oklab, oklch(63.7% 0.237 25.331) 13%, var(--card));
+  --color-red-100: color-mix(in oklab, oklch(63.7% 0.237 25.331) 20%, var(--card));
+  --color-red-600: oklch(70.4% 0.191 22.216);
+  --color-red-700: oklch(80.8% 0.114 19.571);
+  --color-red-800: oklch(88.5% 0.062 18.334);
+  --color-orange-50: color-mix(in oklab, oklch(70.5% 0.213 47.604) 13%, var(--card));
+  --color-orange-100: color-mix(in oklab, oklch(70.5% 0.213 47.604) 20%, var(--card));
+  --color-orange-600: oklch(75% 0.183 55.934);
+  --color-orange-700: oklch(83.7% 0.128 66.29);
+  --color-orange-800: oklch(90.1% 0.076 70.697);
+  --color-amber-50: color-mix(in oklab, oklch(76.9% 0.188 70.08) 13%, var(--card));
+  --color-amber-100: color-mix(in oklab, oklch(76.9% 0.188 70.08) 20%, var(--card));
+  --color-amber-600: oklch(82.8% 0.189 84.429);
+  --color-amber-700: oklch(87.9% 0.169 91.605);
+  --color-amber-800: oklch(92.4% 0.12 95.746);
+  --color-yellow-50: color-mix(in oklab, oklch(79.5% 0.184 86.047) 13%, var(--card));
+  --color-yellow-100: color-mix(in oklab, oklch(79.5% 0.184 86.047) 20%, var(--card));
+  --color-yellow-600: oklch(85.2% 0.199 91.936);
+  --color-yellow-700: oklch(90.5% 0.182 98.111);
+  --color-yellow-800: oklch(94.5% 0.129 101.54);
+  --color-lime-50: color-mix(in oklab, oklch(76.8% 0.233 130.85) 13%, var(--card));
+  --color-lime-100: color-mix(in oklab, oklch(76.8% 0.233 130.85) 20%, var(--card));
+  --color-lime-600: oklch(84.1% 0.238 128.85);
+  --color-lime-700: oklch(89.7% 0.196 126.665);
+  --color-lime-800: oklch(93.8% 0.127 124.321);
+  --color-green-50: color-mix(in oklab, oklch(72.3% 0.219 149.579) 13%, var(--card));
+  --color-green-100: color-mix(in oklab, oklch(72.3% 0.219 149.579) 20%, var(--card));
+  --color-green-600: oklch(79.2% 0.209 151.711);
+  --color-green-700: oklch(87.1% 0.15 154.449);
+  --color-green-800: oklch(92.5% 0.084 155.995);
+  --color-emerald-50: color-mix(in oklab, oklch(69.6% 0.17 162.48) 13%, var(--card));
+  --color-emerald-100: color-mix(in oklab, oklch(69.6% 0.17 162.48) 20%, var(--card));
+  --color-emerald-600: oklch(76.5% 0.177 163.223);
+  --color-emerald-700: oklch(84.5% 0.143 164.978);
+  --color-emerald-800: oklch(90.5% 0.093 164.15);
+  --color-teal-50: color-mix(in oklab, oklch(70.4% 0.14 182.503) 13%, var(--card));
+  --color-teal-100: color-mix(in oklab, oklch(70.4% 0.14 182.503) 20%, var(--card));
+  --color-teal-600: oklch(77.7% 0.152 181.912);
+  --color-teal-700: oklch(85.5% 0.138 181.071);
+  --color-teal-800: oklch(91% 0.096 180.426);
+  --color-cyan-50: color-mix(in oklab, oklch(71.5% 0.143 215.221) 13%, var(--card));
+  --color-cyan-100: color-mix(in oklab, oklch(71.5% 0.143 215.221) 20%, var(--card));
+  --color-cyan-600: oklch(78.9% 0.154 211.53);
+  --color-cyan-700: oklch(86.5% 0.127 207.078);
+  --color-cyan-800: oklch(91.7% 0.08 205.041);
+  --color-sky-50: color-mix(in oklab, oklch(68.5% 0.169 237.323) 13%, var(--card));
+  --color-sky-100: color-mix(in oklab, oklch(68.5% 0.169 237.323) 20%, var(--card));
+  --color-sky-600: oklch(74.6% 0.16 232.661);
+  --color-sky-700: oklch(82.8% 0.111 230.318);
+  --color-sky-800: oklch(90.1% 0.058 230.902);
+  --color-blue-50: color-mix(in oklab, oklch(62.3% 0.214 259.815) 13%, var(--card));
+  --color-blue-100: color-mix(in oklab, oklch(62.3% 0.214 259.815) 20%, var(--card));
+  --color-blue-600: oklch(70.7% 0.165 254.624);
+  --color-blue-700: oklch(80.9% 0.105 251.813);
+  --color-blue-800: oklch(88.2% 0.059 254.128);
+  --color-indigo-50: color-mix(in oklab, oklch(58.5% 0.233 277.117) 13%, var(--card));
+  --color-indigo-100: color-mix(in oklab, oklch(58.5% 0.233 277.117) 20%, var(--card));
+  --color-indigo-600: oklch(67.3% 0.182 276.935);
+  --color-indigo-700: oklch(78.5% 0.115 274.713);
+  --color-indigo-800: oklch(87% 0.065 274.039);
+  --color-violet-50: color-mix(in oklab, oklch(60.6% 0.25 292.717) 13%, var(--card));
+  --color-violet-100: color-mix(in oklab, oklch(60.6% 0.25 292.717) 20%, var(--card));
+  --color-violet-600: oklch(70.2% 0.183 293.541);
+  --color-violet-700: oklch(81.1% 0.111 293.571);
+  --color-violet-800: oklch(89.4% 0.057 293.283);
+  --color-purple-50: color-mix(in oklab, oklch(62.7% 0.265 303.9) 13%, var(--card));
+  --color-purple-100: color-mix(in oklab, oklch(62.7% 0.265 303.9) 20%, var(--card));
+  --color-purple-600: oklch(71.4% 0.203 305.504);
+  --color-purple-700: oklch(82.7% 0.119 306.383);
+  --color-purple-800: oklch(90.2% 0.063 306.703);
+  --color-fuchsia-50: color-mix(in oklab, oklch(66.7% 0.295 322.15) 13%, var(--card));
+  --color-fuchsia-100: color-mix(in oklab, oklch(66.7% 0.295 322.15) 20%, var(--card));
+  --color-fuchsia-600: oklch(74% 0.238 322.16);
+  --color-fuchsia-700: oklch(83.3% 0.145 321.434);
+  --color-fuchsia-800: oklch(90.3% 0.076 319.62);
+  --color-pink-50: color-mix(in oklab, oklch(65.6% 0.241 354.308) 13%, var(--card));
+  --color-pink-100: color-mix(in oklab, oklch(65.6% 0.241 354.308) 20%, var(--card));
+  --color-pink-600: oklch(71.8% 0.202 349.761);
+  --color-pink-700: oklch(82.3% 0.12 346.018);
+  --color-pink-800: oklch(89.9% 0.061 343.231);
+  --color-rose-50: color-mix(in oklab, oklch(64.5% 0.246 16.439) 13%, var(--card));
+  --color-rose-100: color-mix(in oklab, oklch(64.5% 0.246 16.439) 20%, var(--card));
+  --color-rose-600: oklch(71.2% 0.194 13.428);
+  --color-rose-700: oklch(81% 0.117 11.638);
+  --color-rose-800: oklch(89.2% 0.058 10.001);
+  --color-stone-100: var(--secondary);
+  --color-stone-200: oklch(26.8% 0.007 34.298);
+  --color-stone-300: oklch(37.4% 0.01 67.558);
+  --color-stone-500: oklch(70.9% 0.01 56.259);
+  --color-stone-700: oklch(86.9% 0.005 56.366);
+  --color-stone-800: oklch(92.3% 0.003 48.717);
+  --color-stone-900: oklch(97% 0.001 106.424);
 }
 
 @layer base {
