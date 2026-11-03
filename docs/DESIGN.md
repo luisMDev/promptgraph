@@ -533,6 +533,8 @@ A page that answers "what happened while I was away". It replaces the editor vie
 - **Steps**: one row per (node, iteration), latest attempt: result, attempts, duration, waited, what it changed (opens its diff), cost, and its output (commit, PR, approval, branch taken, error).
 - **Pull requests** and **lanes**: per lane its branch, state, changes and commits since the base branch (checkpoints marked), and its diff.
 
+![The run report of a fan-out run that opened a pull request](screenshots/run-report.png)
+
 ---
 
 ## 14. Security
