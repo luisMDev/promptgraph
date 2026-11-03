@@ -1,9 +1,8 @@
 import { nodeDisplayLabel, type ApprovalInfoResponse, type DiffResponse } from "@promptgraph/shared";
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiRequestError, errorMessage } from "../../api/rest";
-import { useAppStore } from "../../store/app-store";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import { ApiRequestError, errorMessage } from "../../api/rest";
+import { getRepoCache } from "../../store/repo-cache";
+import { useRepo, useRun, useView } from "../../store/view/context";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,7 +21,8 @@ import { DiffView } from "./DiffView";
  * (with diff2html) by App.
  */
 export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
-  const close = () => useUiStore.getState().openApproval(null);
+  const view = useView();
+  const close = () => view.ui.getState().openApproval(null);
   const [info, setInfo] = useState<ApprovalInfoResponse | null>(null);
   const [diff, setDiff] = useState<DiffResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
   /** Loads the gate; `keepEdits` (a reload after a refused decision) keeps the edited title/body. */
   const load = useCallback(
     (isCancelled: () => boolean, keepEdits: boolean) =>
-      api
+      view.api
         .approvalInfo(nodeRunId)
         .then((res) => {
           if (isCancelled()) return;
@@ -49,13 +49,13 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
           if (!res.showDiff) return;
           setDiff(null);
           setDiffError(null);
-          api.diff(nodeRunId).then(
+          view.api.diff(nodeRunId).then(
             (d) => !isCancelled() && setDiff(d),
             (err: unknown) => !isCancelled() && setDiffError(errorMessage(err)),
           );
         })
         .catch((err: unknown) => !isCancelled() && setError(errorMessage(err))),
-    [nodeRunId],
+    [nodeRunId, view.api],
   );
 
   useEffect(() => {
@@ -70,13 +70,13 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
     setBusy(true);
     setError(null);
     try {
-      const { nodeRun } = await api.submitApproval(nodeRunId, {
+      const { nodeRun } = await view.api.submitApproval(nodeRunId, {
         approved,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         ...(info?.pr ? { title, body, ...(diff ? { headSha: diff.head } : {}) } : {}),
       });
-      useRunStore.getState().applyNodeUpdate(nodeRun);
-      void useAppStore.getState().refreshPending();
+      view.run.getState().applyNodeUpdate(nodeRun);
+      void getRepoCache(view.repoId).getState().refreshPending();
       close();
     } catch (err) {
       setError(errorMessage(err));
@@ -195,8 +195,8 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
 function useStillWaiting(info: ApprovalInfoResponse | null): boolean {
   const id = info?.nodeRun.id;
   const runId = info?.nodeRun.runId;
-  const fromDetail = useRunStore((s) => (s.detail && s.detail.run.id === runId ? s.detail.nodeRuns.find((n) => n.id === id)?.status : undefined));
-  const inPending = useAppStore((s) => s.pending.some((n) => n.id === id));
+  const fromDetail = useRun((s) => (s.detail && s.detail.run.id === runId ? s.detail.nodeRuns.find((n) => n.id === id)?.status : undefined));
+  const inPending = useRepo((s) => s.pending.some((n) => n.id === id));
   if (!info) return true;
   return fromDetail ? fromDetail === "waiting_approval" : inPending;
 }
@@ -205,8 +205,8 @@ function useStillWaiting(info: ApprovalInfoResponse | null): boolean {
 function useGateContext(info: ApprovalInfoResponse | null): string | null {
   const runId = info?.nodeRun.runId;
   const nodeId = info?.nodeRun.nodeId;
-  const fromDetail = useRunStore((s) => (s.detail && s.detail.run.id === runId ? s.detail.run : null));
-  const fromPending = useAppStore((s) => (runId ? s.pendingRuns[runId] : undefined));
+  const fromDetail = useRun((s) => (s.detail && s.detail.run.id === runId ? s.detail.run : null));
+  const fromPending = useRepo((s) => (runId ? s.pendingRuns[runId] : undefined));
   if (!info || !nodeId) return null;
   if (fromDetail) {
     const label = nodeDisplayLabel(fromDetail.graphSnapshot.nodes.find((n) => n.id === nodeId) ?? { id: nodeId });

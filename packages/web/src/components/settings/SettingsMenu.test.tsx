@@ -1,29 +1,34 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../../lib/theme";
-import { useAppStore } from "../../store/app-store";
-import { useUiStore } from "../../store/ui-store";
+import type { DaemonInfoResponse } from "@promptgraph/shared";
+import { useDaemonStore } from "../../store/daemon-store";
+import { createTestView, type TestView } from "../../store/view/test-view";
 import { SettingsMenu } from "./SettingsMenu";
 
+const daemon: DaemonInfoResponse = { version: "0.0.0", pid: 1, port: 4777, startedAt: 1, phase: 2, warnings: [], supportedNodeTypes: [], notificationsAvailable: true };
+
 describe("settings menu", () => {
-  const originalUpdate = useAppStore.getState().updateSettings;
+  const originalUpdate = useDaemonStore.getState().updateSettings;
   let updateSettings: ReturnType<typeof vi.fn<(patch: { notifications?: boolean }) => Promise<void>>>;
+  let view: TestView;
+  const render = (ui: Parameters<TestView["render"]>[0]) => view.render(ui);
+  const useUiStore = { getState: () => view.ui.getState() };
 
   beforeEach(() => {
     updateSettings = vi.fn((patch: { notifications?: boolean }) => {
-      const prev = useAppStore.getState().settings;
-      if (prev) useAppStore.setState({ settings: { ...prev, ...patch } });
+      const prev = useDaemonStore.getState().settings;
+      if (prev) useDaemonStore.setState({ settings: { ...prev, ...patch } });
       return Promise.resolve();
     });
-    useAppStore.setState({ settings: { notifications: true }, repo: null, updateSettings });
-    useUiStore.getState().setSettingsOpen(false);
+    useDaemonStore.setState({ settings: { notifications: true }, info: daemon, updateSettings });
+    view = createTestView({ repoInfo: null });
   });
   afterEach(() => {
     cleanup();
-    useAppStore.setState({ settings: null, updateSettings: originalUpdate });
-    useUiStore.getState().setSettingsOpen(false);
+    useDaemonStore.setState({ settings: null, info: null, updateSettings: originalUpdate });
   });
 
   it("opens from the keyboard and moves focus into the menu", async () => {
@@ -99,20 +104,8 @@ describe("settings menu", () => {
 
   it("disables the toggle when no notifier is available", async () => {
     const user = userEvent.setup();
-    useAppStore.setState({
-      repo: {
-        id: "repo-0123abcd",
-        path: "/tmp/repo",
-        name: "repo",
-        currentBranch: "main",
-        branches: ["main"],
-        version: "0.0.0",
-        phase: 2,
-        warnings: [],
-        supportedNodeTypes: [],
-        notificationsAvailable: false,
-      },
-    });
+    useDaemonStore.setState({ info: { ...daemon, notificationsAvailable: false } });
+    view.cache.setState({ info: { id: "repo-0123abcd", path: "/tmp/repo", name: "repo", currentBranch: "main", branches: ["main"] } });
     render(<SettingsMenu />);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     const item = await screen.findByRole("menuitemcheckbox", { name: "Desktop notifications (unavailable)" });

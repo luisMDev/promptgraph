@@ -1,17 +1,21 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nodeRunOf, runDetailOf, testFixLoopGraph } from "../../test-fixtures";
-import { setRunStoreDeps, useRunStore } from "../../store/run-store";
-import { useEditorStore } from "../../store/editor-store";
-import { useUiStore } from "../../store/ui-store";
+import { createTestView, type TestView } from "../../store/view/test-view";
 import { Inspector } from "./Inspector";
 
 describe("inspector (phase 2)", () => {
-  beforeEach(async () => {
-    setRunStoreDeps({ subscribe: vi.fn(), unsubscribe: vi.fn(), fetchRun: vi.fn() });
-    await useRunStore.getState().selectRun(null);
+  let view: TestView;
+  let useRunStore: TestView["run"];
+  let useEditorStore: TestView["editor"];
+  let useUiStore: TestView["ui"];
+  const render = (ui: Parameters<TestView["render"]>[0]) => view.render(ui);
+
+  beforeEach(() => {
+    view = createTestView({ runDeps: { subscribe: vi.fn(() => () => undefined), fetchRun: vi.fn() } });
+    ({ run: useRunStore, editor: useEditorStore, ui: useUiStore } = view);
   });
   afterEach(cleanup);
 

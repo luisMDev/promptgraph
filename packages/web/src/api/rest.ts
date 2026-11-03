@@ -19,15 +19,20 @@ import {
   type NodeRunResponse,
   type PendingResponse,
   type ReopenResponse,
-  type RepoApiPaths,
   type RepoInfoResponse,
+  type RepoSummary,
   type RunReportResponse,
   type SaveGraphResponse,
   type StartRunResponse,
   type UpdateAppSettingsRequest,
   type ValidationResult,
 } from "@promptgraph/shared";
-import { devToken } from "./token";
+
+/**
+ * Typed REST client (DESIGN §12.1). The browser authenticates with its session cookie (same origin; the
+ * vite dev server proxies to the daemon and adds nothing), so requests carry no credential of their own.
+ * Daemon routes are in `daemonApi`, repository routes in `repoApi(repoId)`.
+ */
 
 /** Non-2xx response; `body` is the server's ApiError. */
 export class ApiRequestError extends Error {
@@ -42,15 +47,15 @@ export class ApiRequestError extends Error {
 const unauthorizedListeners = new Set<() => void>();
 
 /**
- * Called when the server answers 401: the session token is no longer valid (each promptgraph start
- * makes a new one, so this tab belongs to a server that was restarted). Returns unsubscribe.
+ * Called when the daemon answers 401: the session is gone (token rotated, session revoked or expired, or no
+ * cookie), DESIGN §13.5. Returns unsubscribe.
  */
 export function onUnauthorized(listener: () => void): () => void {
   unauthorizedListeners.add(listener);
   return () => unauthorizedListeners.delete(listener);
 }
 
-/** Probes the session: false on 401, true when authorised, null when the server is unreachable. */
+/** Probes the session: false on 401, true when authorised, null when the daemon is unreachable. */
 export async function sessionValid(): Promise<boolean | null> {
   try {
     await request("GET", API.daemon);
@@ -60,17 +65,20 @@ export async function sessionValid(): Promise<boolean | null> {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** Above this size a keepalive request is refused by browsers (64 KiB budget shared by the page). */
+const KEEPALIVE_MAX_BYTES = 60_000;
+
+async function request<T>(method: string, path: string, body?: unknown, opts: { keepalive?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
-  const token = devToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  // The server requires JSON on cookie-authenticated writes (cross-origin requests then need a preflight).
+  // The daemon requires JSON on cookie-authenticated writes (cross-origin requests then need a preflight).
   if (method !== "GET") headers["Content-Type"] = "application/json";
+  const payload = body === undefined ? undefined : JSON.stringify(body);
   const res = await fetch(path, {
     method,
     headers,
     credentials: "same-origin",
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: payload,
+    ...(opts.keepalive && payload && payload.length < KEEPALIVE_MAX_BYTES ? { keepalive: true } : {}),
   });
   const text = await res.text();
   const json: unknown = text ? safeJson(text) : undefined;
@@ -100,54 +108,26 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** `/r/<repoId>` prefix of the page URL (DESIGN §13.2), or null. */
-export function repoIdFromPath(pathname: string): string | null {
-  const m = /^\/r\/([^/]+)/.exec(pathname);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1]!);
-  } catch {
-    return null;
-  }
+/** True for an ApiRequestError with this status (and code, when given). */
+export function isApiStatus(err: unknown, status: number, code?: string): err is ApiRequestError {
+  return err instanceof ApiRequestError && err.status === status && (code === undefined || err.body.code === code);
 }
 
-let currentRepo: Promise<string> | null = null;
-
-/**
- * The repository this page shows (temporary, until the router lands): the `/r/<repoId>` prefix of the
- * URL, else the most recently opened registered repository. Resolved once per page; a failure is retried.
- */
-export function currentRepoId(): Promise<string> {
-  currentRepo ??= (async () => {
-    const fromPath = typeof window === "undefined" ? null : repoIdFromPath(window.location.pathname);
-    if (fromPath) return fromPath;
-    const { repos } = await request<ListReposResponse>("GET", API.repos);
-    const recent = [...repos].sort((a, b) => (b.lastOpenedAt ?? b.addedAt) - (a.lastOpenedAt ?? a.addedAt))[0];
-    if (!recent) throw new Error("No repository is registered: run `promptgraph` in a git repository.");
-    return recent.id;
-  })().catch((err: unknown) => {
-    currentRepo = null;
-    throw err;
-  });
-  return currentRepo;
-}
-
-/** Tests: forget the resolved repository. */
-export function resetCurrentRepo(): void {
-  currentRepo = null;
-}
-
-async function repoPaths(): Promise<RepoApiPaths> {
-  return API.repo(await currentRepoId());
-}
-
-/** Typed REST client over the API paths in @promptgraph/shared (credentials: same-origin + dev Bearer token). */
-export const api = {
+/** Daemon-wide routes. */
+export const daemonApi = {
   daemon(): Promise<DaemonInfoResponse> {
     return request("GET", API.daemon);
   },
-  async repoInfo(): Promise<RepoInfoResponse> {
-    return request("GET", (await repoPaths()).info);
+  repos(): Promise<ListReposResponse> {
+    return request("GET", API.repos);
+  },
+  /** 422 path_not_absolute / not_a_git_repo. */
+  addRepo(path: string): Promise<RepoSummary> {
+    return request("POST", API.repos, { path });
+  },
+  /** 409 repo_active while it has a running run, unless `force`. */
+  async removeRepo(repoId: string, force = false): Promise<void> {
+    await request("DELETE", API.removeRepo(repoId, force));
   },
   getSettings(): Promise<AppSettings> {
     return request("GET", API.settings);
@@ -155,84 +135,97 @@ export const api = {
   updateSettings(patch: UpdateAppSettingsRequest): Promise<AppSettings> {
     return request("PUT", API.settings, patch);
   },
-  async listGraphs(): Promise<ListGraphsResponse> {
-    return request("GET", (await repoPaths()).graphs);
-  },
-  async getGraph(id: string): Promise<GetGraphResponse> {
-    return request("GET", (await repoPaths()).graph(id));
-  },
-  async saveGraph(graph: Graph): Promise<SaveGraphResponse> {
-    return request("PUT", (await repoPaths()).graph(graph.id), graph);
-  },
-  async deleteGraph(id: string): Promise<void> {
-    await request("DELETE", (await repoPaths()).graph(id));
-  },
-  async validateGraph(id: string, graph?: Graph): Promise<ValidationResult> {
-    return request("POST", (await repoPaths()).validate(id), graph ? { graph } : {});
-  },
-  async startRun(graphId: string): Promise<StartRunResponse> {
-    return request("POST", (await repoPaths()).startRun(graphId), {});
-  },
-  async listRuns(graphId?: string, limit?: number): Promise<ListRunsResponse> {
-    const q = new URLSearchParams();
-    if (graphId) q.set("graph", graphId);
-    if (limit) q.set("limit", String(limit));
-    const qs = q.toString();
-    const { runs } = await repoPaths();
-    return request("GET", qs ? `${runs}?${qs}` : runs);
-  },
-  async getRun(runId: string): Promise<GetRunResponse> {
-    return request("GET", (await repoPaths()).run(runId));
-  },
-  async cancelRun(runId: string): Promise<void> {
-    await request("POST", (await repoPaths()).cancelRun(runId), {});
-  },
-  async cleanupRun(runId: string): Promise<void> {
-    await request("POST", (await repoPaths()).cleanupRun(runId), {});
-  },
-  async resumeRun(runId: string): Promise<void> {
-    await request("POST", (await repoPaths()).resumeRun(runId), {});
-  },
-  async pending(): Promise<PendingResponse> {
-    return request("GET", (await repoPaths()).pending);
-  },
-  async nodeAction(nodeRunId: string, action: "done" | "retry" | "skip"): Promise<NodeRunResponse> {
-    return request("POST", (await repoPaths()).nodeRunAction(nodeRunId, action), {});
-  },
-  async failNode(nodeRunId: string, reason?: string): Promise<NodeRunResponse> {
-    return request("POST", (await repoPaths()).nodeRunAction(nodeRunId, "fail"), reason ? { reason } : {});
-  },
-  async holdNode(nodeRunId: string, hold: boolean): Promise<NodeRunResponse> {
-    return request("POST", (await repoPaths()).nodeRunAction(nodeRunId, "hold"), { hold });
-  },
-  async approvalInfo(nodeRunId: string): Promise<ApprovalInfoResponse> {
-    return request("GET", (await repoPaths()).approval(nodeRunId));
-  },
-  async submitApproval(nodeRunId: string, req: ApprovalRequest): Promise<NodeRunResponse> {
-    return request("POST", (await repoPaths()).approval(nodeRunId), req);
-  },
-  async diff(nodeRunId: string, scope: DiffScope = "lane"): Promise<DiffResponse> {
-    return request("GET", (await repoPaths()).diff(nodeRunId, scope));
-  },
-  async laneDiff(runId: string, laneId: string): Promise<DiffResponse> {
-    return request("GET", (await repoPaths()).laneDiff(runId, laneId));
-  },
-  async runReport(runId: string): Promise<RunReportResponse> {
-    return request("GET", (await repoPaths()).runReport(runId));
-  },
-  async reopen(nodeRunId: string): Promise<ReopenResponse> {
-    return request("POST", (await repoPaths()).reopen(nodeRunId), {});
-  },
-  async closePty(ptyId: string): Promise<void> {
-    await request("DELETE", (await repoPaths()).pty(ptyId));
-  },
-  async commands(): Promise<ListCommandsResponse> {
-    return request("GET", (await repoPaths()).commands);
-  },
-  async claudeSetup(): Promise<ClaudeSetupResponse> {
-    return request("GET", (await repoPaths()).claudeSetup);
-  },
-  async checkClaudeSetup(): Promise<ClaudeCheckResponse> {
-    return request("POST", (await repoPaths()).claudeCheck, {});
-  },
 };
+export type DaemonApi = typeof daemonApi;
+
+/** Routes of one repository (`/api/repos/:repoId/…`). */
+export function repoApi(repoId: string) {
+  const p = API.repo(repoId);
+  return {
+    repoId,
+    info(): Promise<RepoInfoResponse> {
+      return request("GET", p.info);
+    },
+    listGraphs(): Promise<ListGraphsResponse> {
+      return request("GET", p.graphs);
+    },
+    getGraph(id: string): Promise<GetGraphResponse> {
+      return request("GET", p.graph(id));
+    },
+    /** keepalive (when small enough), so a save flushed on `pagehide` survives the page. */
+    saveGraph(graph: Graph): Promise<SaveGraphResponse> {
+      return request("PUT", p.graph(graph.id), graph, { keepalive: true });
+    },
+    async deleteGraph(id: string): Promise<void> {
+      await request("DELETE", p.graph(id));
+    },
+    validateGraph(id: string, graph?: Graph): Promise<ValidationResult> {
+      return request("POST", p.validate(id), graph ? { graph } : {});
+    },
+    startRun(graphId: string): Promise<StartRunResponse> {
+      return request("POST", p.startRun(graphId), {});
+    },
+    listRuns(graphId?: string, limit?: number): Promise<ListRunsResponse> {
+      const q = new URLSearchParams();
+      if (graphId) q.set("graph", graphId);
+      if (limit) q.set("limit", String(limit));
+      const qs = q.toString();
+      return request("GET", qs ? `${p.runs}?${qs}` : p.runs);
+    },
+    getRun(runId: string): Promise<GetRunResponse> {
+      return request("GET", p.run(runId));
+    },
+    async cancelRun(runId: string): Promise<void> {
+      await request("POST", p.cancelRun(runId), {});
+    },
+    async cleanupRun(runId: string): Promise<void> {
+      await request("POST", p.cleanupRun(runId), {});
+    },
+    async resumeRun(runId: string): Promise<void> {
+      await request("POST", p.resumeRun(runId), {});
+    },
+    pending(): Promise<PendingResponse> {
+      return request("GET", p.pending);
+    },
+    nodeAction(nodeRunId: string, action: "done" | "retry" | "skip"): Promise<NodeRunResponse> {
+      return request("POST", p.nodeRunAction(nodeRunId, action), {});
+    },
+    failNode(nodeRunId: string, reason?: string): Promise<NodeRunResponse> {
+      return request("POST", p.nodeRunAction(nodeRunId, "fail"), reason ? { reason } : {});
+    },
+    holdNode(nodeRunId: string, hold: boolean): Promise<NodeRunResponse> {
+      return request("POST", p.nodeRunAction(nodeRunId, "hold"), { hold });
+    },
+    approvalInfo(nodeRunId: string): Promise<ApprovalInfoResponse> {
+      return request("GET", p.approval(nodeRunId));
+    },
+    submitApproval(nodeRunId: string, req: ApprovalRequest): Promise<NodeRunResponse> {
+      return request("POST", p.approval(nodeRunId), req);
+    },
+    diff(nodeRunId: string, scope: DiffScope = "lane"): Promise<DiffResponse> {
+      return request("GET", p.diff(nodeRunId, scope));
+    },
+    laneDiff(runId: string, laneId: string): Promise<DiffResponse> {
+      return request("GET", p.laneDiff(runId, laneId));
+    },
+    runReport(runId: string): Promise<RunReportResponse> {
+      return request("GET", p.runReport(runId));
+    },
+    reopen(nodeRunId: string): Promise<ReopenResponse> {
+      return request("POST", p.reopen(nodeRunId), {});
+    },
+    async closePty(ptyId: string): Promise<void> {
+      await request("DELETE", p.pty(ptyId));
+    },
+    commands(): Promise<ListCommandsResponse> {
+      return request("GET", p.commands);
+    },
+    claudeSetup(): Promise<ClaudeSetupResponse> {
+      return request("GET", p.claudeSetup);
+    },
+    claudeCheck(): Promise<ClaudeCheckResponse> {
+      return request("POST", p.claudeCheck, {});
+    },
+  };
+}
+export type RepoApi = ReturnType<typeof repoApi>;

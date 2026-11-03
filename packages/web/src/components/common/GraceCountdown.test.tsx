@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "../../api/rest";
 import { nodeRunOf } from "../../test-fixtures";
+import { createTestView } from "../../store/view/test-view";
 import { GraceCountdown, graceSecondsLeft } from "./GraceCountdown";
 
 describe("GraceCountdown (§7.4)", () => {
@@ -22,15 +22,15 @@ describe("GraceCountdown (§7.4)", () => {
 
   it("shows the countdown and holds the node", () => {
     const nodeRun = nodeRunOf({ id: "n", nodeId: "a", status: "running", graceUntil: Date.now() + 4_500 });
-    const hold = vi.spyOn(api, "holdNode").mockResolvedValue({ nodeRun: { ...nodeRun, hold: true } });
-    render(<GraceCountdown nodeRun={nodeRun} />);
+    const hold = vi.fn(async () => ({ nodeRun: { ...nodeRun, hold: true } }));
+    createTestView({ api: { holdNode: hold } }).render(<GraceCountdown nodeRun={nodeRun} />);
     expect(screen.getByRole("status").textContent).toMatch(/Auto-continuing in 5s/);
     fireEvent.click(screen.getByRole("button", { name: "Hold" }));
     expect(hold).toHaveBeenCalledWith("n", true);
   });
 
   it("renders nothing without a countdown", () => {
-    const { container } = render(<GraceCountdown nodeRun={nodeRunOf({ id: "n", nodeId: "a", status: "running" })} />);
+    const { container } = createTestView().render(<GraceCountdown nodeRun={nodeRunOf({ id: "n", nodeId: "a", status: "running" })} />);
     expect(container.textContent).toBe("");
   });
 });

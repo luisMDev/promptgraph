@@ -1,7 +1,8 @@
 import type { GetGraphResponse, Graph, SaveGraphResponse } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { graphOf, linearGraph } from "../test-fixtures";
-import { AUTOSAVE_DELAY_MS, setEditorPersistence, useEditorStore } from "./editor-store";
+import { ApiRequestError } from "../../api/rest";
+import { graphOf, linearGraph } from "../../test-fixtures";
+import { AUTOSAVE_DELAY_MS, createEditorStore, type EditorStoreApi } from "./editor-store";
 
 function loaded(graph: Graph, extra: Partial<GetGraphResponse> = {}): GetGraphResponse {
   return { graph, hash: "h0", modifiedOutside: false, activeRunId: null, ...extra };
@@ -11,14 +12,14 @@ describe("editor store", () => {
   let disk: GetGraphResponse;
   const save = vi.fn(async (graph: Graph): Promise<SaveGraphResponse> => ({ graph, hash: `h${save.mock.calls.length}` }));
 
+  let useEditorStore: EditorStoreApi;
+
   beforeEach(async () => {
     vi.useFakeTimers();
     save.mockClear();
     disk = loaded(linearGraph());
-    setEditorPersistence({ load: async () => disk, save });
-    useEditorStore.getState().closeGraph();
-    useEditorStore.getState().setPhase(1);
-    await useEditorStore.getState().openGraph("g1");
+    useEditorStore = createEditorStore("repo-0123abcd", "g1", { persistence: { load: async () => disk, save } });
+    await useEditorStore.getState().load();
   });
 
   afterEach(() => {
@@ -82,7 +83,7 @@ describe("editor store", () => {
 
   it("is read-only while a run is active", async () => {
     disk = loaded(linearGraph(), { activeRunId: "r1" });
-    await useEditorStore.getState().openGraph("g1");
+    await useEditorStore.getState().load();
     useEditorStore.getState().rename("Nope");
     expect(useEditorStore.getState().addNode("shell", { x: 0, y: 0 })).toBeNull();
     expect(useEditorStore.getState().graph?.name).toBe("Graph 1");
@@ -91,7 +92,7 @@ describe("editor store", () => {
 
   it("reloads a file changed on disk, or flags a conflict when there are local edits", async () => {
     disk = loaded(graphOf({ name: "From disk" }), { hash: "h-disk", modifiedOutside: true });
-    await useEditorStore.getState().checkExternalChange("g1");
+    await useEditorStore.getState().checkExternalChange();
     expect(useEditorStore.getState()).toMatchObject({ graphHash: "h-disk", modifiedOutside: true, externalChange: false });
     expect(useEditorStore.getState().graph?.name).toBe("From disk");
 
@@ -102,7 +103,7 @@ describe("editor store", () => {
     useEditorStore.setState({ saving: false });
     disk = loaded(graphOf({ name: "Theirs" }), { hash: "h-other" });
     // A pending autosave means the change is probably ours: no reload.
-    await useEditorStore.getState().checkExternalChange("g1");
+    await useEditorStore.getState().checkExternalChange();
     expect(useEditorStore.getState().graph?.name).toBe("Mine again");
   });
 
@@ -111,9 +112,22 @@ describe("editor store", () => {
     await useEditorStore.getState().flushSave();
     useEditorStore.setState({ dirty: true });
     disk = loaded(graphOf({ name: "Remote" }), { hash: "h-remote" });
-    await useEditorStore.getState().checkExternalChange("g1");
+    await useEditorStore.getState().checkExternalChange();
     expect(useEditorStore.getState()).toMatchObject({ externalChange: true });
     expect(useEditorStore.getState().graph?.name).toBe("Local");
+  });
+
+  it("reports a missing graph as not found and stops saving once discarded", async () => {
+    const missing = createEditorStore("repo-0123abcd", "gone", {
+      persistence: { load: async () => Promise.reject(new ApiRequestError(404, { error: "Graph not found", code: "not_found" })), save },
+    });
+    await missing.getState().load();
+    expect(missing.getState()).toMatchObject({ notFound: true, graph: null, loading: false });
+
+    useEditorStore.getState().rename("Lost");
+    expect(useEditorStore.getState().discard()).toBe(true);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS * 2);
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("surfaces save failures and retries on the next edit", async () => {

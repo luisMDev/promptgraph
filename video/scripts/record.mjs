@@ -171,10 +171,14 @@ async function main() {
 
     browser = await chromium.launch({ executablePath: chrome, headless: true });
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE, colorScheme: "dark" });
-    await context.addInitScript((id) => {
-      localStorage.setItem("pg-theme", "dark");
-      localStorage.setItem("pg_last_graph", id);
-    }, GRAPH.id);
+    // The login lands on /r/<repoId>, which opens the repository's last graph (DESIGN §13.2).
+    await context.addInitScript(
+      ({ repoId, id }) => {
+        localStorage.setItem("pg-theme", "dark");
+        localStorage.setItem(`pg.lastGraph.${repoId}`, id);
+      },
+      { repoId: server.repoId, id: GRAPH.id },
+    );
     await context.addInitScript(installCursor);
     const page = await context.newPage();
     page.on("pageerror", (e) => log("page error:", e.message));

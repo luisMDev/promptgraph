@@ -1,6 +1,7 @@
 import type { ClaudeCheckResponse, ClaudeSetupResponse, McpSkillInfo, McpToolGroup } from '@promptgraph/shared';
 import { Fragment, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
-import { api, errorMessage } from '../../api/rest';
+import { errorMessage } from '../../api/rest';
+import { useView } from '../../store/view/context';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Icons } from '../common/icons';
@@ -50,6 +51,7 @@ export function ClaudeSetupButton() {
  * server, so they name this checkout and this CLI.
  */
 export function ClaudeSetupWizard({ onClose }: { onClose: () => void }) {
+  const { api } = useView();
   const [step, setStep] = useState(0);
   const [plan, setPlan] = useState<Plan>('plugin');
   const [setup, setSetup] = useState<ClaudeSetupResponse | null>(null);
@@ -67,7 +69,7 @@ export function ClaudeSetupWizard({ onClose }: { onClose: () => void }) {
   const runCheck = () => {
     const seq = ++checkSeq.current;
     setCheck({ status: 'running' });
-    api.checkClaudeSetup().then(
+    api.claudeCheck().then(
       (result) => seq === checkSeq.current && setCheck({ status: 'done', result }),
       (err: unknown) => seq === checkSeq.current && setCheck({ status: 'error', message: errorMessage(err) }),
     );
@@ -703,8 +705,8 @@ function TryStep({
       </div>
 
       <p className="rounded-lg border border-dashed px-4 py-3 text-xs text-muted-foreground">
-        To watch a run, ask Claude to call <code className="font-mono">open_ui</code>, or open this canvas from the terminal where
-        promptgraph runs. Approving a step is always done here, never by Claude.
+        To watch a run, ask Claude to call <code className="font-mono">open_ui</code>, or run{' '}
+        <code className="font-mono">promptgraph open</code> in a terminal. Approving a step is always done here, never by Claude.
       </p>
     </div>
   );

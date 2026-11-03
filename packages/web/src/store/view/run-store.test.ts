@@ -1,11 +1,18 @@
 import type { RunDetail } from "@promptgraph/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { laneOf, linearGraph, nodeRunOf, runDetailOf, testFixLoopGraph } from "../test-fixtures";
-import { setRunStoreDeps, useRunStore } from "./run-store";
+import { ApiRequestError } from "../../api/rest";
+import { laneOf, linearGraph, nodeRunOf, runDetailOf, testFixLoopGraph } from "../../test-fixtures";
+import { createRunStore, type RunStoreApi, type RunStoreDeps } from "./run-store";
+
+let useRunStore: RunStoreApi;
+const listRuns = async () => [];
+function setRunStoreDeps(d: Omit<RunStoreDeps, "listRuns"> & Partial<Pick<RunStoreDeps, "listRuns">>): void {
+  useRunStore = createRunStore("repo-0123abcd", { listRuns, ...d });
+}
 
 describe("run store", () => {
-  const subscribe = vi.fn();
   const unsubscribe = vi.fn();
+  const subscribe = vi.fn((_runId: string) => () => unsubscribe(_runId));
   let resolveFetch: (d: RunDetail) => void = () => undefined;
 
   beforeEach(async () => {
@@ -13,10 +20,8 @@ describe("run store", () => {
     unsubscribe.mockClear();
     setRunStoreDeps({
       subscribe,
-      unsubscribe,
       fetchRun: () => new Promise<RunDetail>((r) => (resolveFetch = r)),
     });
-    await useRunStore.getState().selectRun(null);
     useRunStore.setState({ graphId: "g1", runs: [] });
   });
 
@@ -86,7 +91,8 @@ describe("run store", () => {
     const detail = runDetailOf(graph, [nodeRunOf({ id: "na", nodeId: "a", status: "succeeded" })]);
     detail.lanes = [laneOf({ id: "main", index: 0 })];
     const fetchRun = vi.fn(async () => detail);
-    setRunStoreDeps({ subscribe, unsubscribe, fetchRun });
+    setRunStoreDeps({ subscribe, fetchRun });
+    useRunStore.setState({ graphId: "g1", runs: [] });
     const { graphSnapshot: _g, ...summary } = detail.run;
     useRunStore.getState().applyRunUpdate(summary);
 
@@ -103,6 +109,22 @@ describe("run store", () => {
     await vi.waitFor(() => expect(useRunStore.getState().runInfo.r1!.lanes[0]!.status).toBe("removed"));
   });
 
+  it("subscribes once per selected run and releases it on dispose", async () => {
+    useRunStore.getState().showRun(runDetailOf(linearGraph(), []));
+    await useRunStore.getState().selectRun("r1");
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    useRunStore.getState().dispose();
+    expect(unsubscribe).toHaveBeenCalledWith("r1");
+    useRunStore.getState().resume();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it("flags a run of another repository (404) as not found", async () => {
+    setRunStoreDeps({ subscribe, fetchRun: async () => Promise.reject(new ApiRequestError(404, { error: "Run not found", code: "not_found" })) });
+    await useRunStore.getState().selectRun("r-elsewhere");
+    expect(useRunStore.getState()).toMatchObject({ detailNotFound: true, detail: null });
+  });
+
   it("forgets history details when switching graphs", async () => {
     useRunStore.setState({ runInfo: { r1: { lanes: [], prs: [] } } });
     await useRunStore.getState().loadRuns("g2").catch(() => undefined);
@@ -111,9 +133,9 @@ describe("run store", () => {
 });
 
 describe("run store: loops and iterations", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useRealTimers();
-    await useRunStore.getState().selectRun(null);
+    setRunStoreDeps({ subscribe: () => () => undefined, fetchRun: vi.fn() });
   });
 
   it("follows the latest iteration and resets the iteration selection on node change", () => {
@@ -136,7 +158,7 @@ describe("run store: loops and iterations", () => {
     vi.useFakeTimers();
     const graph = testFixLoopGraph();
     const fetchRun = vi.fn();
-    setRunStoreDeps({ subscribe: vi.fn(), unsubscribe: vi.fn(), fetchRun });
+    setRunStoreDeps({ subscribe: () => () => undefined, fetchRun });
     const detail = { ...runDetailOf(graph, [nodeRunOf({ id: "f0", nodeId: "fix", status: "running" })]), loops: [{ edgeId: "loop", iteration: 0, maxIterations: 3, exhausted: false }] };
     useRunStore.getState().showRun(detail);
     expect(useRunStore.getState().loops.loop).toEqual({ iteration: 0, maxIterations: 3, exhausted: false });

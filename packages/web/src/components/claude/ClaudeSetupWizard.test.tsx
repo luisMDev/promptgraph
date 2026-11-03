@@ -1,15 +1,12 @@
 // @vitest-environment jsdom
 import type { ClaudeSetupResponse } from "@promptgraph/shared";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../../api/rest";
+import { createTestView } from "../../store/view/test-view";
 import { ClaudeSetupButton } from "./ClaudeSetupWizard";
 
-vi.mock("../../api/rest", () => ({
-  api: { claudeSetup: vi.fn(), checkClaudeSetup: vi.fn() },
-  errorMessage: (err: unknown) => String(err),
-}));
+const api = { claudeSetup: vi.fn(), claudeCheck: vi.fn() };
 
 const SETUP: ClaudeSetupResponse = {
   version: "0.1.0",
@@ -35,7 +32,7 @@ const SETUP: ClaudeSetupResponse = {
 };
 
 async function openWizard(user: ReturnType<typeof userEvent.setup>) {
-  render(<ClaudeSetupButton />);
+  createTestView({ api }).render(<ClaudeSetupButton />);
   await user.click(screen.getByRole("button", { name: "Connect Claude Code" }));
   await screen.findByText("/plugin install promptgraph@promptgraph");
 }
@@ -43,7 +40,7 @@ async function openWizard(user: ReturnType<typeof userEvent.setup>) {
 describe("Claude Code setup wizard", () => {
   beforeEach(() => {
     vi.mocked(api.claudeSetup).mockResolvedValue(SETUP);
-    vi.mocked(api.checkClaudeSetup).mockResolvedValue({ claudeFound: true, mcpRegistered: false, output: "promptgraph: missing" });
+    vi.mocked(api.claudeCheck).mockResolvedValue({ claudeFound: true, mcpRegistered: false, output: "promptgraph: missing" });
   });
   afterEach(() => cleanup());
 
@@ -67,7 +64,7 @@ describe("Claude Code setup wizard", () => {
     const user = userEvent.setup();
     await openWizard(user);
     await user.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(api.checkClaudeSetup).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.claudeCheck).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/Not listed yet/)).toBeTruthy();
   });
 

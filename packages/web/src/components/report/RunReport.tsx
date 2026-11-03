@@ -7,17 +7,18 @@ import {
   type ReportStall,
   type RunReportResponse,
   type RunStatus,
+  webRoutes,
 } from "@promptgraph/shared";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api, errorMessage } from "../../api/rest";
+import { errorMessage } from "../../api/rest";
 import { formatDateTime, formatDuration, formatTokens, prLabel } from "../../lib/format";
 import { NODE_TYPE_META } from "../../lib/node-meta";
 import { nodeRunStyle, RUN_STATUS_STYLE } from "../../lib/status-style";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import type { RepoRoute } from "../../lib/router/routes";
+import { useRun, useTabActive, useView } from "../../store/view/context";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
-import { Button, StatusDot } from "../common/ui";
+import { Button, ButtonLink, StatusDot } from "../common/ui";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +34,7 @@ const REFRESH_MS = 1000;
  * editor view until closed; follows the run live.
  */
 export function RunReport({ runId }: { runId: string }) {
+  const view = useView();
   const [report, setReport] = useState<RunReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const version = useRunVersion(runId);
@@ -43,7 +45,7 @@ export function RunReport({ runId }: { runId: string }) {
     let cancelled = false;
     const timer = setTimeout(
       () =>
-        api.runReport(runId).then(
+        view.api.runReport(runId).then(
           (r) => {
             if (cancelled) return;
             loadedRun.current = runId;
@@ -58,16 +60,10 @@ export function RunReport({ runId }: { runId: string }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [runId, version]);
+  }, [runId, version, view.api]);
 
-  const close = () => useUiStore.getState().openReport(null);
-  const showOnCanvas = (nodeId?: string) => {
-    close();
-    void useRunStore
-      .getState()
-      .selectRun(runId)
-      .then(() => nodeId && useRunStore.getState().selectNode(nodeId));
-  };
+  const runPath = webRoutes.run(view.repoId, runId);
+  const nodeRunPath = (nodeRunId: string) => webRoutes.nodeRun(view.repoId, runId, nodeRunId);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
@@ -81,14 +77,14 @@ export function RunReport({ runId }: { runId: string }) {
               </p>
             )}
           </div>
-          <Button size="sm" onClick={() => showOnCanvas()}>
+          <ButtonLink size="sm" to={runPath}>
             Show on canvas
-          </Button>
+          </ButtonLink>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button size="icon-sm" variant="ghost" onClick={close} aria-label="Close report">
+              <ButtonLink size="icon-sm" variant="ghost" to={runPath} aria-label="Close report">
                 <Icons.x />
-              </Button>
+              </ButtonLink>
             </TooltipTrigger>
             <TooltipContent>Close report</TooltipContent>
           </Tooltip>
@@ -103,7 +99,7 @@ export function RunReport({ runId }: { runId: string }) {
         {report && (
           <>
             <Summary report={report} />
-            {report.stalls.length > 0 && <Stalls stalls={report.stalls} status={report.run.status} onShow={(nodeId) => showOnCanvas(nodeId)} nodes={report.nodes} />}
+            {report.stalls.length > 0 && <Stalls stalls={report.stalls} status={report.run.status} nodeRunPath={nodeRunPath} nodes={report.nodes} />}
             {report.prs.length > 0 && (
               <ReportSection title="Pull requests">
                 <ul className="space-y-1 text-sm">
@@ -118,7 +114,7 @@ export function RunReport({ runId }: { runId: string }) {
                 </ul>
               </ReportSection>
             )}
-            <Nodes nodes={report.nodes} onShow={showOnCanvas} />
+            <Nodes nodes={report.nodes} nodeRunPath={nodeRunPath} />
             <Lanes runId={runId} lanes={report.lanes} />
           </>
         )}
@@ -129,7 +125,7 @@ export function RunReport({ runId }: { runId: string }) {
 
 /** Changes whenever the run's summary changes (status, cost, waits, cleanup); drives report refreshes. */
 function useRunVersion(runId: string): string {
-  return useRunStore((s) => {
+  return useRun((s) => {
     const run = s.detail?.run.id === runId ? s.detail.run : s.runs.find((r) => r.id === runId);
     if (!run) return "";
     const nodes = s.detail?.run.id === runId ? s.detail.nodeRuns.map((n) => `${n.id}:${n.status}:${n.snapshotEnd ?? ""}`).join(",") : "";
@@ -191,14 +187,13 @@ const STALL_STYLE: Record<ReportStall["kind"], { label: string; className: strin
   slow_wait: { label: "Long wait", className: "bg-sky-500/15 text-sky-700" },
 };
 
-function Stalls({ stalls, status, nodes, onShow }: { stalls: ReportStall[]; status: RunStatus; nodes: ReportNode[]; onShow: (nodeId: string) => void }) {
-  const nodeIdOf = (nodeRunId: string) => nodes.find((n) => n.nodeRun.id === nodeRunId)?.nodeRun.nodeId;
+function Stalls({ stalls, status, nodes, nodeRunPath }: { stalls: ReportStall[]; status: RunStatus; nodes: ReportNode[]; nodeRunPath: (nodeRunId: string) => string }) {
+  const known = (nodeRunId: string) => nodes.some((n) => n.nodeRun.id === nodeRunId);
   return (
     <ReportSection title={isFinalRunStatus(status) ? "Where it stopped or waited" : "Needs attention / waited"}>
       <Card className="gap-0 py-0">
         <ul className="divide-y">
           {stalls.map((s) => {
-            const nodeId = nodeIdOf(s.nodeRunId);
             return (
               <li key={`${s.kind}-${s.nodeRunId}`} className="flex items-start gap-3 px-3 py-2 text-sm">
                 <Badge className={`mt-0.5 h-auto rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase ${STALL_STYLE[s.kind].className}`}>{STALL_STYLE[s.kind].label}</Badge>
@@ -207,10 +202,10 @@ function Stalls({ stalls, status, nodes, onShow }: { stalls: ReportStall[]; stat
                   <div className="text-xs whitespace-pre-wrap text-muted-foreground">{s.message}</div>
                 </div>
                 {s.waitingMs > 0 && <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums" title="Time spent waiting for you">{formatDuration(s.waitingMs)}</span>}
-                {nodeId && (
-                  <Button size="sm" variant="ghost" onClick={() => onShow(nodeId)}>
+                {known(s.nodeRunId) && (
+                  <ButtonLink size="sm" variant="ghost" to={nodeRunPath(s.nodeRunId)}>
                     Show
-                  </Button>
+                  </ButtonLink>
                 )}
               </li>
             );
@@ -221,7 +216,7 @@ function Stalls({ stalls, status, nodes, onShow }: { stalls: ReportStall[]; stat
   );
 }
 
-function Nodes({ nodes, onShow }: { nodes: ReportNode[]; onShow: (nodeId: string) => void }) {
+function Nodes({ nodes, nodeRunPath }: { nodes: ReportNode[]; nodeRunPath: (nodeRunId: string) => string }) {
   return (
     <ReportSection title="Steps">
       <div className="overflow-x-auto rounded-lg border">
@@ -239,7 +234,7 @@ function Nodes({ nodes, onShow }: { nodes: ReportNode[]; onShow: (nodeId: string
           </thead>
           <tbody className="divide-y bg-card/60">
             {nodes.map((n) => (
-              <NodeRow key={n.nodeRun.id} node={n} onShow={onShow} />
+              <NodeRow key={n.nodeRun.id} node={n} nodeRunPath={nodeRunPath} />
             ))}
           </tbody>
         </table>
@@ -248,25 +243,26 @@ function Nodes({ nodes, onShow }: { nodes: ReportNode[]; onShow: (nodeId: string
   );
 }
 
-function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) => void }) {
+function NodeRow({ node, nodeRunPath }: { node: ReportNode; nodeRunPath: (nodeRunId: string) => string }) {
+  const view = useView();
   const nr = node.nodeRun;
   const style = nodeRunStyle(nr);
   const o = nr.output;
   return (
     <tr className="align-top">
       <td className="px-3 py-2">
-        <Button
+        <ButtonLink
           variant="ghost"
           size="xs"
           className="h-auto justify-start gap-2 px-0 text-left text-xs font-normal hover:bg-transparent hover:underline dark:hover:bg-transparent"
-          onClick={() => onShow(nr.nodeId)}
+          to={nodeRunPath(nr.id)}
           title="Show on canvas"
         >
           <span className={`flex size-5 shrink-0 items-center justify-center rounded text-[11px] ${NODE_TYPE_META[node.type].accent}`}>
             <NodeTypeIcon type={node.type} />
           </span>
           <span className="font-medium text-foreground">{node.label}</span>
-        </Button>
+        </ButtonLink>
         {node.attempts > 1 && <span className="ml-7 text-[10px] text-muted-foreground">{node.attempts} attempts</span>}
       </td>
       <td className="px-3 py-2">
@@ -283,7 +279,7 @@ function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) 
             size="xs"
             className="-mx-1 h-auto px-1 text-xs font-normal disabled:opacity-100"
             disabled={node.changes.files === 0}
-            onClick={() => useUiStore.getState().openDiff({ kind: "node", nodeRunId: nr.id, title: `Changes · ${node.label}` })}
+            onClick={() => view.ui.getState().openDiff({ kind: "node", nodeRunId: nr.id, title: `Changes · ${node.label}` })}
             title={node.changes.files ? "Show what this step changed" : "This step changed no files"}
           >
             <Stats changes={node.changes} />
@@ -316,6 +312,7 @@ function NodeRow({ node, onShow }: { node: ReportNode; onShow: (nodeId: string) 
 }
 
 function Lanes({ runId, lanes }: { runId: string; lanes: ReportLane[] }) {
+  const view = useView();
   if (lanes.length === 0) return null;
   return (
     <ReportSection title="Lanes">
@@ -338,7 +335,7 @@ function Lanes({ runId, lanes }: { runId: string; lanes: ReportLane[] }) {
                   variant="ghost"
                   className="ml-auto"
                   disabled={!head}
-                  onClick={() => useUiStore.getState().openDiff({ kind: "lane", runId, laneId: lane.id, title: `Lane ${lane.id} · ${lane.branch}` })}
+                  onClick={() => view.ui.getState().openDiff({ kind: "lane", runId, laneId: lane.id, title: `Lane ${lane.id} · ${lane.branch}` })}
                 >
                   View diff
                 </Button>
@@ -384,17 +381,20 @@ function ReportSection({ title, children }: { title: string; children: ReactNode
 }
 
 /**
- * Opens the report when the run shown on the canvas finishes while you watch (or come back to the tab):
- * the moment to see what happened.
+ * Opens the report when the run shown on the canvas finishes while you watch (or come back to the tab): the
+ * moment to see what happened. Only the active view follows (DESIGN §13.4), and only from the run's own views.
  */
-export function useAutoOpenReport(): void {
-  const runId = useRunStore((s) => s.detail?.run.id ?? null);
-  const status = useRunStore((s) => s.detail?.run.status ?? null);
+export function useAutoOpenReport(route: RepoRoute): void {
+  const view = useView();
+  const active = useTabActive();
+  const runId = useRun((s) => s.detail?.run.id ?? null);
+  const status = useRun((s) => s.detail?.run.status ?? null);
   const seen = useRef<{ id: string; status: RunStatus } | null>(null);
+  const onRun = (route.kind === "run" || route.kind === "nodeRun") && route.runId === runId;
   useEffect(() => {
     if (!runId || !status) return;
     const prev = seen.current;
     seen.current = { id: runId, status };
-    if (prev?.id === runId && !isFinalRunStatus(prev.status) && isFinalRunStatus(status)) useUiStore.getState().openReport(runId);
-  }, [runId, status]);
+    if (active && onRun && prev?.id === runId && !isFinalRunStatus(prev.status) && isFinalRunStatus(status)) view.navigate(webRoutes.report(view.repoId, runId));
+  }, [runId, status, active, onRun, view]);
 }

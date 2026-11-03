@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import type { GraphListItem } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { graphOf } from "../../test-fixtures";
-import { createGraph, deleteGraph, selectGraph } from "../../store/app-actions";
-import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
+import { createGraph, deleteGraph } from "../../store/view/actions";
+import { createTestView, type TestView } from "../../store/view/test-view";
 import { GraphSelector } from "./GraphSelector";
 
-vi.mock("../../store/app-actions", async (orig) => {
-  const actual = await orig<typeof import("../../store/app-actions")>();
-  return { ...actual, selectGraph: vi.fn(async () => undefined), createGraph: vi.fn(async () => undefined), deleteGraph: vi.fn(async () => undefined) };
+vi.mock("../../store/view/actions", async (orig) => {
+  const actual = await orig<typeof import("../../store/view/actions")>();
+  return { ...actual, createGraph: vi.fn(async () => undefined), deleteGraph: vi.fn(async () => undefined) };
 });
 
 const graphs: GraphListItem[] = [
@@ -24,12 +24,14 @@ function trigger(): HTMLElement {
 }
 
 describe("GraphSelector", () => {
+  let view: TestView;
+  const render = (ui: ReactElement) => view.render(ui);
+
   beforeEach(() => {
-    vi.mocked(selectGraph).mockClear();
     vi.mocked(createGraph).mockClear();
     vi.mocked(deleteGraph).mockClear();
-    useAppStore.setState({ graphs });
-    useEditorStore.setState({ graph: graphOf({ id: "g1", name: "Graph 1" }), graphId: "g1", loadError: null, activeRunId: null });
+    view = createTestView({ graphId: "g1", graphs, path: "/r/repo-0123abcd/graphs/g1" });
+    view.editor.setState({ graph: graphOf({ id: "g1", name: "Graph 1" }), loading: false, loadError: null, activeRunId: null });
   });
   afterEach(cleanup);
 
@@ -65,17 +67,37 @@ describe("GraphSelector", () => {
     await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
   });
 
-  it("selecting another graph switches to it and closes the menu; the current one is a no-op", async () => {
+  it("graphs are links: selecting one navigates to it and closes the menu", async () => {
     const user = userEvent.setup();
     render(<GraphSelector />);
     await user.click(trigger());
-    await user.click(await screen.findByRole("menuitemradio", { name: /Graph 2/ }));
-    expect(selectGraph).toHaveBeenCalledWith("g2");
+    const item = await screen.findByRole("menuitemradio", { name: /Graph 2/ });
+    expect(item.getAttribute("href")).toBe("/r/repo-0123abcd/graphs/g2");
+    await user.click(item);
+    expect(view.location.navigations).toEqual([{ path: "/r/repo-0123abcd/graphs/g2", replace: false }]);
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  });
 
+  it("selects a graph with the keyboard (Enter on a link item)", async () => {
+    const user = userEvent.setup();
+    render(<GraphSelector />);
+    trigger().focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(view.location.navigations.at(-1)?.path).toBe("/r/repo-0123abcd/graphs/g2");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  });
+
+  it("Ctrl-click on a graph opens it in a background tab", async () => {
+    const user = userEvent.setup();
+    render(<GraphSelector />);
     await user.click(trigger());
-    await user.click(await screen.findByRole("menuitemradio", { name: /Graph 1/ }));
-    expect(selectGraph).toHaveBeenCalledTimes(1);
+    await user.keyboard("{Control>}");
+    await user.click(await screen.findByRole("menuitemradio", { name: /Graph 2/ }));
+    await user.keyboard("{/Control}");
+    expect(view.location.newTabs).toEqual([{ path: "/r/repo-0123abcd/graphs/g2", activate: false }]);
+    expect(view.location.navigations).toEqual([]);
   });
 
   it("closes on a click outside", async () => {
@@ -107,7 +129,7 @@ describe("GraphSelector", () => {
 
     await user.type(input, "My flow");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    expect(createGraph).toHaveBeenCalledWith("My flow");
+    expect(createGraph).toHaveBeenCalledWith(expect.objectContaining({ repoId: "repo-0123abcd" }), "My flow");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger()));
   });
@@ -121,12 +143,12 @@ describe("GraphSelector", () => {
     const dialog = await screen.findByRole("dialog", { name: "Delete graph" });
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     await user.click(screen.getByRole("button", { name: "Delete" }));
-    expect(deleteGraph).toHaveBeenCalledWith("g1");
+    expect(deleteGraph).toHaveBeenCalledWith(expect.objectContaining({ repoId: "repo-0123abcd" }), "g1");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("Rename and Delete are disabled while the graph is read-only", async () => {
-    useEditorStore.setState({ activeRunId: "r1" });
+    view.editor.setState({ activeRunId: "r1" });
     const user = userEvent.setup();
     render(<GraphSelector />);
     await user.click(trigger());
@@ -136,7 +158,7 @@ describe("GraphSelector", () => {
   });
 
   it("the Rename menu item opens the rename dialog prefilled with the graph name", async () => {
-    const rename = vi.spyOn(useEditorStore.getState(), "rename").mockImplementation(() => undefined);
+    const rename = vi.spyOn(view.editor.getState(), "rename").mockImplementation(() => undefined);
     const user = userEvent.setup();
     render(<GraphSelector />);
     await user.click(trigger());

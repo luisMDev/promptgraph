@@ -1,7 +1,7 @@
 import type { NodeType } from "@promptgraph/shared";
 import { NODE_TYPE_META, PALETTE_ORDER } from "../../lib/node-meta";
-import { isReadOnly, useEditorStore } from "../../store/editor-store";
-import { useUiStore } from "../../store/ui-store";
+import { useEditor, useView } from "../../store/view/context";
+import { isReadOnly } from "../../store/view/editor-store";
 import { PALETTE_MIME } from "../canvas/Canvas";
 import { Badge } from "@/components/ui/badge";
 import { NodeTypeIcon } from "../common/icons";
@@ -9,10 +9,11 @@ import { Button } from "../common/ui";
 
 /** Node types to drag onto the canvas (click adds one below the last node). */
 export function Palette() {
-  const readOnly = useEditorStore(isReadOnly);
-  const phase = useEditorStore((s) => s.phase);
-  const supported = useEditorStore((s) => s.supportedNodeTypes);
-  const hint = useEditorStore((s) =>
+  const view = useView();
+  const readOnly = useEditor(isReadOnly);
+  const phase = useEditor((s) => s.phase);
+  const supported = useEditor((s) => s.supportedNodeTypes);
+  const hint = useEditor((s) =>
     !s.graph
       ? s.loadError
         ? "This graph could not be loaded."
@@ -23,11 +24,11 @@ export function Palette() {
   );
 
   const addByClick = (type: NodeType) => {
-    const g = useEditorStore.getState().graph;
+    const g = view.editor.getState().graph;
     if (!g) return;
     const last = g.nodes.reduce((m, n) => (n.position.x > m.x ? n.position : m), { x: -320, y: 96 });
-    const id = useEditorStore.getState().addNode(type, { x: last.x + 320, y: last.y });
-    if (id) useUiStore.getState().revealNode(id);
+    const id = view.editor.getState().addNode(type, { x: last.x + 320, y: last.y });
+    if (id) view.ui.getState().revealNode(id);
   };
 
   return (

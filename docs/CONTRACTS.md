@@ -768,41 +768,116 @@ recent attach/resize drives PTY size.
 ## 9. Web (`packages/web/src`)
 
 ```
-main.tsx, App.tsx, index.css     shell (Tailwind v4 via @tailwindcss/vite; status colour tokens in @theme)
-api/token.ts                     getDevToken() — legacy dev ?t= (the daemon no longer accepts it; deleted in M8, §12.5)
-api/rest.ts                      `api` typed REST client, ApiRequestError
-api/ws.ts                        WsClient (reconnect, re-subscribe, pty attach with decoded bytes), wsClient singleton
-store/editor-store.ts            EditorState (zustand): graph, hash, dirty, validation (validateGraph from shared, phase = RepoInfoResponse.phase), selection; autosave 500 ms
-store/run-store.ts               RunState: runs list, selected run detail, currentByNode, lanes; merges WS updates
-store/ui-store.ts                UiState: terminal tabs, drawer height, dialogs
-components/header/               graph selector, Run/Cancel, pending approvals counter, run selector, run cost total
+main.tsx, App.tsx, index.css     shell (Tailwind v4 via @tailwindcss/vite; status colour tokens in @theme). App = WindowLocationProvider
+                                 + AppShell (boots daemon info/repos/settings, startLiveUpdates, SessionBanners, routes, Toasts)
+lib/router/routes.ts             Route = home | repo | graph | run | nodeRun | report | notFound; parseRoute(path), routeHref(route)
+                                 (via shared webRoutes), routeRunId, isRepoRoute. Pure
+lib/router/location.tsx          LocationContext {path, navigate(path, {replace?}), openInNewTab(path, {activate})};
+                                 WindowLocationProvider (history + popstate; openInNewTab = window.open(path, "_blank", "noopener")),
+                                 MemoryLocationProvider (tests); useLocation, useNavigate, useRoute
+lib/router/Link.tsx              <Link to replace?>: real <a href>; plain click → navigate, Ctrl/Cmd or middle click → background tab,
+                                 Ctrl/Cmd+Shift → foreground tab, Shift/Alt alone → browser default; onClick runs first
+                                 (preventDefault cancels). linkClickAction(event) is the pure decision
+lib/version.ts                   BUILD_VERSION (vite define __PG_VERSION__ = packages/server/package.json version; null in unit tests)
+lib/vite-proxy-guard.ts          proxyGuard({host, origin}, {allowedHosts, port}) → null | reason (403), used by vite.config.ts
+api/rest.ts                      daemonApi {daemon, repos, addRepo, removeRepo(id, force), getSettings, updateSettings},
+                                 repoApi(repoId) (every /api/repos/:repoId route, incl. claudeCheck), ApiRequestError, isApiStatus,
+                                 onUnauthorized (any 401), sessionValid. No credential of its own (same-origin cookie); graph PUTs
+                                 use keepalive (≤ 60 kB) so a pagehide flush survives the page
+api/ws.ts                        WsClient({url?, checkSession?, buildVersion?, unreachableAfterMs?}), wsClient (the page's socket)
+store/toast-store.ts             useToastStore {toasts, toast, dismiss} (the sequence counter lives in the store), toast()
+store/daemon-store.ts            useDaemonStore: info, repos (sorted by last opened; live from repo:status / repo:removed), settings,
+                                 connection, signedOut, versionMismatch, removed {id, path, name}; addRepo, markRemoved, applyWsStatus
+store/repo-cache.ts              createRepoCache(repoId, api) / getRepoCache / peekRepoCache / dropRepoCache / liveRepoCaches;
+                                 per repo: info, infoError {message, status, code}, graphs, commands, pending, pendingRuns, summary;
+                                 load() once (retried after a failure), refreshGraphs, refreshPending, loadCommands; useRepoCache
+store/dispatcher.ts              createDispatcher(): handle(msg), registerView({repoId, run, ui}), repoRemoved(repoId)
+store/live.ts                    dispatcher (the page's), startLiveUpdates(client?, dispatcher?), removeRepository(id, force)
+store/view/editor-store.ts       createEditorStore(repoId, graphId | null, {persistence?, validation?}); acquireEditorStore(repoId,
+                                 graphId) → {store, release} (cached + ref-counted per `${repoId}:${graphId}`), findEditorStore,
+                                 liveEditorStores, flushAllEditors, discardEditorStore, discardEditorsOf(repoId); autosave 500 ms
+store/view/run-store.ts          createRunStore(repoId, deps?) with RunStoreDeps {subscribe(runId) → unsubscribe, fetchRun, listRuns}
+store/view/ui-store.ts           createViewUiStore(): drawer terminals, dialogs, leftPanel, sidebars, revealNodeId, lastLoopSpec
+store/view/context.tsx           ViewProvider, View (stores + navigate/openInNewTab), useView, useEditor, useRun, useViewUi,
+                                 useTabActive, useRepo, useRepoInfo
+store/view/actions.ts            view workflows: createGraph, deleteGraph, startRun, cancel/resume/cleanupRun, showNodeRun,
+                                 open*Terminal, reopenSession, closeTerminalTab, closeAllTerminals, nodeControl, openMergeShell,
+                                 lastGraphKey/rememberGraph/lastGraphId (localStorage `pg.lastGraph.<repoId>`)
+store/view/test-view.tsx         createTestView(opts) → stores + repo cache + memory location (navigations, newTabs) + render()
+views/HomeView.tsx               Home (DESIGN §13.3)
+views/RepoView.tsx               one view of a repository: own run + UI stores, shared editor store, repo subscription, route sync
+views/Workspace.tsx              editor / run layout (header, sidebars, canvas, drawer, dialogs); report route replaces the canvas row
+views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRemoved (Add again / Close)
+components/common/SessionBanners Reconnecting / Unreachable / version banners, SignedOut full screen
+components/header/               graph selector (links), Run/Cancel, pending approvals (links), run selector (links), run cost total
 components/palette/              draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
 components/canvas/               React Flow canvas: snap grid, minimap, edge creation (error/true/false ports in phase 2), read-only in run mode
 components/nodes/                node cards: status colour (§8.2), elapsed time, activity, lane badge, tokens/cost, validation outline + tooltip
 components/inspector/            node config forms; run mode: NodeRun details (output, session, branch, timings, error, usage) + controls
 components/terminal/             drawer with tabs; xterm + fit + web-links; live or replayed; "Reopen session"
-components/history/              run history list (status, duration, cost), cleanup action
+components/history/              run history list (status, duration, cost; rows and Report are links), cleanup action
 components/approval/             approval dialog: message, diff2html diff, predecessor outputs, PR title/body edit, approve/reject
 components/settings/             app settings (notifications toggle) + graph settings form
 ```
 
-The UI is English. Only `errors` disable Run; `warnings` are shown but non-blocking. The `store/` files are
-zustand stores (app, editor, run, ui) plus `app-actions.ts` (REST/WS side effects). Node names come from
+The UI is English. Only `errors` disable Run; `warnings` are shown but non-blocking. Node names come from
 `nodeDisplayLabel(node)` (shared: label, else id) everywhere.
 
+**Router, views and stores (M8, DESIGN §13.2–§13.5):**
+- The route is the source of truth. `RepoView` (keyed by repoId; `RepoRoot` in App shows `RepoRemoved` instead while
+  `daemonStore.removed[repoId]` is set) applies it: `run.selectRun(routeRunId)` (subscribes once, ref-counted in the
+  WsClient), `loadRuns(graphId)` for the history, the editor slot (`acquireEditorStore` of the graph route's id, or of
+  the run's `graphId` from its detail or the history list, so graph ↔ run navigation keeps the same store), the
+  `nodeRun` route → `showNodeRun` once the detail is loaded (select node + iteration, open its terminal, open the
+  approval dialog when waiting), leaving it deselects. Another graph closes the view's terminals (ending reopened
+  sessions). The shown graph is remembered in `pg.lastGraph.<repoId>`. `/r/<repoId>` redirects (replace) to that graph,
+  else the first; with no graph the workspace shows its empty state. Not found: repo info 404, editor `notFound`
+  (graph 404), run `detailNotFound` (404), or a nodeRun id missing from the loaded run. A repo info 409 / network error
+  shows a retryable message.
+- Navigation: GraphSelector, RunSelector and PendingApprovals items are `DropdownMenu(Radio)Item asChild` + `<Link>` (the
+  vendored `DropdownMenuRadioItem` supports `asChild` via `Slot.Slottable`); a plain click on a pending approval also
+  opens its dialog in this view. RunHistory rows (card click and header link), Report, Banners (View live run, Back to
+  editor), Header (logo and repo name → Home), RunReport (close and Show on canvas → run, steps/stalls → node run) are
+  links. Canvas run mode: a node click `showNodeRun` + `navigate(nodeRun route, {replace})`; a node without a node run
+  or a pane click selects/deselects and replaces with the run route. Leaving run mode (Nodes tab) navigates to the graph.
+  `startRun` shows the detail (`showRun`) and navigates to the run. Opening a graph with an active run stays on the
+  graph (read-only, banner "View live run"). `useAutoOpenReport(route)` navigates to the report only in the active view
+  and only from the run's own run/nodeRun route.
+- Stores: no singletons. Editor stores are shared per `(repoId, graphId)`; the last `release` flushes the pending save
+  before disposing (re-acquired meanwhile → kept); `discard()` stops saving (graph deleted, repo removed). Run and UI
+  stores are per view (`dispose`/`resume` for unmount and StrictMode). Repository data lives in the repo cache, daemon
+  data in the daemon store, toasts in the toast store. Sidebar widths and the theme stay global (localStorage).
+- Dispatcher: `hello` after the first → daemon info + repos, every cache's graphs + pending, every view's selected run +
+  history, every editor's `checkExternalChange`; `repo:status` → daemon store + cache summary; `repo:removed` →
+  `repoRemoved` (editor stores discarded with a toast per lost graph, the repo's views dispose their run stores and close
+  their terminals, cache dropped, `markRemoved`); `run:update` → that repo's views + the editor of that graph
+  (`activeRunId`) + debounced (300 ms, per repo) pending refresh; `node:update` → views showing that run (merge conflict
+  opens the merge shell); `lane:update` → all views; `graphs:changed` → cache graphs + that graph's editor.
+- WsClient: status `{connection: connecting | open | reconnecting | unreachable, signedOut, serverVersion,
+  versionMismatch}` (`onStatus`); close 4401 → `signOut()` (no more reconnects); any other close → reconnect with backoff
+  500 ms doubling to 5 s, `reconnecting`, `unreachable` 15 s after the connection was lost (or first attempted), retrying
+  forever. After a connect that never opened, the `checkSession` REST probe answering 401 also signs out (browsers hide
+  the status of a refused upgrade). `startLiveUpdates` maps a REST 401 (`onUnauthorized`) to `setSignedOut` +
+  `client.signOut()` and installs the `pagehide` → `flushAllEditors` listener.
+- Datalist ids (models, commands) use `useId`, so several mounted views never share an id.
+- Vite dev proxy (`vite.config.ts`): `/api`, `/login`, `/ws` to `PG_DEV_PORT` (then `PG_PORT`, default 4777);
+  `server.allowedHosts: ["127.0.0.1", "localhost"]`; the proxy `bypass` runs `proxyGuard` (Host = allowed name on vite's
+  own port, Origin absent or equal to `http://<Host>`), else 403 (HTTP response, or `HTTP/1.1 403` written on the
+  upgrade socket); then `changeOrigin` rewrites Host and the `proxyReq`/`proxyReqWs` handlers rewrite a present Origin
+  to the daemon. Sec-Fetch-* are forwarded unchanged; no credential is added and the token is never read. `/hooks` is
+  not proxied (hooks talk to the daemon's port directly). Sign in: `promptgraph open --print-url --web-port <vite port>`.
+
 **Implementation notes (web, minimal extensions):**
-- Stores extend the contract interfaces: `EditorStore extends EditorState` adds `phase`, `graphId` (also set when
-  the file failed to load), `loading`, `loadError`, `saveError`, `activeRunId` (graph read-only while set),
-  `externalChange` (file changed on disk while dirty), multi-selection `selectedNodeIds/selectedEdgeIds`
-  (`selectedNodeId/EdgeId` only when exactly one element is selected) and actions; `RunStore extends RunState`
-  adds `graphId`, `detailError`, `selectedNodeId` (run-canvas inspection); `UiStore extends UiState` adds
-  `tabMeta`, `drawerOpen`, `leftPanel` (palette | history), `toasts`. New `store/app-store.ts` (repo, app
-  settings, graph list, commands, pending approvals, WS connection) and `store/app-actions.ts` (cross-store
-  workflows + WS → store routing). Test seams: `setEditorPersistence`, `setRunStoreDeps`, `new WsClient(urlFn)`.
-- `WsClient` adds `onConnection(listener)` and `resizePty(ptyId, cols, rows)` (remembers the size for re-attach).
-  On every `pty:attached` (first attach and re-attach after reconnect) the terminal is reset before the replay.
-- `api/token.ts` adds `devToken()` (memoised `getDevToken()`; the `t` param is stripped from the URL).
-- Vite proxy target port: `PG_DEV_PORT` (then `PG_PORT`), default 4777; it rewrites `Origin` to the target.
+- Stores extend the contract interfaces: `EditorStore extends EditorState` adds `repoId`, `graphId` (fixed per store),
+  `phase`/`supportedNodeTypes`, `loading`, `loadError`, `notFound`, `saveError`, `activeRunId` (graph read-only while set),
+  `externalChange` (file changed on disk while dirty), `discarded`, multi-selection `selectedNodeIds/selectedEdgeIds`
+  (`selectedNodeId/EdgeId` only when exactly one element is selected) and actions; `RunStore extends RunState` adds
+  `graphId`, `detailError`, `detailNotFound`, `selectedNodeId` (run-canvas inspection); `UiStore extends UiState` adds
+  `tabMeta`, `drawerOpen`, `leftPanel` (palette | history), `lastLoopSpec`. Test seams: `createEditorStore(…,
+  {persistence})`, `createRunStore(…, deps)`, `createRepoCache(id, api)`, `new WsClient(opts)`, `createTestView()`,
+  `src/test-daemon.ts` (fake daemon behind fetch + FakeSocket, `resetGlobals`).
+- `WsClient.resizePty(ptyId, cols, rows)` remembers the size for re-attach. On every `pty:attached` (first attach and
+  re-attach after reconnect) the terminal is reset before the replay.
 - The palette always lists every node type; `condition` carries a "phase 2" badge while `phase` is 1 (the
   validator rejects it there).
 - Replayed (finished) terminals drop "leave alternate screen" sequences (`lib/terminal-replay.ts`), so a Claude
@@ -820,7 +895,7 @@ zustand stores (app, editor, run, ui) plus `app-actions.ts` (REST/WS side effect
   `runInfoOf` (history details: lanes + PR links). `RunStore.runInfo` / `loadRunInfo(runId)` load details on
   expand and refetch only when a run's status or `cleanedUp` changes. `applyNodeUpdate` drops node runs older
   (`updatedAt`) than the known one (REST responses racing WS updates).
-- `AppState.pendingRuns` (runId → graph name, short id, node labels; fetched once per pending run) labels the
+- `RepoCacheState.pendingRuns` (runId → graph name, short id, node labels; fetched once per pending run) labels the
   header's global pending list and the approval dialog.
 - Lazy chunks: `ApprovalDialog` (+ `DiffView`, diff2html) and `TerminalView` (xterm); vite `manualChunks` puts
   react/@xyflow/zustand in `vendor`. No chunk exceeds the default 500 kB warning.
@@ -951,16 +1026,15 @@ exit 1; `FAKE_GH_EXISTS=1` → gh's "already exists" error with the URL; `FAKE_G
 Target contracts. Each workstream folds the part it implements into the sections above and deletes it here.
 
 §12.1 (shared), §12.2 (server composition), §12.3 (HTTP and WS) and §12.4 (CLI and MCP) are implemented and
-folded into §2, §4, §8 and §11.
+folded into §2, §4, §8 and §11; the first part of §12.5 (web) into §9.
 
 ### 12.5 Web
 
-- `lib/router/`: `parseRoute(path) → Route` (`home | repo | graph | run | nodeRun | report | notFound`), `routeHref(route)` (via `webRoutes`), `<Link to>` (modifier/middle click → new tab), `LocationContext {path, navigate(path, {replace?}), openInNewTab(path, {activate})}`, `useRoute()` / `useNavigate()` reading the **view's** location from context (window location in M8 before tabs; the tab's location after).
-- `store/view/` (M8, before tabs): `createEditorStore(repoId, graphId)` (cached and ref-counted per `${repoId}:${graphId}`; the last release flushes the pending save), `createRunStore(repoId)`, `createViewUiStore()`; `ViewProvider` + hooks `useEditor`, `useRun`, `useViewUi`, `useTabActive` (always true until tabs); `createTestView()` for tests. `store/repo-cache.ts`: per-repo store (info, graphs, commands, pending, pendingRuns, last `RepoSummary`). Global: `daemon-store` (daemon info, repos, connection `connecting|open|reconnecting|unreachable`, signedOut, versionMismatch), `toast-store`, `wsClient`.
+The router, per-view stores, repo cache, daemon/toast stores, API factories and the vite proxy are implemented and
+folded into §9. Pending:
+
 - `store/tabs-store.ts` (after views): `Tab {id, path, title?}`, `TabsState {tabs, activeId, mru, closed}`, actions `open(path, {activate})` (dedupe on `normalizePath`; `/r/<id>` → MRU tab of that repo), `close(id)`, `activate(id)`, `navigate(id, path, {replace?})`, `next(dir)`, `goto(index | "last")`, `reopenClosed()`; persisted `sessionStorage["pg.tabs.v1"]` and mirrored to `localStorage["pg.tabs.last.v1"]` (seed only) as `{version: 1, tabs, activeId, mru}` (≤ 30 tabs, ≤ 6 mounted, LRU by `mru`, dirty editors never evicted, only the active tab mounts at load).
 - `lib/keymap.ts`: `resolveKey(event, {desktop, terminalFocused}) → KeyAction | null` with `KeyAction = newTab | closeTab | reopenClosed | nextTab | prevTab | gotoTab(n) | lastTab`; matches `event.code`; ignores `AltGraph`; in terminals only tab switching.
-- `api/rest.ts`: `daemonApi` (daemon routes) + `repoApi(repoId)`; 401 → `signedOut`. `api/token.ts` is deleted. `api/ws.ts`: ref-counted `subscribeRun`/`subscribeRepo` returning unsubscribe functions, close 4401 → signed out, any other close → reconnect forever with backoff ≤ 5 s; `unreachable` after 15 s.
-- `vite.config.ts`: proxies `/api`, `/ws`, `/login`; `server.allowedHosts: ["127.0.0.1", "localhost"]`; rejects a present `Origin` other than the vite origin with 403 (HTTP and WS upgrade); forwards `Sec-Fetch-*`; then rewrites `Host`/`Origin` to the daemon. Never reads the token.
 - `lib/desktop.ts`: `DesktopBridge {isDesktop, customTitleBar, minimize, toggleMaximize, isMaximized, close, startResizeDragging(dir), setTitle, openExternal(url), relogin(next)}`, `getDesktopBridge()` (inert outside Tauri); `installExternalLinkHandler(bridge)` (desktop only).
 
 ### 12.6 Desktop (`packages/desktop`)

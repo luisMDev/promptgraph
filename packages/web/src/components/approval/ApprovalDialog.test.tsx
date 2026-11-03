@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ApprovalInfoResponse, ApprovalRequest, DiffResponse } from "@promptgraph/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RepoApi } from "../../api/rest";
 import { nodeRunOf } from "../../test-fixtures";
+import { createTestView } from "../../store/view/test-view";
 
 const gate = nodeRunOf({ id: "np", nodeId: "p", status: "waiting_approval" });
 const info: ApprovalInfoResponse = {
@@ -22,18 +24,12 @@ const diff: DiffResponse = {
 const submitApproval = vi.fn(async (_id: string, _req: ApprovalRequest) => ({ nodeRun: { ...gate, status: "running" as const } }));
 const approvalInfo = vi.fn(async () => info);
 
-vi.mock("../../api/rest", async (orig) => {
-  const actual = await orig<typeof import("../../api/rest")>();
-  return {
-    ...actual,
-    api: {
-      approvalInfo: () => approvalInfo(),
-      diff: async () => diff,
-      submitApproval: (id: string, req: ApprovalRequest) => submitApproval(id, req),
-      pending: async () => ({ nodeRuns: [] }),
-    },
-  };
-});
+const api: Partial<RepoApi> = {
+  approvalInfo: () => approvalInfo(),
+  diff: async () => diff,
+  submitApproval: (id: string, req: ApprovalRequest) => submitApproval(id, req),
+  pending: async () => ({ nodeRuns: [] }),
+};
 
 afterEach(() => {
   cleanup();
@@ -44,12 +40,11 @@ afterEach(() => {
 /** Opens the dialog for the gate, listed as pending like the header's pending list does. */
 async function openGate() {
   const { ApprovalDialog } = await import("./ApprovalDialog");
-  const { useUiStore } = await import("../../store/ui-store");
-  const { useAppStore } = await import("../../store/app-store");
-  useAppStore.setState({ pending: [gate] });
-  useUiStore.getState().openApproval("np");
-  render(<ApprovalDialog nodeRunId="np" />);
-  return { useUiStore, useAppStore };
+  const view = createTestView({ api });
+  view.cache.setState({ pending: [gate] });
+  view.ui.getState().openApproval("np");
+  view.render(<ApprovalDialog nodeRunId="np" />);
+  return { useUiStore: view.ui, useAppStore: view.cache };
 }
 
 describe("ApprovalDialog", () => {

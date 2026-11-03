@@ -1,6 +1,7 @@
 import type { NodeRun } from "@promptgraph/shared";
 import { useNow } from "../../lib/use-now";
-import { nodeControl } from "../../store/app-actions";
+import { nodeControl } from "../../store/view/actions";
+import { useView } from "../../store/view/context";
 import { Button } from "./ui";
 
 /** Whole seconds left of a running auto-completion countdown (§7.4), or null when none is showing. */
@@ -15,6 +16,7 @@ export function graceSecondsLeft(nodeRun: NodeRun | null | undefined, now: numbe
  * the grace period ends. Hold keeps the node open (it goes idle), e.g. when Claude asked a question.
  */
 export function GraceCountdown({ nodeRun, compact = false }: { nodeRun: NodeRun | null | undefined; compact?: boolean }) {
+  const view = useView();
   const active = !!nodeRun && nodeRun.status === "running" && nodeRun.graceUntil !== null;
   const now = useNow(active);
   const left = graceSecondsLeft(nodeRun, now);
@@ -34,7 +36,7 @@ export function GraceCountdown({ nodeRun, compact = false }: { nodeRun: NodeRun 
         className="nodrag nopan h-5 shrink-0 rounded px-1.5 text-[11px] font-semibold"
         onClick={(e) => {
           e.stopPropagation();
-          void nodeControl(nodeRun.id, "hold");
+          void nodeControl(view, nodeRun.id, "hold");
         }}
       >
         Hold

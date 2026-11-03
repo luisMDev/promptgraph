@@ -10,8 +10,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { setTheme, type Theme, useTheme } from "../../lib/theme";
-import { useAppStore } from "../../store/app-store";
-import { useUiStore } from "../../store/ui-store";
+import { useDaemonStore } from "../../store/daemon-store";
+import { toast } from "../../store/toast-store";
+import { useRepoInfo, useView, useViewUi } from "../../store/view/context";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
@@ -21,21 +22,23 @@ import { Button } from "../common/ui";
  * outside-click dismissal come from Radix. The info text is static content, so it is not focusable.
  */
 export function SettingsMenu() {
-  const open = useUiStore((s) => s.settingsOpen);
-  const settings = useAppStore((s) => s.settings);
-  const repo = useAppStore((s) => s.repo);
-  const notifyAvailable = repo?.notificationsAvailable ?? true;
+  const view = useView();
+  const open = useViewUi((s) => s.settingsOpen);
+  const settings = useDaemonStore((s) => s.settings);
+  const daemon = useDaemonStore((s) => s.info);
+  const repo = useRepoInfo();
+  const notifyAvailable = daemon?.notificationsAvailable ?? true;
   const theme = useTheme();
 
   const toggleNotifications = (notifications: boolean) => {
-    useAppStore
+    useDaemonStore
       .getState()
       .updateSettings({ notifications })
-      .catch((err: unknown) => useUiStore.getState().toast("error", `Could not save settings: ${String(err)}`));
+      .catch((err: unknown) => toast("error", `Could not save settings: ${String(err)}`));
   };
 
   return (
-    <DropdownMenu open={open} onOpenChange={(o) => useUiStore.getState().setSettingsOpen(o)}>
+    <DropdownMenu open={open} onOpenChange={(o) => view.ui.getState().setSettingsOpen(o)}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
@@ -71,7 +74,7 @@ export function SettingsMenu() {
           {!notifyAvailable && "No notifier was found on this system (notify-send, or PowerShell on WSL). "}
           Notify when a node waits for input, approval, or finished a turn (notify-send on Linux, a toast on WSL).
         </p>
-        {repo && (
+        {repo && daemon && (
           <>
             <DropdownMenuSeparator />
             <div className="space-y-1 px-1.5 py-1 text-[11px] text-muted-foreground">
@@ -79,9 +82,9 @@ export function SettingsMenu() {
                 {repo.path}
               </div>
               <div>
-                promptgraph {repo.version} · phase {repo.phase}
+                promptgraph {daemon.version} · phase {daemon.phase}
               </div>
-              {repo.warnings.map((w) => (
+              {daemon.warnings.map((w) => (
                 <div key={w} className="text-amber-600/90">
                   {w}
                 </div>

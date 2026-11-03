@@ -1,6 +1,6 @@
 import * as React from "react"
 import { cn } from "cn"
-import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
+import { DropdownMenu as DropdownMenuPrimitive, Slot } from "radix-ui"
 import { CheckIcon, ChevronRightIcon } from "lucide-react"
 
 function DropdownMenu({
@@ -127,6 +127,7 @@ function DropdownMenuRadioItem({
   className,
   children,
   inset,
+  asChild,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & {
   inset?: boolean
@@ -135,6 +136,7 @@ function DropdownMenuRadioItem({
     <DropdownMenuPrimitive.RadioItem
       data-slot="dropdown-menu-radio-item"
       data-inset={inset}
+      asChild={asChild}
       className={cn(
         "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
@@ -150,7 +152,8 @@ function DropdownMenuRadioItem({
           />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
-      {children}
+      {/* promptgraph: with asChild (an in-app <Link>), the child becomes the item and the indicator moves into it. */}
+      {asChild ? <Slot.Slottable>{children}</Slot.Slottable> : children}
     </DropdownMenuPrimitive.RadioItem>
   )
 }

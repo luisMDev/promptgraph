@@ -244,7 +244,7 @@ const GRAPHS = {
 
 // ---------------------------------------------------------------------------- scenes
 
-function makeScenes({ api, page, outDir }) {
+function makeScenes({ api, page, outDir, server }) {
   const shot = async (name) => {
     await sleep(400); // Let transitions (fitView, dialogs, toasts) settle.
     await page.screenshot({ path: path.join(outDir, name) });
@@ -260,8 +260,8 @@ function makeScenes({ api, page, outDir }) {
   const clickPane = async () => page.locator(".react-flow__pane").click({ position: { x: 40, y: 40 } });
 
   async function openGraph(id) {
-    await page.evaluate((g) => localStorage.setItem("pg_last_graph", g), id);
-    await page.reload();
+    // Every view has a URL (DESIGN §13.2); the session cookie from the login keeps the page signed in.
+    await page.goto(`${server.base}/r/${encodeURIComponent(server.repoId)}/graphs/${encodeURIComponent(id)}`);
     await page.getByRole("tab", { name: "Nodes" }).click();
     await blur();
     await node(GRAPHS[id].nodes[0].id).waitFor();
@@ -299,12 +299,12 @@ function makeScenes({ api, page, outDir }) {
   async function openRunFromHistory(runId) {
     const { run } = await api("GET", `/runs/${runId}`);
     // A run that finishes while shown opens its report: close it to get the canvas back.
-    const closeReport = page.getByRole("button", { name: "Close report" });
+    const closeReport = page.getByRole("link", { name: "Close report" });
     await closeReport.waitFor({ timeout: 3000 }).catch(() => {});
     if (await closeReport.isVisible()) await closeReport.click();
     await page.getByRole("tab", { name: /^Runs/ }).click();
-    await page.getByRole("button", { name: new RegExp(`^Open run #${run.shortId}`) }).click();
-    await page.getByRole("button", { name: "Back to editor" }).waitFor();
+    await page.getByRole("link", { name: new RegExp(`^Open run #${run.shortId}`) }).click();
+    await page.getByRole("link", { name: "Back to editor" }).waitFor();
     return run;
   }
 
@@ -408,11 +408,11 @@ function makeScenes({ api, page, outDir }) {
       await page.getByText("acme/demo-app#42").first().waitFor();
       await shot("m4-history.png");
 
-      await page.getByRole("button", { name: "Report", exact: true }).first().click();
+      await page.getByRole("link", { name: "Report", exact: true }).first().click();
       await page.getByText("Run report").waitFor();
       await page.getByText("Lanes", { exact: true }).waitFor();
       await shot("run-report.png");
-      await page.getByRole("button", { name: "Close report" }).click();
+      await page.getByRole("link", { name: "Close report" }).click();
 
       await page.getByRole("button", { name: /Clean up/ }).click();
       await page.getByText("Worktrees cleaned up.").waitFor();
@@ -495,7 +495,7 @@ async function main() {
     await page.goto(await server.loginUrl());
     await page.getByRole("button", { name: "Settings" }).waitFor();
 
-    const scenes = makeScenes({ api, page, outDir });
+    const scenes = makeScenes({ api, page, outDir, server });
     for (const id of opts.scenes) {
       log("scene", id);
       await scenes[id]();

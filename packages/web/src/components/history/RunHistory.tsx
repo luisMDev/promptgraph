@@ -1,14 +1,14 @@
-import { formatCostUsd, isFinalRunStatus, type RunSummary } from "@promptgraph/shared";
+import { formatCostUsd, isFinalRunStatus, webRoutes, type RunSummary } from "@promptgraph/shared";
 import { useState } from "react";
 import { formatDateTime, formatDuration, prLabel } from "../../lib/format";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
-import { cleanupRun } from "../../store/app-actions";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import { Link } from "../../lib/router/Link";
+import { cleanupRun } from "../../store/view/actions";
+import { useEditor, useRun, useView } from "../../store/view/context";
 import { Icons } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
-import { Button, StatusDot } from "../common/ui";
+import { Button, ButtonLink, StatusDot } from "../common/ui";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
@@ -16,21 +16,27 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 /**
  * Run history of the current graph: status, start, duration, cost; expand for lanes, branches, pushed state
- * and PR links; "Clean up" removes worktrees. Click opens the run read-only on the canvas.
+ * and PR links; "Clean up" removes worktrees. Each row links to the run (read-only on the canvas) and to its
+ * report, so Ctrl-click opens them in a new tab.
  */
 export function RunHistory() {
-  const runs = useRunStore((s) => s.runs);
-  const selectedRunId = useRunStore((s) => s.selectedRunId);
+  const view = useView();
+  const runs = useRun((s) => s.runs);
+  const selectedRunId = useRun((s) => s.selectedRunId);
+  const graphId = useEditor((s) => s.graphId);
 
   return (
     <div className="flex h-full flex-col">
-      <Button
-        variant="ghost"
-        onClick={() => void useRunStore.getState().selectRun(null)}
-        className={`mx-2 mt-2 justify-start px-2 text-[13px] font-normal ${selectedRunId === null ? "bg-accent text-accent-foreground" : "text-muted-foreground"}`}
-      >
-        Editor (current graph)
-      </Button>
+      {graphId && (
+        <ButtonLink
+          variant="ghost"
+          to={webRoutes.graph(view.repoId, graphId)}
+          aria-current={selectedRunId === null || undefined}
+          className={`mx-2 mt-2 justify-start px-2 text-[13px] font-normal ${selectedRunId === null ? "bg-accent text-accent-foreground" : "text-muted-foreground"}`}
+        >
+          Editor (current graph)
+        </ButtonLink>
+      )}
       <div className="mt-2 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
         {runs.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">No runs yet.</p>}
         {runs.map((run) => (
@@ -42,6 +48,7 @@ export function RunHistory() {
 }
 
 function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
+  const view = useView();
   const final = isFinalRunStatus(run.status);
   // A paused run (e.g. the server stopped) does not keep counting.
   const now = useNow(!final && run.status !== "paused");
@@ -50,35 +57,37 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const expandLabel = expanded ? "Hide lanes and PRs" : "Show lanes, branches and PRs";
   const [cleaning, setCleaning] = useState(false);
-  const open = () => void useRunStore.getState().selectRun(run.id);
+  const runPath = webRoutes.run(view.repoId, run.id);
   return (
-    // The card is clickable for the mouse; keyboard and screen readers use the header button, so the
+    // The card is clickable for the mouse; keyboard and screen readers use the header link, so the
     // nested controls (expand, Clean up) are not inside another interactive element.
     <Collapsible
       open={expanded}
       onOpenChange={(next) => {
-        if (next) void useRunStore.getState().loadRunInfo(run.id);
+        if (next) void view.run.getState().loadRunInfo(run.id);
         setExpanded(next);
       }}
-      onClick={open}
+      onClick={(e) => {
+        if (e.defaultPrevented) return;
+        if (e.ctrlKey || e.metaKey) view.openInNewTab(runPath, { activate: e.shiftKey });
+        else view.navigate(runPath);
+      }}
       className={`cursor-pointer rounded-md border px-2.5 py-2 text-xs ${selected ? "border-primary/30 bg-primary/5" : "hover:border-ring/40 hover:bg-accent/50"}`}
     >
       <div className="flex items-center gap-2">
-        <Button
+        <ButtonLink
           variant="ghost"
           size="xs"
+          to={runPath}
           aria-current={selected || undefined}
           aria-label={`Open run #${run.shortId} (${style.label})`}
           className="h-auto gap-2 px-0 text-xs font-normal hover:bg-transparent dark:hover:bg-transparent"
-          onClick={(e) => {
-            e.stopPropagation();
-            open();
-          }}
+          onClick={(e) => e.stopPropagation()}
         >
           <StatusDot className={`${style.dot} ${run.status === "running" ? "animate-pulse" : ""}`} />
           <span className={`font-medium ${style.text}`}>{style.label}</span>
           <span className="font-mono text-muted-foreground">#{run.shortId}</span>
-        </Button>
+        </ButtonLink>
         {attention > 0 && <Badge className="h-4 bg-amber-500/20 px-1.5 text-[10px] font-normal text-amber-700">{attention} waiting</Badge>}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -109,18 +118,16 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         <RunRowDetails runId={run.id} />
       </CollapsibleContent>
       <div className="mt-1.5 flex items-center gap-2">
-        <Button
+        <ButtonLink
           size="sm"
           variant="ghost"
           className="-ml-2"
+          to={webRoutes.report(view.repoId, run.id)}
           title="Results, changes, commits, cost and where the run stopped"
-          onClick={(e) => {
-            e.stopPropagation();
-            useUiStore.getState().openReport(run.id);
-          }}
+          onClick={(e) => e.stopPropagation()}
         >
           Report
-        </Button>
+        </ButtonLink>
         {final &&
           (run.cleanedUp ? (
             <span className="text-[11px] text-muted-foreground">Worktrees cleaned up</span>
@@ -133,7 +140,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
               onClick={async (e) => {
                 e.stopPropagation();
                 setCleaning(true);
-                await cleanupRun(run.id);
+                await cleanupRun(view, run.id);
                 setCleaning(false);
               }}
             >
@@ -147,7 +154,7 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
 
 /** Lanes (colour, branch, state, pushed) and PR links of a run. */
 function RunRowDetails({ runId }: { runId: string }) {
-  const info = useRunStore((s) => s.runInfo[runId]);
+  const info = useRun((s) => s.runInfo[runId]);
   if (!info) return <p className="mt-1.5 text-[11px] text-muted-foreground">Loading…</p>;
   return (
     <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>

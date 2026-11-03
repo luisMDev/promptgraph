@@ -1,44 +1,70 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, currentRepoId, repoIdFromPath, resetCurrentRepo } from "./rest";
+import { ApiRequestError, daemonApi, onUnauthorized, repoApi } from "./rest";
 
-describe("repository resolution (temporary, until the router)", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    resetCurrentRepo();
-  });
+describe("REST client", () => {
+  afterEach(() => vi.unstubAllGlobals());
 
-  it("reads the /r/<repoId> prefix", () => {
-    expect(repoIdFromPath("/r/demo-0123abcd")).toBe("demo-0123abcd");
-    expect(repoIdFromPath("/r/demo-0123abcd/graphs/x")).toBe("demo-0123abcd");
-    expect(repoIdFromPath("/")).toBeNull();
-    expect(repoIdFromPath("/r/%E0%A4%A")).toBeNull();
-  });
-
-  it("falls back to the most recently opened repository and scopes repository calls by it", async () => {
-    const calls: string[] = [];
-    vi.stubGlobal("fetch", async (url: string) => {
-      calls.push(url);
-      const body =
-        url === "/api/repos"
-          ? {
-              repos: [
-                { id: "old-00000001", addedAt: 1, lastOpenedAt: 5 },
-                { id: "new-00000002", addedAt: 2, lastOpenedAt: 9 },
-                { id: "never-00000003", addedAt: 3, lastOpenedAt: null },
-              ],
-            }
-          : { graphs: [] };
-      return new Response(JSON.stringify(body), { status: 200 });
+  function stubFetch(status = 200, body: unknown = {}) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(body), { status });
     });
-    expect(await currentRepoId()).toBe("new-00000002");
+    return calls;
+  }
+
+  it("scopes repository routes by the repository id and sends no credential of its own", async () => {
+    const calls = stubFetch(200, { graphs: [] });
+    const api = repoApi("demo-0123abcd");
     await api.listGraphs();
-    expect(calls).toEqual(["/api/repos", "/api/repos/new-00000002/graphs"]);
+    await api.listRuns("g1", 10);
+    await api.claudeCheck();
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/repos/demo-0123abcd/graphs",
+      "/api/repos/demo-0123abcd/runs?graph=g1&limit=10",
+      "/api/repos/demo-0123abcd/claude-setup/check",
+    ]);
+    for (const { init } of calls) {
+      expect(init.credentials).toBe("same-origin");
+      expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    }
+    expect(new Headers(calls[2]!.init.headers).get("Content-Type")).toBe("application/json");
   });
 
-  it("reports that no repository is registered, and retries later", async () => {
-    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ repos: [] }), { status: 200 }));
-    await expect(currentRepoId()).rejects.toThrow("No repository is registered");
-    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ repos: [{ id: "a-00000001", addedAt: 1, lastOpenedAt: null }] }), { status: 200 }));
-    expect(await currentRepoId()).toBe("a-00000001");
+  it("daemon routes: repos, add, remove with force, settings", async () => {
+    const calls = stubFetch(200, { repos: [] });
+    await daemonApi.repos();
+    await daemonApi.addRepo("~/code/demo");
+    await daemonApi.removeRepo("demo-0123abcd");
+    await daemonApi.removeRepo("demo-0123abcd", true);
+    await daemonApi.getSettings();
+    expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual([
+      "GET /api/repos",
+      "POST /api/repos",
+      "DELETE /api/repos/demo-0123abcd",
+      "DELETE /api/repos/demo-0123abcd?force=1",
+      "GET /api/settings",
+    ]);
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ path: "~/code/demo" });
+  });
+
+  it("throws the server's ApiError and reports 401 as signed out", async () => {
+    stubFetch(401, { error: "Unauthorized", code: "unauthorized" });
+    const signedOut = vi.fn();
+    const off = onUnauthorized(signedOut);
+    const err = await daemonApi.daemon().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiRequestError);
+    expect(err).toMatchObject({ status: 401, body: { code: "unauthorized" } });
+    expect(signedOut).toHaveBeenCalledTimes(1);
+    off();
+    stubFetch(422, { error: "Not a git repository", code: "not_a_git_repo" });
+    await expect(daemonApi.addRepo("/tmp")).rejects.toMatchObject({ status: 422, body: { code: "not_a_git_repo" } });
+    expect(signedOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves graphs with keepalive, so a save flushed on pagehide survives the page", async () => {
+    const calls = stubFetch(200, { graph: {}, hash: "h" });
+    await repoApi("demo-0123abcd").saveGraph({ id: "g1" } as never);
+    expect(calls[0]!.init).toMatchObject({ method: "PUT", keepalive: true });
   });
 });

@@ -1,5 +1,5 @@
 import type { ValidationIssue, ValidationResult } from "@promptgraph/shared";
-import { useEditorStore } from "../../store/editor-store";
+import { useView } from "../../store/view/context";
 import { cn } from "@/lib/utils";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
@@ -22,6 +22,7 @@ export function ValidationList({ validation }: { validation: ValidationResult })
 }
 
 function IssueRow({ issue, tone }: { issue: ValidationIssue; tone: "error" | "warning" }) {
+  const view = useView();
   const target = issue.nodeId || issue.edgeId;
   return (
     <li>
@@ -29,7 +30,7 @@ function IssueRow({ issue, tone }: { issue: ValidationIssue; tone: "error" | "wa
         variant="ghost"
         size="sm"
         disabled={!target}
-        onClick={() => useEditorStore.getState().setSelection(issue.nodeId ? [issue.nodeId] : [], issue.edgeId ? [issue.edgeId] : [])}
+        onClick={() => view.editor.getState().setSelection(issue.nodeId ? [issue.nodeId] : [], issue.edgeId ? [issue.edgeId] : [])}
         className={cn(
           "h-auto w-full items-start justify-start gap-2 rounded-md px-2 py-1.5 text-left text-xs font-normal whitespace-normal hover:bg-accent disabled:opacity-100",
           tone === "error" ? "text-red-700 hover:text-red-700" : "text-amber-700 hover:text-amber-700",

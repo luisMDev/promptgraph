@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DiffResponse, DiffScope } from "@promptgraph/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useUiStore, type DiffTarget } from "../../store/ui-store";
+import type { RepoApi } from "../../api/rest";
+import { useViewUi } from "../../store/view/context";
+import { createTestView, type TestView } from "../../store/view/test-view";
+import type { DiffTarget } from "../../store/view/ui-store";
 import { DiffDialog } from "./DiffDialog";
 
 const diff: DiffResponse = {
@@ -16,35 +19,31 @@ const diff: DiffResponse = {
 const nodeDiff = vi.fn(async (_id: string, _scope?: DiffScope) => diff);
 const laneDiff = vi.fn(async (_runId: string, _laneId: string) => diff);
 
-vi.mock("../../api/rest", async (orig) => {
-  const actual = await orig<typeof import("../../api/rest")>();
-  return {
-    ...actual,
-    api: {
-      diff: (id: string, scope?: DiffScope) => nodeDiff(id, scope),
-      laneDiff: (runId: string, laneId: string) => laneDiff(runId, laneId),
-    },
-  };
-});
+const api: Partial<RepoApi> = {
+  diff: (id: string, scope?: DiffScope) => nodeDiff(id, scope),
+  laneDiff: (runId: string, laneId: string) => laneDiff(runId, laneId),
+};
+let view: TestView;
+const useUiStore = { getState: () => view.ui.getState() };
 
 afterEach(() => {
   cleanup();
   nodeDiff.mockClear();
   laneDiff.mockClear();
-  useUiStore.getState().openDiff(null);
 });
 
 const target: DiffTarget = { kind: "node", nodeRunId: "nr1", title: "Implement · changes" };
 
 /** Renders the dialog the way App does: mounted while the ui-store holds a diff target. */
 function Host() {
-  const t = useUiStore((s) => s.diffTarget);
+  const t = useViewUi((s) => s.diffTarget);
   return t ? <DiffDialog target={t} /> : null;
 }
 
 function open(t: DiffTarget = target) {
-  useUiStore.getState().openDiff(t);
-  render(<Host />);
+  view = createTestView({ api });
+  view.ui.getState().openDiff(t);
+  view.render(<Host />);
 }
 
 describe("DiffDialog", () => {

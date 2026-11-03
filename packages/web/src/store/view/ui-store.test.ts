@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { MIN_DRAWER_HEIGHT, clampDrawerHeight, useUiStore } from "./ui-store";
+import { MIN_DRAWER_HEIGHT, clampDrawerHeight, createViewUiStore, type ViewUiStoreApi } from "./ui-store";
 
 describe("ui store", () => {
-  beforeEach(() => useUiStore.getState().closeAllTerminals());
+  let useUiStore: ViewUiStoreApi;
+  beforeEach(() => {
+    useUiStore = createViewUiStore();
+  });
 
   it("opens terminals as tabs without duplicates and activates them", () => {
     const ui = useUiStore.getState();
@@ -26,6 +29,12 @@ describe("ui store", () => {
     ui.closeTerminal("p3");
     ui.closeTerminal("p1");
     expect(useUiStore.getState()).toMatchObject({ terminalTabs: [], activeTerminal: null, drawerOpen: false });
+  });
+
+  it("is one store per view", () => {
+    const other = createViewUiStore();
+    useUiStore.getState().openTerminal("p1", { title: "A", nodeRunId: null });
+    expect(other.getState().terminalTabs).toEqual([]);
   });
 
   it("clamps the drawer height", () => {

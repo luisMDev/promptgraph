@@ -4,6 +4,7 @@ import { Checkbox as UiCheckbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { Link, type LinkProps } from "../../lib/router/Link";
 import { Icons } from "./icons";
 
 /**
@@ -37,6 +38,15 @@ export function Button({
   ...props
 }: Omit<ComponentProps<"button">, "type"> & { variant?: Variant; size?: Size; type?: "button" | "submit" | "reset" }) {
   return <UiButton type={type} variant={VARIANTS[variant]} size={SIZES[size]} {...props} />;
+}
+
+/** An in-app link (`<Link>`, so modified clicks open a tab) styled as a Button. */
+export function ButtonLink({ variant = "secondary", size = "md", className, ...props }: LinkProps & { variant?: Variant; size?: Size }) {
+  return (
+    <UiButton asChild variant={VARIANTS[variant]} size={SIZES[size]} className={className}>
+      <Link {...props} />
+    </UiButton>
+  );
 }
 
 /**

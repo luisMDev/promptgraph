@@ -1,33 +1,35 @@
-import { useAppStore } from "../../store/app-store";
+import { webRoutes } from "@promptgraph/shared";
+import { Link } from "../../lib/router/Link";
+import { useRepoInfo } from "../../store/view/context";
 import { Separator } from "../ui/separator";
 import { ClaudeSetupButton } from "../claude/ClaudeSetupWizard";
 import { SettingsMenu } from "../settings/SettingsMenu";
 import { GraphSelector } from "./GraphSelector";
 import { PendingApprovals, RunSelector } from "./RunControls";
 
-/** Top bar (§13): logo, graph selector, run selector, pending approvals, settings. Run/Cancel and the save state float over the canvas. */
+/**
+ * Top bar (§13): logo and repository name (both link to Home), graph selector, run selector, pending approvals,
+ * settings. Run/Cancel and the save state float over the canvas.
+ */
 export function Header() {
-  const repo = useAppStore((s) => s.repo);
-  const connected = useAppStore((s) => s.connected);
-  const sessionExpired = useAppStore((s) => s.sessionExpired);
+  const repo = useRepoInfo();
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card/80 px-3 backdrop-blur">
       <div className="flex items-center gap-2 pr-1">
-        <Logo />
-        <span className="text-[15px] font-semibold tracking-tight text-foreground">promptgraph</span>
-        {repo && <span className="hidden max-w-40 truncate text-xs text-muted-foreground lg:inline" title={repo.path}>{repo.name}</span>}
+        <Link to={webRoutes.home()} className="flex items-center gap-2" aria-label="promptgraph Home">
+          <Logo />
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">promptgraph</span>
+        </Link>
+        {repo && (
+          <Link to={webRoutes.home()} className="hidden max-w-40 truncate text-xs text-muted-foreground hover:text-foreground hover:underline lg:inline" title={`${repo.path} — all repositories`}>
+            {repo.name}
+          </Link>
+        )}
       </div>
       <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
       <GraphSelector />
       <RunSelector />
       <div className="ml-auto flex items-center gap-2">
-        {sessionExpired ? (
-          <span role="alert" className="rounded bg-red-500/10 px-2 py-1 text-xs text-red-700">
-            The promptgraph server was restarted: open the new URL it printed in your terminal.
-          </span>
-        ) : (
-          !connected && <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-700">Reconnecting…</span>
-        )}
         <PendingApprovals />
         <ClaudeSetupButton />
         <SettingsMenu />
@@ -37,7 +39,7 @@ export function Header() {
 }
 
 /** App logo: a staircase of three joined nodes on a white tile (source artwork in docs/assets/logo.png). */
-function Logo() {
+export function Logo() {
   return (
     <svg viewBox="0 0 100 100" width="24" height="24" aria-hidden="true" className="rounded-[5px] shadow-soft ring-1 ring-border">
       <rect width="100" height="100" rx="20" fill="#fff" />

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useRef, useState, type PointerEvent } from "react";
-import { closeTerminalTab, reopenSession } from "../../store/app-actions";
-import { useRunStore } from "../../store/run-store";
-import { clampDrawerHeight, useUiStore } from "../../store/ui-store";
+import { closeTerminalTab, reopenSession } from "../../store/view/actions";
+import { useRun, useTabActive, useView, useViewUi } from "../../store/view/context";
+import { clampDrawerHeight } from "../../store/view/ui-store";
 import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons } from "../common/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -14,11 +14,14 @@ const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default:
 
 /** Bottom drawer: resizable, one tab per open terminal; all terminals stay mounted to keep their state. */
 export function TerminalDrawer() {
-  const tabs = useUiStore((s) => s.terminalTabs);
-  const active = useUiStore((s) => s.activeTerminal);
-  const meta = useUiStore((s) => s.tabMeta);
-  const open = useUiStore((s) => s.drawerOpen);
-  const height = useUiStore((s) => s.drawerHeight);
+  const view = useView();
+  const tabs = useViewUi((s) => s.terminalTabs);
+  const active = useViewUi((s) => s.activeTerminal);
+  const meta = useViewUi((s) => s.tabMeta);
+  const open = useViewUi((s) => s.drawerOpen);
+  const height = useViewUi((s) => s.drawerHeight);
+  // A hidden view never fits, focuses or resizes its terminals (DESIGN §13.4).
+  const tabActive = useTabActive();
   const [states, setStates] = useState<Record<string, PtyState>>({});
   const dragStart = useRef<{ y: number; h: number } | null>(null);
 
@@ -33,7 +36,7 @@ export function TerminalDrawer() {
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!dragStart.current) return;
     const next = dragStart.current.h + (dragStart.current.y - e.clientY);
-    useUiStore.getState().setDrawerHeight(clampDrawerHeight(next, window.innerHeight));
+    view.ui.getState().setDrawerHeight(clampDrawerHeight(next, window.innerHeight));
   };
   const onPointerUp = () => {
     dragStart.current = null;
@@ -61,7 +64,7 @@ export function TerminalDrawer() {
               variant="ghost"
               size="xs"
               className="gap-1.5 px-1.5 text-muted-foreground"
-              onClick={() => useUiStore.getState().setDrawerOpen(!open)}
+              onClick={() => view.ui.getState().setDrawerOpen(!open)}
               aria-label={open ? "Collapse" : "Expand"}
             >
               <Icons.terminal />
@@ -88,7 +91,7 @@ export function TerminalDrawer() {
                   variant="ghost"
                   size="xs"
                   className="gap-1.5 pl-2.5 font-normal text-inherit hover:bg-transparent hover:text-inherit dark:hover:bg-transparent"
-                  onClick={() => useUiStore.getState().setActiveTerminal(ptyId)}
+                  onClick={() => view.ui.getState().setActiveTerminal(ptyId)}
                 >
                   <span className={`size-1.5 rounded-full ${st?.phase === "live" ? "bg-green-500" : st?.phase === "error" ? "bg-red-500" : "bg-stone-400"}`} />
                   <span className="max-w-48 truncate">{meta[ptyId]?.title ?? ptyId}</span>
@@ -100,7 +103,7 @@ export function TerminalDrawer() {
                       size="icon-xs"
                       aria-label="Close terminal"
                       className="size-5 text-muted-foreground opacity-60 group-hover:opacity-100 hover:text-foreground"
-                      onClick={() => void closeTerminalTab(ptyId)}
+                      onClick={() => void closeTerminalTab(view, ptyId)}
                     >
                       <Icons.x />
                     </Button>
@@ -117,7 +120,7 @@ export function TerminalDrawer() {
         {tabs.map((ptyId) => (
           <div key={ptyId} className={ptyId === active ? "absolute inset-0" : "hidden"}>
             <Suspense fallback={<p className="p-3 text-xs text-muted-foreground">Loading terminal…</p>}>
-              <TerminalView ptyId={ptyId} visible={open && ptyId === active} onState={(s) => setState(ptyId, s)} />
+              <TerminalView ptyId={ptyId} visible={tabActive && open && ptyId === active} onState={(s) => setState(ptyId, s)} />
             </Suspense>
           </div>
         ))}
@@ -127,7 +130,8 @@ export function TerminalDrawer() {
 }
 
 function TabStatus({ state, nodeRunId, title }: { state: PtyState | undefined; nodeRunId: string | null; title: string }) {
-  const nodeRun = useRunStore((s) => (nodeRunId ? s.detail?.nodeRuns.find((n) => n.id === nodeRunId) : undefined));
+  const view = useView();
+  const nodeRun = useRun((s) => (nodeRunId ? s.detail?.nodeRuns.find((n) => n.id === nodeRunId) : undefined));
   // Any node with a Claude session, merges that resolved conflicts with Claude included.
   const canReopen = state?.phase !== "live" && !!nodeRun?.sessionId;
   return (
@@ -138,7 +142,7 @@ function TabStatus({ state, nodeRunId, title }: { state: PtyState | undefined; n
       {state?.phase === "connecting" && <span className="text-muted-foreground">Connecting…</span>}
       {state?.phase === "error" && <span className="text-red-600">{state.message}</span>}
       {canReopen && nodeRunId && (
-        <Button size="sm" onClick={() => void reopenSession(nodeRunId, title)} title="claude --resume in a new terminal (not part of the run)">
+        <Button size="sm" onClick={() => void reopenSession(view, nodeRunId, title)} title="claude --resume in a new terminal (not part of the run)">
           Reopen session
         </Button>
       )}
