@@ -4,9 +4,11 @@ interface Props {
   description: string;
   /** Extra JSON-LD objects rendered as structured data. */
   jsonLd?: Record<string, unknown>[];
+  /** Keep the page out of search results (e.g. the 404 page). */
+  noindex?: boolean;
 }
 
-const { title, description, jsonLd = [] } = Astro.props;
+const { title, description, jsonLd = [], noindex = false } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
 const ogImage = new URL(`${base}/og.png`, Astro.site).href;
@@ -20,8 +22,8 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
-    <meta name="robots" content="index, follow, max-image-preview:large" />
-    <meta name="theme-color" content="#f6f2ed" />
+    <meta name="robots" content={noindex ? 'noindex' : 'index, follow, max-image-preview:large'} />
+    <meta name="theme-color" content="#fcf4f0" />
     <meta name="color-scheme" content="light" />
 
     <link rel="icon" type="image/svg+xml" href={`${base}/favicon.svg`} />
@@ -53,13 +55,13 @@ const ogImage = new URL(`${base}/og.png`, Astro.site).href;
 
 <style is:global>
   :root {
-    --bg: #f6f2ed;
-    --bg-soft: #efe9e2;
+    --bg: #fcf4f0;
+    --bg-soft: #f5ece6;
     --surface: #fffdfa;
     --ink: #0a0a0a;
     --ink-2: #3d3a36;
     --muted: #6b665f;
-    --line: #e2dbd2;
+    --line: #e9dfd7;
     --blue: #2563eb;
     --green: #16a34a;
     --amber: #d97706;
