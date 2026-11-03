@@ -1,0 +1,25 @@
+{
+  "name": "@promptgraph/video",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "record": "node scripts/record.mjs",
+    "audio": "node scripts/make-audio.mjs",
+    "studio": "node scripts/make-audio.mjs && remotion studio src/index.ts",
+    "render": "node scripts/make-audio.mjs && remotion render src/index.ts launch out/promptgraph-launch.mp4 --codec h264 --crf 18 --pixel-format yuv420p --audio-codec aac",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "render:vertical": "node scripts/make-audio.mjs && remotion render src/index.ts launch-vertical out/promptgraph-launch-vertical.mp4 --codec h264 --crf 18 --pixel-format yuv420p --audio-codec aac"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.540",
+    "@remotion/fonts": "4.0.540",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "4.0.540"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}

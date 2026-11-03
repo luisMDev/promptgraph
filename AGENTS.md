@@ -26,6 +26,8 @@ packages/
   server/   # CLI entry (bin: promptgraph), engine, runners, workspaces, store, HTTP/WS
   web/      # React app; built assets are served by the server
 site/       # Astro landing page, deployed to GitHub Pages by .github/workflows/pages.yml
+video/      # Remotion launch video, recorded from the real app (video/README.md)
+scripts/screenshots/  # docs screenshots (capture.mjs) and the demo plumbing shared with video/
 plugins/
   promptgraph/  # Claude Code plugin: .mcp.json (runs `promptgraph mcp`, packages/server/src/mcp) + skills
 .claude-plugin/marketplace.json
