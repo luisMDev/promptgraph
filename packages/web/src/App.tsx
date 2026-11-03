@@ -1,10 +1,12 @@
-import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas } from "./components/canvas/Canvas";
 import { Banners } from "./components/common/Banners";
 import { PromptDialog } from "./components/common/PromptDialog";
 import { Toasts } from "./components/common/Toasts";
 import { Icons } from "./components/common/icons";
 import { Button } from "./components/common/ui";
+import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider } from "./components/ui/sidebar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Header } from "./components/header/Header";
 import { RunHistory } from "./components/history/RunHistory";
 import { Inspector } from "./components/inspector/Inspector";
@@ -26,6 +28,7 @@ export function App() {
   const bootError = useAppStore((s) => s.bootError);
   const booted = useAppStore((s) => s.repo !== null);
   const reportRunId = useUiStore((s) => s.reportRunId);
+  const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   useAutoOpenReport();
 
   useEffect(() => {
@@ -43,12 +46,20 @@ export function App() {
   if (bootError) return <FullScreenMessage title="Cannot reach the promptgraph server" detail={bootError} />;
   if (!booted) return <FullScreenMessage title="Loading…" />;
 
+  // The sidebar provider wraps the whole shell so the header's SidebarTrigger can toggle the left panel.
   return (
-    <div className="flex h-full flex-col bg-zinc-950 text-zinc-200">
+    <SidebarProvider
+      open={sidebarOpen}
+      onOpenChange={(open) => useUiStore.getState().setSidebarOpen(open)}
+      className="h-full min-h-0 flex-col bg-background text-foreground"
+      style={{ "--sidebar-width": "15rem" } as CSSProperties}
+    >
       <Header />
       <Banners />
       {reportRunId && <RunReport runId={reportRunId} />}
-      <div className={`flex min-h-0 flex-1 ${reportRunId ? "hidden" : ""}`}>
+      {/* `relative` + `overflow-hidden`: the left Sidebar is positioned against this row (not the viewport), so it
+          always sits below the header and any banners, and slides out of view when collapsed. */}
+      <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
@@ -56,14 +67,15 @@ export function App() {
           </div>
           <TerminalDrawer />
         </main>
-        <aside className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-900/60">
+        {/* nokey: Backspace/Delete on the inspector's buttons, checkboxes and tabs must not delete canvas items. */}
+        <aside className="nokey w-80 shrink-0 border-l bg-card/60">
           <Inspector />
         </aside>
       </div>
       <ApprovalGate />
       <DiffGate />
       <Toasts />
-    </div>
+    </SidebarProvider>
   );
 }
 
@@ -92,26 +104,38 @@ function LeftSidebar() {
   const runMode = useRunStore((s) => s.selectedRunId !== null);
   const runs = useRunStore((s) => s.runs.length);
   const shown: LeftPanel = runMode ? "history" : panel;
-  const tab = (id: LeftPanel, label: string) => (
-    <button
-      type="button"
-      onClick={() => {
-        useUiStore.getState().setLeftPanel(id);
-        if (id === "palette" && runMode) void useRunStore.getState().selectRun(null);
-      }}
-      className={`flex-1 border-b-2 py-2 text-xs font-medium ${shown === id ? "border-blue-500 text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
-    >
-      {label}
-    </button>
-  );
+  const choose = (id: LeftPanel) => {
+    useUiStore.getState().setLeftPanel(id);
+    if (id === "palette" && runMode) void useRunStore.getState().selectRun(null);
+  };
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60">
-      <div className="flex shrink-0 border-b border-zinc-800">
-        {tab("palette", "Nodes")}
-        {tab("history", `Runs${runs ? ` (${runs})` : ""}`)}
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">{shown === "palette" ? <Palette /> : <RunHistory />}</div>
-    </aside>
+    // shadcn's desktop sidebar container is `fixed inset-y-0 h-svh`; it is re-anchored to the (relative) layout row
+    // with `absolute h-full` because the header + banners above it have no fixed height.
+    <Sidebar collapsible="offcanvas" className="nokey absolute h-full">
+      {/* Manual activation: arrowing across the tabs must not leave run mode; Enter/Space/click select. */}
+      <Tabs value={shown} activationMode="manual" onValueChange={(v) => choose(v as LeftPanel)} className="min-h-0 flex-1 gap-0">
+        <SidebarHeader className="border-b">
+          <TabsList className="w-full">
+            <TabsTrigger value="palette" className="text-xs">
+              Nodes
+            </TabsTrigger>
+            {/* Radix only fires onValueChange on change; in run mode "Runs" is already shown even when leftPanel is
+                "palette", so a click must still record the choice (as the hand-rolled tab did). */}
+            <TabsTrigger value="history" className="text-xs" onClick={() => useUiStore.getState().setLeftPanel("history")}>
+              {`Runs${runs ? ` (${runs})` : ""}`}
+            </TabsTrigger>
+          </TabsList>
+        </SidebarHeader>
+        <SidebarContent>
+          <TabsContent value="palette" className="min-h-0">
+            <Palette />
+          </TabsContent>
+          <TabsContent value="history" className="min-h-0">
+            <RunHistory />
+          </TabsContent>
+        </SidebarContent>
+      </Tabs>
+    </Sidebar>
   );
 }
 
@@ -129,8 +153,8 @@ function CanvasArea() {
         <div className="max-w-lg space-y-2 text-center">
           <Icons.alert className="mx-auto text-2xl text-red-400" />
           <p className="text-sm font-medium text-red-300">This graph cannot be loaded</p>
-          <pre className="rounded-md bg-zinc-900 p-3 text-left text-xs whitespace-pre-wrap text-zinc-400">{loadError}</pre>
-          <p className="text-xs text-zinc-500">Fix the JSON file in .promptgraph/graphs/ or delete it from the graph menu.</p>
+          <pre className="rounded-md bg-muted p-3 text-left text-xs whitespace-pre-wrap text-muted-foreground">{loadError}</pre>
+          <p className="text-xs text-muted-foreground">Fix the JSON file in .promptgraph/graphs/ or delete it from the graph menu.</p>
         </div>
       </Centered>
     );
@@ -139,7 +163,7 @@ function CanvasArea() {
     return (
       <Centered>
         <div className="space-y-3 text-center">
-          <p className="text-sm text-zinc-400">{graphCount ? "Select a graph from the menu above." : "No graphs in this repository yet."}</p>
+          <p className="text-sm text-muted-foreground">{graphCount ? "Select a graph from the menu above." : "No graphs in this repository yet."}</p>
           <Button variant="primary" onClick={() => setCreating(true)}>
             <Icons.plus /> New graph
           </Button>
@@ -152,15 +176,15 @@ function CanvasArea() {
 }
 
 function Centered({ children }: { children: ReactNode }) {
-  return <div className="flex h-full items-center justify-center p-6 text-zinc-500">{children}</div>;
+  return <div className="flex h-full items-center justify-center p-6 text-muted-foreground">{children}</div>;
 }
 
 function FullScreenMessage({ title, detail }: { title: string; detail?: string }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 bg-zinc-950 p-6 text-center">
-      <p className="text-sm font-medium text-zinc-200">{title}</p>
-      {detail && <p className="max-w-lg text-xs text-zinc-500">{detail}</p>}
-      {detail && <p className="max-w-lg text-xs text-zinc-500">Open the URL printed by the promptgraph command (it carries the session token).</p>}
+    <div className="flex h-full flex-col items-center justify-center gap-2 bg-background p-6 text-center">
+      <p className="text-sm font-medium text-foreground">{title}</p>
+      {detail && <p className="max-w-lg text-xs text-muted-foreground">{detail}</p>}
+      {detail && <p className="max-w-lg text-xs text-muted-foreground">Open the URL printed by the promptgraph command (it carries the session token).</p>}
     </div>
   );
 }

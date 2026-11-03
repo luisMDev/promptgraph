@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { RepoInfoResponse } from "@promptgraph/shared";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { linearGraph, nodeRunOf, runDetailOf } from "./test-fixtures";
 
@@ -65,5 +66,46 @@ describe("App (smoke)", () => {
 
     fireEvent.click(screen.getByText("Back to editor"));
     expect(await screen.findByText("Graph settings")).toBeTruthy();
+  });
+
+  it("switches the left panel with the tabs and collapses it with the sidebar trigger", async () => {
+    const { useRunStore } = await import("./store/run-store");
+    const { useUiStore } = await import("./store/ui-store");
+    await act(() => useRunStore.getState().selectRun(null));
+    act(() => useUiStore.getState().setLeftPanel("palette"));
+    const user = userEvent.setup();
+    const { App } = await import("./App");
+    const { container } = render(<App />);
+    await screen.findByText("Implement");
+
+    const runsTab = screen.getByRole("tab", { name: /^Runs/ });
+    expect(screen.getByRole("tab", { name: "Nodes" }).getAttribute("aria-selected")).toBe("true");
+    await user.click(runsTab);
+    expect(runsTab.getAttribute("aria-selected")).toBe("true");
+    expect(useUiStore.getState().leftPanel).toBe("history");
+    expect(screen.getByRole("tabpanel").textContent).toContain("No runs yet.");
+
+    const sidebar = container.querySelector('[data-slot="sidebar"]');
+    const panel = container.querySelector('[data-slot="sidebar-container"]');
+    const trigger = screen.getByRole("button", { name: "Toggle sidebar" });
+    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(panel?.hasAttribute("inert")).toBe(false);
+
+    await user.click(trigger);
+    expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    // Collapsed off-canvas: out of the Tab order and the accessibility tree.
+    expect(panel?.hasAttribute("inert")).toBe(true);
+
+    await user.click(trigger);
+    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+
+    // Asking for a panel (e.g. "Open run history…" in the run menu) re-expands a collapsed sidebar.
+    await user.click(trigger);
+    expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
+    act(() => useUiStore.getState().setLeftPanel("history"));
+    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+    expect(panel?.hasAttribute("inert")).toBe(false);
   });
 });

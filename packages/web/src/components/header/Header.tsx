@@ -1,23 +1,32 @@
 import { useAppStore } from "../../store/app-store";
 import { useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
+import { Separator } from "../ui/separator";
+import { SidebarTrigger } from "../ui/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { SettingsMenu } from "../settings/SettingsMenu";
 import { GraphSelector } from "./GraphSelector";
 import { PendingApprovals, RunControls, RunSelector } from "./RunControls";
 
-/** Top bar (§13): graph selector, run selector, save state, Run/Cancel, pending approvals, settings. */
+/** Top bar (§13): sidebar toggle, graph selector, run selector, save state, Run/Cancel, pending approvals, settings. */
 export function Header() {
   const repo = useAppStore((s) => s.repo);
   const connected = useAppStore((s) => s.connected);
   const sessionExpired = useAppStore((s) => s.sessionExpired);
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-3">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card px-3">
       <div className="flex items-center gap-2 pr-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <SidebarTrigger aria-label="Toggle sidebar" className="-ml-1" />
+          </TooltipTrigger>
+          <TooltipContent>Toggle sidebar</TooltipContent>
+        </Tooltip>
         <Logo />
-        <span className="text-sm font-semibold tracking-tight text-zinc-100">promptgraph</span>
-        {repo && <span className="hidden max-w-40 truncate text-xs text-zinc-500 lg:inline" title={repo.path}>{repo.name}</span>}
+        <span className="text-sm font-semibold tracking-tight text-foreground">promptgraph</span>
+        {repo && <span className="hidden max-w-40 truncate text-xs text-muted-foreground lg:inline" title={repo.path}>{repo.name}</span>}
       </div>
-      <div className="h-5 w-px bg-zinc-800" />
+      <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
       <GraphSelector />
       <RunSelector />
       <SaveState />
@@ -45,7 +54,7 @@ function SaveState() {
   const runMode = useRunStore((s) => s.selectedRunId !== null);
   if (!hasGraph || runMode) return null;
   if (saveError) return <span className="max-w-64 truncate text-xs text-red-300" title={saveError}>{saveError}</span>;
-  return <span className="text-xs text-zinc-500">{saving || dirty ? "Saving…" : "Saved"}</span>;
+  return <span className="text-xs text-muted-foreground">{saving || dirty ? "Saving…" : "Saved"}</span>;
 }
 
 function Logo() {
