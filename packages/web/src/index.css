@@ -141,6 +141,14 @@ body {
   padding: 6px 8px;
 }
 
+/*
+ * xterm.css paints the viewport black, and it spans the padding the canvas leaves empty: let the container's
+ * terminal background (TerminalView) show through instead of black gutters on both sides.
+ */
+.pg-terminal .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 /* Replays keep the PTY's cols/rows: the xterm sizes to its content and the tab scrolls. */
 .pg-terminal-fixed .xterm {
   height: auto;

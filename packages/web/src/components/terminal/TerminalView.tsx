@@ -7,9 +7,11 @@ import { keepAlternateScreen } from "../../lib/terminal-replay";
 
 export type PtyState = { phase: "connecting" } | { phase: "live" } | { phase: "replay"; exitCode?: number | null } | { phase: "error"; message: string };
 
+/** Claude Code's TUI is designed for a dark terminal: keep it dark in both themes, in the near-black of the logo. */
+const TERMINAL_BG = "#111113";
+
 const THEME = {
-  // Claude Code's TUI is designed for a dark terminal: keep it dark in both themes, in the near-black of the logo.
-  background: "#111113",
+  background: TERMINAL_BG,
   foreground: "#f4f4f5",
   cursor: "#f4f4f5",
   selectionBackground: "#3f3f46",
@@ -120,7 +122,7 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
   }, [visible, term]);
 
   return (
-    <div className={`h-full w-full bg-[#111113] ${fixedSize ? "overflow-auto" : ""} ${visible ? "" : "hidden"}`}>
+    <div className={`h-full w-full ${fixedSize ? "overflow-auto" : ""} ${visible ? "" : "hidden"}`} style={{ backgroundColor: TERMINAL_BG }}>
       <div ref={containerRef} className={`pg-terminal ${fixedSize ? "pg-terminal-fixed h-max w-max" : "h-full w-full"}`} />
     </div>
   );
