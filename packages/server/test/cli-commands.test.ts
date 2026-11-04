@@ -40,6 +40,7 @@ describe("cli commands", () => {
       },
       serverCommand: [],
       version: VERSION,
+      runtimeRoot: `${t.dir}/not-a-runtime`,
       out,
       err,
       clock,

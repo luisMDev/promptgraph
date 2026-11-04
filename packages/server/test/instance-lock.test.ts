@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { daemonLockName, daemonPidPath, DaemonLock, isDaemonLock, LegacyRepoLocks } from "../src/config/instance-lock.js";
+import { daemonLockName, daemonPidPath, DaemonLock, isDaemonLock, LegacyRepoLocks, namedLockName, SocketLock, withSocketLock } from "../src/config/instance-lock.js";
 import { acquirePreM7Lock } from "./support/legacy-lock.js";
 import { getPaths, type PgPaths } from "../src/config/paths.js";
 import { repoKey } from "../src/config/repo-key.js";
@@ -163,6 +163,43 @@ describe("LegacyRepoLocks (DESIGN §4.4)", () => {
     }
     expect(fs.readFileSync(file, "utf8")).toBe(live);
     expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file)]);
+  });
+});
+
+describe("SocketLock (named abstract-socket locks, shared by the daemon and the desktop runtime)", () => {
+  it("names a lock by kind, uid and the realpath of a directory", () => {
+    const paths = setup();
+    fs.mkdirSync(paths.home, { recursive: true });
+    const link = `${paths.home}-link`;
+    fs.symlinkSync(paths.home, link);
+    cleanups.push(() => fs.unlinkSync(link));
+    expect(namedLockName("runtime", paths.home)).toBe(namedLockName("runtime", link));
+    expect(namedLockName("runtime", paths.home)).toMatch(/^\0promptgraph-runtime-\d+-[0-9a-f]{16}$/);
+    expect(namedLockName(null, paths.home)).toBe(daemonLockName(paths));
+  });
+
+  it("serialises holders and times out while held", async () => {
+    const paths = setup();
+    fs.mkdirSync(paths.home, { recursive: true });
+    const name = namedLockName("test", paths.home);
+    const held = await SocketLock.tryAcquire(name);
+    expect(held).not.toBeNull();
+    expect(await SocketLock.tryAcquire(name)).toBeNull();
+    expect(await SocketLock.isHeld(name)).toBe(true);
+    await expect(SocketLock.acquire(name, { timeoutMs: 150, pollMs: 20, what: "the test lock" })).rejects.toThrow("the test lock is held by another process");
+    await held!.release();
+    expect(await SocketLock.isHeld(name)).toBe(false);
+    const order: string[] = [];
+    await Promise.all(
+      ["a", "b", "c"].map((id) =>
+        withSocketLock(name, { timeoutMs: 5000 }, async () => {
+          order.push(`${id}+`);
+          await new Promise((r) => setTimeout(r, 30));
+          order.push(`${id}-`);
+        }),
+      ),
+    );
+    for (let i = 0; i < order.length; i += 2) expect(order[i]!.slice(0, 1)).toBe(order[i + 1]!.slice(0, 1));
   });
 });
 

@@ -10,6 +10,7 @@ import {
 import { claudeBin } from "../config/child-env.js";
 import { SERVER_PACKAGE_DIR } from "../config/paths.js";
 import { VERSION } from "../config/version.js";
+import { readManifest } from "../desktop/runtime.js";
 import { errorMessage, tailLines } from "../util/text.js";
 
 /** Quotes one shell word: plain words stay bare, anything else is single-quoted. */
@@ -23,24 +24,53 @@ export function bundledMarketplaceRoot(serverPackageDir: string = SERVER_PACKAGE
   return fs.existsSync(path.join(root, ".claude-plugin", "marketplace.json")) ? root : null;
 }
 
+export interface CliCommandInputs {
+  /** The directory the daemon's code runs from (`SERVER_PACKAGE_DIR/..`: a runtime root when bundled). */
+  serverRoot?: string;
+  /** Node binary running the CLI (process.execPath). */
+  nodePath: string;
+  /** Entry point of the daemon's promptgraph CLI (process.argv[1]). */
+  cliEntry: string;
+}
+
+/**
+ * The command that runs this promptgraph CLI for the setup wizard (DESIGN §19.5): the stable launcher
+ * `<parent>/current/bin/promptgraph` when `serverRoot` is an installed desktop runtime (a valid
+ * manifest.json) and `<parent>/current` resolves to that very directory, so the command survives
+ * updates; else `[nodePath, cliEntry]`. Derived from the daemon's own location only: no environment
+ * variable is read, so an inherited `PG_CLI_PATH` (or any other) cannot put a foreign path into
+ * `claude mcp add`.
+ */
+export function cliCommandFor({ serverRoot = path.resolve(SERVER_PACKAGE_DIR, ".."), nodePath, cliEntry }: CliCommandInputs): string[] {
+  try {
+    if (readManifest(serverRoot)) {
+      const parent = path.dirname(path.resolve(serverRoot));
+      const current = path.join(parent, "current");
+      if (fs.realpathSync(current) === fs.realpathSync(serverRoot)) return [path.join(current, "bin", "promptgraph")];
+    }
+  } catch {
+    // No `current`, or it does not resolve: the versioned paths below.
+  }
+  return [nodePath, cliEntry];
+}
+
 export interface SetupInputs {
   repoPath: string;
-  /** Entry point of the daemon's promptgraph CLI (process.argv[1]); `promptgraph mcp` re-runs it. */
-  cliEntry: string;
-  /** Node binary running the CLI. */
-  nodePath: string;
+  /** cliCommandFor(...): argv that runs the daemon's promptgraph CLI; `mcp` is appended. */
+  cliCommand: readonly string[];
   marketplaceRoot: string | null;
   version?: string;
 }
 
 /** Everything the setup wizard shows, derived from the running daemon (no side effects). */
 export function buildClaudeSetup(input: SetupInputs): ClaudeSetupResponse {
-  const { cliEntry, nodePath, marketplaceRoot } = input;
-  const mcpAddCommand = ["claude", "mcp", "add", "promptgraph", "--", nodePath, cliEntry, "mcp"].map(shellQuote).join(" ");
+  const { cliCommand, marketplaceRoot } = input;
+  const mcpAddCommand = ["claude", "mcp", "add", "promptgraph", "--", ...cliCommand, "mcp"].map(shellQuote).join(" ");
   return {
     version: input.version ?? VERSION,
     repoPath: input.repoPath,
-    binPath: cliEntry,
+    // What PROMPTGRAPH_BIN must name: an executable that takes `mcp` (the launcher, or the CLI entry).
+    binPath: cliCommand.at(-1) ?? "promptgraph",
     mcpAddCommand,
     plugin: {
       available: marketplaceRoot !== null,

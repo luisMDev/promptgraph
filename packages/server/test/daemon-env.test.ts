@@ -93,6 +93,34 @@ describe("daemonEnv (DESIGN §4.1 item 5)", () => {
     expect(stripRuntimeEnv({ A: "1", APPIMAGE: "x", WEBKIT_DISABLE: "1", CLAUDE_CODE_SESSION_ID: "s", MY_HERMETIC_MODE: "1", PG_HOME: "/h" })).toEqual({ A: "1", PG_HOME: "/h" });
   });
 
+  it("stripRuntimeEnv drops PG_DESKTOP_*, GI_* and the AppImage mount entries of XDG_*_DIRS (DESIGN §4.1 item 5)", () => {
+    const out = stripRuntimeEnv({
+      A: "1",
+      PG_HOME: "/h",
+      PG_DESKTOP_AUTO_ANSWER: "shim-offer=install",
+      PG_DESKTOP_UPDATES: "0",
+      PG_DESKTOP_DECORATIONS: "native",
+      GI_TYPELIB_PATH: "/tmp/.mount_promptXYZ/usr/lib/girepository-1.0",
+      XDG_DATA_DIRS: "/tmp/.mount_promptXYZ/usr/share:/usr/local/share:/usr/share:/tmp/appimage_extracted_1/.mount_x/share",
+      XDG_CONFIG_DIRS: "/tmp/.mount_promptXYZ/etc/xdg",
+      XDG_RUNTIME_DIR: "/run/user/1",
+    });
+    expect(out).toEqual({ A: "1", PG_HOME: "/h", XDG_DATA_DIRS: "/usr/local/share:/usr/share", XDG_RUNTIME_DIR: "/run/user/1" });
+    // A name that merely contains `.mount_` in the middle of a segment is kept; an empty list is dropped.
+    expect(stripRuntimeEnv({ XDG_DATA_DIRS: "/srv/x.mount_y/share", XDG_CONFIG_DIRS: "" })).toEqual({ XDG_DATA_DIRS: "/srv/x.mount_y/share" });
+  });
+
+  it("a detached daemon never gets the desktop variables, even through the PG_ allowlist", async () => {
+    const env = await daemonEnv({
+      caller: { ...caller, PG_DESKTOP_AUTO_ANSWER: "update=update", GI_TYPELIB_PATH: "/tmp/.mount_a/gi", XDG_DATA_DIRS: "/tmp/.mount_a/share:/usr/share" },
+      resolveShell: false,
+    });
+    expect(env.PG_DESKTOP_AUTO_ANSWER).toBeUndefined();
+    expect(env.GI_TYPELIB_PATH).toBeUndefined();
+    expect(env.XDG_DATA_DIRS).toBe("/usr/share");
+    expect(env.PG_CLAUDE_BIN).toBe("/opt/claude");
+  });
+
   it("takes the last JSON object line of noisy output", () => {
     expect(lastJsonObjectLine('motd\n{"A":"1"}\n{oops\n')).toEqual({ A: "1" });
     expect(lastJsonObjectLine("no json here")).toBeNull();

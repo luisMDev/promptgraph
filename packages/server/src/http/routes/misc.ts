@@ -1,7 +1,7 @@
 import { UpdateAppSettingsRequestSchema, type AppSettings, type ListCommandsResponse, type UpdateAppSettingsRequest } from "@promptgraph/shared";
 import { listSlashCommands } from "../../commands/discover.js";
 import type { DaemonContext } from "../../daemon/context.js";
-import { buildClaudeSetup, bundledMarketplaceRoot, checkClaudeSetup, currentCliEntry } from "../../mcp/setup.js";
+import { buildClaudeSetup, bundledMarketplaceRoot, checkClaudeSetup, cliCommandFor, currentCliEntry } from "../../mcp/setup.js";
 import { readJson } from "../errors.js";
 import { REPO_PREFIX, repoOf, type App } from "../repo-scope.js";
 
@@ -29,8 +29,7 @@ export function registerRepoMiscRoutes(app: App, daemon: DaemonContext): void {
     c.json(
       buildClaudeSetup({
         repoPath: repoOf(c).repo.path,
-        cliEntry: currentCliEntry(),
-        nodePath: process.execPath,
+        cliCommand: cliCommandFor({ nodePath: process.execPath, cliEntry: currentCliEntry() }),
         marketplaceRoot: bundledMarketplaceRoot(),
       }),
     ),

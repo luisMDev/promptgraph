@@ -290,11 +290,11 @@ describe("promptgraph MCP server", () => {
     expect(daemon.ctx.registry.list()).toEqual([expect.objectContaining({ id: registered!.id, path: repo })]);
   });
 
-  it("refuses a daemon of another version with the documented message", async () => {
-    const { env, call, repo } = await setup({ version: "0.0.0-other" });
+  it("refuses an older daemon with the documented message", async () => {
+    const { env, call, repo } = await setup({ version: "99.0.0-other" });
     const daemon = await startDaemon({ port: 0, env });
     cleanups.push(() => daemon.close());
-    const message = `promptgraph ${VERSION} is running (this is 0.0.0-other); run promptgraph stop, then retry`;
+    const message = `promptgraph ${VERSION} is running (this is 99.0.0-other); run promptgraph stop, then retry`;
     const res = await call("list_graphs");
     expect(res).toMatchObject({ isError: true, text: message });
     expect((await call("server_status")).data).toEqual({
@@ -308,6 +308,26 @@ describe("promptgraph MCP server", () => {
     });
     const started = await call("start_server");
     expect(started).toMatchObject({ isError: true, text: message });
+    expect(daemon.ctx.registry.list()).toEqual([]);
+  });
+
+  it("an MCP server older than the daemon (after a handover) asks to reconnect (DESIGN §4.1 item 4)", async () => {
+    const { env, call, repo } = await setup({ version: "0.0.1" });
+    const daemon = await startDaemon({ port: 0, env });
+    cleanups.push(() => daemon.close());
+    const message = `promptgraph was updated to ${VERSION} while this MCP server still runs 0.0.1; run /mcp in Claude Code and reconnect promptgraph (or restart Claude Code)`;
+    for (const tool of ["list_graphs", "list_runs", "start_server", "open_ui"]) {
+      expect(await call(tool), tool).toMatchObject({ isError: true, text: message });
+    }
+    expect((await call("server_status")).data).toEqual({
+      running: true,
+      pid: process.pid,
+      version: VERSION,
+      port: daemon.port,
+      repoPath: repo,
+      registered: false,
+      versionMismatch: message,
+    });
     expect(daemon.ctx.registry.list()).toEqual([]);
   });
 

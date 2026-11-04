@@ -1,4 +1,4 @@
-import { DESKTOP_OPEN_ARGS } from "@promptgraph/shared";
+import { DESKTOP_INSTALL_ARGS, DESKTOP_OPEN_ARGS, VERSION_MISMATCH_POLICIES } from "@promptgraph/shared";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs, USAGE, UsageError, type CliOptions } from "../src/cli/args.js";
 
@@ -18,6 +18,9 @@ const DEFAULTS: CliOptions = {
   all: false,
   help: false,
   version: false,
+  onVersionMismatch: null,
+  shimAction: null,
+  replace: false,
 };
 
 const parse = (...argv: string[]) => parseCliArgs(argv, "/work");
@@ -91,6 +94,57 @@ describe("parseCliArgs (DESIGN §4)", () => {
     });
   });
 
+  it("open --on-version-mismatch (DESIGN §4.3): every policy, with --json only", () => {
+    for (const policy of VERSION_MISMATCH_POLICIES) {
+      expect(parse(...DESKTOP_OPEN_ARGS, "--on-version-mismatch", policy)).toEqual({ ...DEFAULTS, command: "open", json: true, printUrl: true, onVersionMismatch: policy });
+      expect(parse("open", "--json", `--on-version-mismatch=${policy}`, "/abs/repo")).toMatchObject({ onVersionMismatch: policy, target: "/abs/repo" });
+    }
+    const bad: Array<[string[], string]> = [
+      [["open", "--on-version-mismatch", "auto"], "--on-version-mismatch requires --json"],
+      [["open", "--print-url", "--on-version-mismatch", "restart"], "--on-version-mismatch requires --json"],
+      [["open", "--json", "--on-version-mismatch", "kill"], "Invalid --on-version-mismatch: kill"],
+      [["open", "--json", "--on-version-mismatch"], "Invalid --on-version-mismatch: (missing)"],
+      [["ls", "--json", "--on-version-mismatch", "auto"], "Unknown option for ls"],
+      [["--on-version-mismatch", "auto"], "Unknown option for promptgraph"],
+    ];
+    for (const [argv, message] of bad) {
+      expect(() => parse(...argv), argv.join(" ")).toThrow(UsageError);
+      expect(() => parse(...argv), argv.join(" ")).toThrow(message);
+    }
+  });
+
+  it("desktop install / desktop shim <action> (internal, DESIGN §20.7, §20.8) require --json", () => {
+    expect(parse(...DESKTOP_INSTALL_ARGS)).toEqual({ ...DEFAULTS, command: "desktop-install", json: true });
+    for (const action of ["status", "install", "decline", "uninstall"] as const) {
+      expect(parse("desktop", "shim", action, "--json")).toEqual({ ...DEFAULTS, command: "desktop-shim", shimAction: action, json: true });
+    }
+    expect(parse("desktop", "shim", "install", "--replace", "--json")).toMatchObject({ command: "desktop-shim", shimAction: "install", replace: true });
+    // A repository named like the command is still a directory.
+    expect(parse("./desktop")).toMatchObject({ command: "open-repo", repoDir: "/work/desktop" });
+    const bad: Array<[string[], string]> = [
+      [["desktop", "install"], "desktop install requires --json"],
+      [["desktop", "shim", "install"], "desktop shim requires --json"],
+      [["desktop", "shim", "status", "--replace", "--json"], "--replace is only valid with desktop shim install"],
+      [["desktop", "shim", "decline", "--replace", "--json"], "--replace is only valid with desktop shim install"],
+      [["desktop", "install", "--replace", "--json"], "Unknown option for desktop install"],
+      [["desktop"], "desktop: missing action"],
+      [["desktop", "run"], "Unknown desktop action: run"],
+      [["desktop", "shim"], "desktop shim: missing action"],
+      [["desktop", "shim", "delete", "--json"], "Unknown desktop shim action: delete"],
+      [["desktop", "install", "x", "--json"], "Unexpected argument: x"],
+      [["desktop", "install", "--port", "1", "--json"], "Unknown option for desktop install"],
+    ];
+    for (const [argv, message] of bad) {
+      expect(() => parse(...argv), argv.join(" ")).toThrow(UsageError);
+      expect(() => parse(...argv), argv.join(" ")).toThrow(message);
+    }
+  });
+
+  it("the desktop commands are not in USAGE", () => {
+    expect(USAGE).not.toMatch(/desktop (install|shim)/);
+    expect(USAGE).not.toContain("--replace");
+  });
+
   it("--help and --version are global", () => {
     expect(parse("-h", "--version")).toMatchObject({ help: true, version: true });
     expect(parse("mcp", "--help")).toMatchObject({ command: "mcp", help: true });
@@ -150,7 +204,7 @@ describe("parseCliArgs (DESIGN §4)", () => {
     for (const cmd of ["promptgraph [repo-dir]", "daemon", "ls", "open", "rm", "close", "stop", "token rotate", "sessions [--json]", "sessions revoke", "mcp"]) {
       expect(USAGE).toContain(cmd);
     }
-    for (const opt of ["--port", "--no-open", "--foreground", "--json", "--next", "--print-url", "--web-port", "--force", "--all"]) {
+    for (const opt of ["--port", "--no-open", "--foreground", "--json", "--next", "--print-url", "--web-port", "--force", "--all", "--on-version-mismatch"]) {
       expect(USAGE).toContain(opt);
     }
   });

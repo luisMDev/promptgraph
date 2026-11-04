@@ -18,8 +18,10 @@ use tauri_plugin_opener::OpenerExt;
 /// `promptgraph open --print-url --json` (DESKTOP_OPEN_ARGS in packages/shared/src/desktop.ts).
 const OPEN_ARGS: [&str; 3] = ["open", "--print-url", "--json"];
 /// Removed from the CLI's environment (DESKTOP_STRIPPED_ENV / DESKTOP_STRIPPED_ENV_PREFIXES).
-const STRIPPED_ENV: [&str; 6] = ["LD_LIBRARY_PATH", "LD_PRELOAD", "APPDIR", "APPIMAGE", "ARGV0", "OWD"];
-const STRIPPED_ENV_PREFIXES: [&str; 5] = ["GTK_", "GDK_", "GIO_", "GSETTINGS_", "WEBKIT_"];
+const STRIPPED_ENV: [&str; 8] = [
+    "LD_LIBRARY_PATH", "LD_PRELOAD", "APPDIR", "APPIMAGE", "ARGV0", "OWD", "PG_DESKTOP_AUTO_ANSWER", "PG_DESKTOP_UPDATES",
+];
+const STRIPPED_ENV_PREFIXES: [&str; 6] = ["GTK_", "GDK_", "GIO_", "GI_", "GSETTINGS_", "WEBKIT_"];
 /// Granted to the daemon's origin (DESKTOP_PERMISSIONS); the opener one is added scoped to https.
 const PERMISSIONS: [&str; 9] = [
     "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-internal-toggle-maximize",
@@ -218,7 +220,7 @@ fn start_from_splash(app: AppHandle, shared: Arc<Shared>) {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_decorations(true);
                 let arg = serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".into());
-                let _ = window.eval(&format!("window.__pgSplashError({arg})"));
+                let _ = window.eval(format!("window.__pgSplashError({arg})"));
             }
         }
     });
