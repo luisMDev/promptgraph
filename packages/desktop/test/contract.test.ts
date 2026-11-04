@@ -1,7 +1,20 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DESKTOP_COMMANDS, DESKTOP_OPEN_ARGS, DESKTOP_PERMISSIONS, DESKTOP_STRIPPED_ENV, DESKTOP_STRIPPED_ENV_PREFIXES } from "@promptgraph/shared";
+import {
+  DAEMON_RESTART_PROGRESS_PREFIX,
+  DESKTOP_COMMANDS,
+  DESKTOP_DIALOGS,
+  DESKTOP_INSTALL_ARGS,
+  DESKTOP_OPEN_ARGS,
+  DESKTOP_PERMISSIONS,
+  DESKTOP_STRIPPED_ENV,
+  DESKTOP_STRIPPED_ENV_PREFIXES,
+  EXIT_VERSION_MISMATCH,
+  VERSION_MISMATCH_POLICIES,
+} from "@promptgraph/shared";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -30,7 +43,7 @@ interface RustSource {
   strings: string[];
 }
 
-/** A small Rust lexer: enough to strip comments and find string literals in main.rs/build.rs. */
+/** A small Rust lexer: enough to strip comments and find string literals in src/*.rs and build.rs. */
 function lexRust(src: string): RustSource {
   let code = "";
   let skeleton = "";
@@ -127,8 +140,61 @@ function topLevelItems(src: RustSource): Array<{ start: number; end: number; tex
   return items;
 }
 
-const mainRs = lexRust(read("src-tauri/src/main.rs"));
+const rustFiles = fs.readdirSync(path.join(tauriDir, "src")).filter((f) => f.endsWith(".rs")).sort();
+const rust = Object.fromEntries(rustFiles.map((f) => [f, lexRust(read(`src-tauri/src/${f}`))])) as Record<string, RustSource>;
+const mainRs = rust["main.rs"]!;
+const dialogRs = rust["dialog.rs"]!;
+const updateRs = rust["update.rs"]!;
 const buildRs = lexRust(read("src-tauri/build.rs"));
+/** Every string literal of every Rust file. */
+const rustStrings = [...Object.values(rust), buildRs].flatMap((src) => src.strings);
+
+/** The quoted items of `const <name>: [&str; N] = [ … ];` in a lexed source. */
+function constArray(src: RustSource, name: string): string[] {
+  const at = new RegExp(`const ${name}: \\[&str; (\\d+)\\] = \\[([^\\]]*)\\];`).exec(src.code);
+  if (!at) throw new Error(`const ${name} not found`);
+  const items = [...at[2]!.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
+  expect(items.length, name).toBe(Number(at[1]));
+  return items;
+}
+
+/** The value of `const <name>: &str = "…";`. */
+function constStr(src: RustSource, name: string): string {
+  const at = new RegExp(`const ${name}: &str = "([^"]*)";`).exec(src.code);
+  if (!at) throw new Error(`const ${name} not found`);
+  return at[1]!;
+}
+
+/** Every string value (and key) of a parsed JSON document. */
+function jsonStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(jsonStrings);
+  if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => [k, ...jsonStrings(v)]);
+  return [];
+}
+
+/**
+ * Updater private-key material (DESIGN §20.11): the minisign/rsign header in plain text, and the base64 of
+ * its whole 3-byte groups (a Tauri key file is the base64 of the whole minisign file, so the plain header
+ * never appears in it). Assembled at run time so this file never matches itself.
+ */
+const KEY_NEEDLES = ["rsign", "minisign"].flatMap((kind) => {
+  const header = "untrusted comment: " + kind + " encrypted secret key";
+  const aligned = header.slice(0, header.length - (header.length % 3));
+  return [header, Buffer.from(aligned).toString("base64")];
+});
+
+function filesWithKeyMaterial(files: string[]): string[] {
+  return files.filter((file) => {
+    let data: Buffer;
+    try {
+      data = fs.readFileSync(file);
+    } catch {
+      return false; // deleted in the working tree
+    }
+    return KEY_NEEDLES.some((needle) => data.includes(needle));
+  });
+}
 const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
   identifier: string;
   productName: string;
@@ -173,10 +239,30 @@ describe("capabilities", () => {
   });
 
   it("main.rs grants exactly DESKTOP_PERMISSIONS, the opener one scoped to https", () => {
-    const listed = mainRs.strings.filter((s) => /^(core:|opener:|allow-)/.test(s));
+    const listed = rustStrings.filter((s) => /^(core:|opener:|allow-)/.test(s));
     expect([...listed].sort()).toEqual([...DESKTOP_PERMISSIONS].sort());
+    const opener = "opener:allow-open-url";
+    expect([...constArray(mainRs, "PERMISSIONS"), opener].sort()).toEqual([...DESKTOP_PERMISSIONS].sort());
+    expect(constStr(mainRs, "OPENER_PERMISSION")).toBe(opener);
     expect(mainRs.code).toMatch(/permission_scoped\(\s*OPENER_PERMISSION/);
     expect(mainRs.strings).toContain("https://*");
+    // The capability is built from these constants only.
+    const capability = fnBody(mainRs, "capability");
+    expect(capability).toContain("PERMISSIONS.iter().fold(cap, |cap, permission| cap.permission(*permission))");
+    expect(capability.match(/\.permission(_scoped)?\(/g)).toHaveLength(2);
+  });
+
+  it("no updater, dialog or process permission appears in any Rust string or JSON file (DESIGN §20.10)", () => {
+    const forbidden = /^(updater|dialog|process):[a-z-]+$/;
+    expect(forbidden.test("updater:default")).toBe(true);
+    expect(forbidden.test("tauri_plugin_updater::Builder")).toBe(false);
+    expect(rustStrings.filter((s) => forbidden.test(s))).toEqual([]);
+    const jsonFiles = listFiles(tauriDir).filter((f) => f.endsWith(".json"));
+    expect(jsonFiles.length).toBeGreaterThanOrEqual(3);
+    for (const file of jsonFiles) {
+      const values = jsonStrings(JSON.parse(fs.readFileSync(file, "utf8")));
+      expect(values.filter((s) => forbidden.test(s)), file).toEqual([]);
+    }
   });
 
   it("adds the capability at run time for the main window and exactly the daemon origin and its paths", () => {
@@ -200,6 +286,12 @@ describe("commands", () => {
     expect(manifest).not.toBeNull();
     const declared = [...manifest![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(declared.sort()).toEqual([...commands].sort());
+  });
+
+  it("main registers only the opener and updater plugins", () => {
+    const plugins = [...fnBody(mainRs, "main").matchAll(/\.plugin\(([^\n]*)\)\n/g)].map((m) => m[1]);
+    expect(plugins).toEqual(["tauri_plugin_opener::init()", "tauri_plugin_updater::Builder::new().build()"]);
+    for (const src of Object.values(rust)) expect(src.code).not.toMatch(/tauri_plugin_(dialog|process)/);
   });
 
   it("main.rs registers exactly those commands", () => {
@@ -237,10 +329,12 @@ describe("CLI invocation", () => {
       expect(mainRs.strings, arg).toContain(arg);
     }
     expect(mainRs.code).toContain('const POSIX_EXEC: &str = r#"exec "$0" "$@""#;');
+    expect(constArray(mainRs, "OPEN_ARGS")).toEqual([...DESKTOP_OPEN_ARGS]);
     const run = fnBody(mainRs, "run_cli");
     expect(run).toContain("let (shell, flags, script) = login_shell();");
-    expect(run).toMatch(/\.arg\(flags\)\.arg\(script\)\.arg\(&bin\)\.args\(OPEN_ARGS\)/);
-    expect(run).toContain("stdin(Stdio::null())");
+    expect(run).toMatch(/\.arg\(flags\)\.arg\(script\)\.arg\(&cli\.path\)\.args\(OPEN_ARGS\)\.args\(\["--on-version-mismatch", policy\]\)/);
+    expect(run).toContain("run_captured(cmd, timeout, &progress)");
+    expect(fnBody(mainRs, "run_captured")).toContain("stdin(Stdio::null())");
   });
 
   it("uses the POSIX form for POSIX shells, $argv for fish and /bin/sh -l for any other shell", () => {
@@ -251,7 +345,7 @@ describe("CLI invocation", () => {
   });
 
   it("runs the shell in its own session, kills the whole session on timeout and reads output without waiting for EOF", () => {
-    const run = fnBody(mainRs, "run_cli");
+    const run = fnBody(mainRs, "run_captured");
     expect(run).toMatch(/pre_exec\(\|\| if libc::setsid\(\) == -1/);
     expect(run).toContain("libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL)");
     expect(run).not.toContain("child.kill()");
@@ -265,18 +359,39 @@ describe("CLI invocation", () => {
     expect(fnBody(mainRs, "drain")).toContain("extend_from_slice(&chunk[..n])");
     expect(run).toMatch(/out_reader\.is_finished\(\) && err_reader\.is_finished\(\)/);
     expect(run).not.toContain("recv_timeout");
+    // Every child goes through run_captured: the login shell, the installer and the shim commands.
+    for (const src of Object.values(rust)) expect(src.code.match(/\.spawn\(\)/g)?.length ?? 0).toBeLessThanOrEqual(src === mainRs ? 1 : 0);
+    expect(fnBody(mainRs, "run_json")).toContain("run_captured(cmd, timeout, &|_| {})");
+    // The runtime is the app's own version: a missing line is reported as such, never as "≥ version required".
+    expect(fnBody(mainRs, "run_json")).toContain("returned no result");
+    expect(fnBody(mainRs, "run_json")).not.toContain("version_required");
   });
 
-  it("removes every DESKTOP_STRIPPED_ENV name and prefix", () => {
-    for (const name of [...DESKTOP_STRIPPED_ENV, ...DESKTOP_STRIPPED_ENV_PREFIXES]) expect(mainRs.strings, name).toContain(name);
-    const run = fnBody(mainRs, "run_cli");
+  it("uses the budgets of DESIGN §20.1 item 4", () => {
+    expect(mainRs.code).toContain("const CLI_TIMEOUT: Duration = Duration::from_secs(30);");
+    expect(mainRs.code).toContain("const HANDOVER_TIMEOUT: Duration = Duration::from_secs(90);");
+    expect(mainRs.code).toContain("const INSTALL_TIMEOUT: Duration = Duration::from_secs(120);");
+    expect(fnBody(mainRs, "run_cli")).toContain('let timeout = if cli.bundled && policy != "attach" { HANDOVER_TIMEOUT } else { CLI_TIMEOUT };');
+    expect(fnBody(mainRs, "install_runtime")).toContain("run_json(&launcher, &INSTALL_ARGS, INSTALL_TIMEOUT)");
+    expect(fnBody(mainRs, "install_runtime")).toMatch(/run_json::<ShimResult>\(&installed\.cli_path, &args, CLI_TIMEOUT\)/);
+  });
+
+  it("removes exactly the DESKTOP_STRIPPED_ENV names and prefixes, and PATH/XDG_*_DIRS entries under $APPDIR", () => {
+    expect([...constArray(mainRs, "STRIPPED_ENV")].sort()).toEqual([...DESKTOP_STRIPPED_ENV].sort());
+    expect([...constArray(mainRs, "STRIPPED_ENV_PREFIXES")].sort()).toEqual([...DESKTOP_STRIPPED_ENV_PREFIXES].sort());
+    const run = fnBody(mainRs, "run_captured");
     expect(run).toMatch(/for name in STRIPPED_ENV \{\s*cmd\.env_remove\(name\);/);
     expect(run).toMatch(/STRIPPED_ENV_PREFIXES\.iter\(\)\.any\(\|p\| k\.starts_with\(p\)\)/);
+    expect(run).toContain('for name in ["PATH", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"]');
+    expect(run).toContain('std::env::var("APPDIR")');
+    expect(run).toMatch(/without_dirs_under\(&value, &appdir\)[\s\S]*Ok\(None\) => \{ cmd\.env_remove\(name\); \}/);
+    // Read from this process before anything else: the variable never reaches a child.
+    expect(fnBody(mainRs, "main").trimStart().startsWith("dialog::init();")).toBe(true);
   });
 
   it("takes the last JSON object, checks v == 1 and maps the splash errors (DESIGN §20.1 item 4)", () => {
     const run = fnBody(mainRs, "run_cli");
-    expect(run).toContain("last_json_object(&stdout)");
+    expect(run).toContain("last_json_object(&out.stdout)");
     // Start-up files may print on the CLI's own line (Warp's escape sequences): search for `{"v":` first.
     const parse = fnBody(mainRs, "last_json_object");
     expect(parse).toContain('rmatch_indices("{\\"v\\":")');
@@ -287,10 +402,64 @@ describe("CLI invocation", () => {
     expect(run).not.toMatch(/stderr\.contains\(/);
     expect(run).toContain("Some(2) => return Err(version_required())");
     expect(run).toContain("CLI_TIMEOUT");
-    expect(mainRs.code).toContain("Duration::from_secs(30)");
     expect(mainRs.strings).toContain("promptgraph CLI not found: install it with `npm i -g promptgraph` or set `PROMPTGRAPH_BIN`");
     expect(mainRs.strings.some((s) => s.startsWith("promptgraph ≥ {} is required"))).toBe(true);
-    expect(fnBody(mainRs, "start_from_splash")).toContain("window.__pgSplashError({arg})");
+    expect(fnBody(mainRs, "start_from_splash")).toContain('splash(&app, "__pgSplashError", &message)');
+    const splash = fnBody(mainRs, "splash");
+    expect(splash).toContain('window.eval(format!("window.{function}({arg})"))');
+    // Only into the splash itself, never into the daemon's page.
+    expect(splash).toMatch(/if !window\.url\(\)\.is_ok_and\(\|url\| is_splash\(&url, dev_origin\)\) \{ return; \}[\s\S]*window\.eval/);
+    expect(splash).toContain("serde_json::to_string(text)");
+  });
+
+  it("asks before taking over a daemon of another version and retries once (DESIGN §20.9)", () => {
+    expect(mainRs.code).toContain(`const EXIT_VERSION_MISMATCH: i32 = ${EXIT_VERSION_MISMATCH};`);
+    for (const policy of VERSION_MISMATCH_POLICIES) expect(mainRs.strings, policy).toContain(policy);
+    expect(mainRs.strings).toContain("--on-version-mismatch");
+    expect(mainRs.code).toMatch(/mismatch_policy: Mutex::new\("auto"\)/);
+    const run = fnBody(mainRs, "run_cli");
+    expect(run).toContain("for attempt in 0..2 {");
+    expect(run).toContain("Some(EXIT_VERSION_MISMATCH) if attempt == 0 => { policy = handover(app, shared, &out.stdout)?; continue; }");
+    expect(run).toContain("Some(EXIT_VERSION_MISMATCH) => return Err(version_required())");
+    const handover = fnBody(mainRs, "handover");
+    expect(handover).toContain('ask(app, "version-mismatch"');
+    expect(handover).toContain('*shared.mismatch_policy.lock().unwrap() = "attach";');
+    expect(handover).toMatch(/else \{ return Err\(version_required\(\)\) \}/);
+    expect(handover).toContain("Restarting promptgraph {new}…");
+    expect(constStr(mainRs, "RESTART_PROGRESS")).toBe(DAEMON_RESTART_PROGRESS_PREFIX);
+    expect(run).toMatch(/line\.starts_with\(RESTART_PROGRESS\)[^\n]*"__pgSplashStatus"/);
+  });
+
+  it("installs the bundled runtime and runs its versioned launcher, after PROMPTGRAPH_BIN (DESIGN §20.7)", () => {
+    expect(constArray(mainRs, "INSTALL_ARGS")).toEqual([...DESKTOP_INSTALL_ARGS]);
+    const bin = fnBody(mainRs, "cli_bin");
+    expect(bin).toMatch(/if let Some\(cli\) = shared\.bin\.get\(\) \{ return Ok\(cli\); \}/);
+    expect(bin).toMatch(/"PROMPTGRAPH_BIN"[\s\S]*dir\.join\("manifest\.json"\)\.is_file\(\)[\s\S]*install_runtime\(app, &runtime\)\?[\s\S]*"promptgraph"\.into\(\)/);
+    expect(mainRs.code).toContain('app.path().resource_dir().map(|dir| dir.join("runtime"))');
+    expect(mainRs.code).toContain("bin: OnceLock<Cli>");
+    const install = fnBody(mainRs, "install_runtime");
+    expect(install).toContain("Ok(installed.cli_path)");
+    expect(install).not.toContain("current");
+    expect(install).toContain('(shim.decision.is_none() && shim.state != "ours").then(|| shim_question(app, &shim)).flatten()');
+    expect(install).toMatch(/if args\.contains\(&"install"\) \{ shim_failed\(app, &shim\.path, &e\); \}/);
+    expect(install).toContain("if shim.warn { path_warning(app, &shim); }");
+    expect(install).toMatch(/"__pgSplashStatus", &format!\("Installing promptgraph/);
+  });
+
+  it("uses exactly the questions and button keys of DESKTOP_DIALOGS", () => {
+    const asked = [...Object.values(rust).map((src) => src.code).join("\n").matchAll(/\bask\(app, "([a-z-]+)"/g)].map((m) => m[1]);
+    expect([...new Set(asked)].sort()).toEqual(Object.keys(DESKTOP_DIALOGS).sort());
+    for (const [id, keys] of Object.entries(DESKTOP_DIALOGS)) {
+      expect(rustStrings, id).toContain(id);
+      for (const key of keys) expect(rustStrings, `${id}=${key}`).toContain(key);
+    }
+    const shim = fnBody(mainRs, "shim_question");
+    expect(shim).toContain('vec!["desktop", "shim", "install", "--json"]');
+    expect(shim).toContain('vec!["desktop", "shim", "install", "--replace", "--json"]');
+    expect(shim).toContain('vec!["desktop", "shim", "decline", "--json"]');
+    // Keeping a foreign promptgraph is the default.
+    expect(shim).toMatch(/ask\(app, "shim-replace", [^;]*&buttons, 0\)/);
+    expect(shim).toContain('("keep", "Keep the existing one".to_string()), ("replace"');
   });
 
   it("passes the repository argument on as an absolute path, even when it does not exist (DESIGN §20.1 item 1)", () => {
@@ -302,10 +471,10 @@ describe("CLI invocation", () => {
   });
 
   it("never reads the token or the daemon registry", () => {
-    for (const forbidden of ["daemon.json", ".promptgraph", "PG_HOME", "token"]) {
-      expect(mainRs.code, forbidden).not.toContain(forbidden);
+    for (const [file, src] of Object.entries(rust)) {
+      for (const forbidden of ["daemon.json", ".promptgraph", "PG_HOME", "token"]) expect(src.code, `${file}: ${forbidden}`).not.toContain(forbidden);
+      expect(src.code, file).not.toMatch(/std::fs::(read|File)|File::open|read_to_string/);
     }
-    expect(mainRs.code).not.toMatch(/std::fs::(read|File)|File::open|read_to_string/);
   });
 });
 
@@ -359,15 +528,29 @@ describe("window and guards", () => {
     }
   });
 
+  it("does not run the CLI from the splash an accepted update shows", () => {
+    const build = fnBody(mainRs, "build_window");
+    expect(build).toMatch(/load\.splash_loads\.fetch_add\(1, Ordering::SeqCst\);\s*if !load\.restarting\.load\(Ordering::SeqCst\) \{ start_from_splash\(/);
+  });
+
   it("stays small (DESIGN §20.4)", () => {
+    expect(rustFiles).toEqual(["dialog.rs", "main.rs", "update.rs"]);
     // Rust unit tests (`#[cfg(test)]`) do not count.
-    const code = read("src-tauri/src/main.rs").split("#[cfg(test)]")[0]!;
-    expect(code.split("\n").length).toBeLessThan(330);
+    const lines = (file: string) => read(`src-tauri/src/${file}`).split("#[cfg(test)]")[0]!.split("\n").length;
+    expect(lines("main.rs")).toBeLessThan(550);
+    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(240);
   });
 });
 
 describe("Cargo.toml", () => {
   const cargo = read("src-tauri/Cargo.toml");
+  it("adds the updater and gtk, and neither the dialog nor the process plugin (DESIGN §20.10)", () => {
+    expect(cargo).toMatch(/^tauri-plugin-updater = "~2\.14"$/m);
+    expect(cargo).toMatch(/^gtk = "0\.18"$/m);
+    const deps = cargo.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    expect(deps.join("\n")).not.toMatch(/tauri-plugin-(dialog|process)/);
+  });
+
   it("pins a tauri 2 minor with on_new_window (>= 2.8) and the README names it", () => {
     const pinned = /^tauri = \{ version = "~2\.(\d+)"/m.exec(cargo);
     expect(pinned).not.toBeNull();
@@ -392,6 +575,9 @@ describe("splash", () => {
     expect(html).toContain('<script src="splash.js"></script>');
     const js = read("splash/splash.js");
     expect(js).toContain("window.__pgSplashError = function (message)");
+    expect(js).toContain("window.__pgSplashStatus = function (text)");
+    expect(js).toMatch(/getElementById\("status"\)\.textContent = String\(text\)/);
+    expect(html).toContain('<p id="status" class="status" role="status">Starting promptgraph…</p>');
     expect(js).toContain("location.reload()");
     expect(js).not.toMatch(/__TAURI__|invoke/);
   });
@@ -416,6 +602,10 @@ describe("bundle overlay (DESIGN §20.4)", () => {
     expect(JSON.parse(read("src-tauri/tauri.bundle.conf.json"))).toEqual({ bundle: { resources: { "../runtime-stage/": "runtime/" } } });
   });
 
+  it("tauri.release.conf.json only turns on the updater artifacts (it needs the private key)", () => {
+    expect(JSON.parse(read("src-tauri/tauri.release.conf.json"))).toEqual({ bundle: { createUpdaterArtifacts: true } });
+  });
+
   it("tauri.conf.json, which tauri dev uses, has no resources (the stage may not exist)", () => {
     const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as { bundle: Record<string, unknown> };
     expect(conf.bundle.resources).toBeUndefined();
@@ -427,5 +617,108 @@ describe("bundle overlay (DESIGN §20.4)", () => {
     expect(ignore).toContain("packages/desktop/runtime-stage/");
     expect(ignore).toContain("*.key");
     expect(ignore).toContain("!*.key.pub");
+  });
+});
+
+
+describe("updater (DESIGN §20.10)", () => {
+  const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as { plugins?: { updater?: { endpoints: string[]; pubkey: unknown; requireSignedVersion: unknown } } };
+
+  it("tauri.conf.json always has plugins.updater with HTTPS endpoints and signed versions required", () => {
+    const updater = conf.plugins?.updater;
+    expect(updater).toBeDefined();
+    expect(Object.keys(updater!).sort()).toEqual(["endpoints", "pubkey", "requireSignedVersion"]);
+    expect(updater!.endpoints).toEqual(["https://github.com/luisMDev/promptgraph/releases/latest/download/latest.json"]);
+    for (const endpoint of updater!.endpoints) expect(new URL(endpoint).protocol).toBe("https:");
+    expect(updater!.requireSignedVersion).toBe(true);
+    expect(typeof updater!.pubkey).toBe("string");
+  });
+
+  it("update.rs checks only from a release build with a public key, from a .deb or the running AppImage", () => {
+    const gate = fnBody(updateRs, "gate");
+    expect(gate).toMatch(/^\s*if cfg!\(debug_assertions\) \{ return Err/);
+    expect(gate).toContain('app.config().plugins.0.get("updater")');
+    expect(gate).toContain("if pubkey.trim().is_empty() { return Err(");
+    expect(gate).toContain('std::env::var("PG_DESKTOP_UPDATES").as_deref() == Ok("0")');
+    expect(gate).toContain("match bundle_type() {");
+    expect(gate).toContain("Some(BundleType::Deb) => Ok(()),");
+    expect(gate).toMatch(/Some\(BundleType::AppImage\) => \{[\s\S]*std::env::current_exe\(\)[\s\S]*appimage_is_self\([\s\S]*libc::getuid\(\)/);
+    expect(gate).toContain('_ => Err("not running from a .deb or an AppImage".into()),');
+    const self_ = fnBody(updateRs, "appimage_is_self");
+    for (const needle of ['env("APPDIR")', 'env("APPIMAGE")', "exe.starts_with(&appdir)", "appdir.parent()", '".mount_"', '"appimage_extracted_"', "image.is_absolute()", "symlink_metadata(&image)", "is_file()", "meta.uid() != uid", '"promptgraph"', "to_ascii_lowercase()"]) {
+      expect(self_, needle).toContain(needle);
+    }
+    const spawn = fnBody(updateRs, "spawn");
+    expect(spawn).toMatch(/if let Err\(reason\) = gate\(app\) \{\s*eprintln!/);
+    expect(spawn).toMatch(/app\.updater_builder\(\)\.timeout\(Duration::from_secs\(30\)\)\s*\.configure_client\(\|client\| client\.read_timeout\(STALL_TIMEOUT\)\)\.build\(\)/);
+    expect(updateRs.code).toContain("const STALL_TIMEOUT: Duration = Duration::from_secs(60);");
+    expect(spawn).toContain("updater.check()");
+    expect(updateRs.code).toContain("const FIRST_CHECK: Duration = Duration::from_secs(5);");
+    expect(updateRs.code).toContain("const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);");
+    expect(fnBody(mainRs, "main")).toMatch(/build_window\(app\.handle\(\), shared\)\?;\s*update::spawn\(app\.handle\(\)\);/);
+  });
+
+  it("asks before downloading, shows progress on the splash and restarts without the process plugin", () => {
+    const offer = fnBody(updateRs, "offer");
+    expect(offer).toMatch(/match ask\(app, "update", [^;]*\{\s*Some\("update"\) => \{\}\s*Some\(_\) => \{ declined\.insert\(version\); return; \}\s*None => return,/);
+    expect(offer).toContain("Release notes (from GitHub):");
+    expect(offer).toMatch(/plain_text\(update\.body[^;]*\.take\(NOTES_MAX_CHARS\)/);
+    expect(updateRs.code).toContain("const NOTES_MAX_CHARS: usize = 600;");
+    expect(offer).toMatch(/shared\.cli\.lock\(\)[\s\S]*shared\.restarting\.store\(true[\s\S]*show_splash\(app, &shared\)[\s\S]*download_and_install\(/);
+    expect(offer).toContain('"__pgSplashStatus"');
+    expect(offer).toContain("Ok(()) => app.restart(),");
+    expect(offer).toMatch(/ask\(app, "update-failed"[\s\S]*shared\.restarting\.store\(false/);
+    expect(fnBody(updateRs, "show_splash")).toMatch(/showing_splash\.store\(true[\s\S]*window\.navigate\(/);
+  });
+});
+
+describe("dialogs (DESIGN §20.10)", () => {
+  it("are plain-text GTK message dialogs on the main thread, one at a time, with a default on any failure", () => {
+    const ask = fnBody(dialogRs, "ask");
+    expect(ask).toContain(".use_markup(false).secondary_use_markup(false)");
+    expect(ask).toContain(".transient_for(&parent).modal(true)");
+    expect(ask).toContain("app.run_on_main_thread(move ||");
+    expect(ask).toContain("ONE_AT_A_TIME.lock()");
+    expect(ask).toContain("gtk::ResponseType::Other(i as u16)");
+    expect(ask).toMatch(/connect_response\([\s\S]*tx\.send\([\s\S]*dialog\.close\(\)/);
+    // Escape or closing answers the default; a dialog that was never shown answers None (nothing recorded).
+    expect(ask).toContain("shown.ok().and_then(|()| rx.recv().ok()).map(key_at)");
+    expect(ask).toContain("if let gtk::ResponseType::Other(i) = response { usize::from(i) } else { default }");
+    expect(ask).toMatch(/plain_text\(title\), plain_text\(text\)/);
+    expect(ask).toMatch(/debug_assert_ne!\(std::thread::current\(\)\.name\(\), Some\("main"\)/);
+    // PG_DESKTOP_AUTO_ANSWER first, logged on stderr.
+    expect(ask).toMatch(/AUTO_ANSWERS\.get\(\)[\s\S]*eprintln!\("promptgraph-desktop: auto-answered \{id\}=[\s\S]*ONE_AT_A_TIME/);
+    expect(fnBody(dialogRs, "init")).toContain('std::env::var("PG_DESKTOP_AUTO_ANSWER")');
+    expect(fnBody(dialogRs, "plain_text")).toContain("*c == '\\n' || !c.is_control()");
+    for (const src of Object.values(rust)) expect(src.code).not.toMatch(/set_markup|with_markup|secondary_markup/);
+  });
+});
+
+describe("key material (DESIGN §20.11)", () => {
+  it("no tracked or untracked file of the repository carries an updater private key", () => {
+    const repoRoot = path.resolve(root, "..", "..");
+    const listed = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: repoRoot, encoding: "utf8" });
+    const files = listed.split("\0").filter(Boolean).map((f) => path.join(repoRoot, f));
+    expect(files.length).toBeGreaterThan(100);
+    expect(filesWithKeyMaterial(files)).toEqual([]);
+  });
+
+  it("the scanner flags a key file, plain or base64", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pg-key-scan-"));
+    try {
+      const minisign = "untrusted comment: " + "minisign encrypted secret key\nRWRTY0Iy" + "A".repeat(40) + "\n";
+      const rsign = "untrusted comment: " + "rsign encrypted secret key\nRWRTY0Iy" + "B".repeat(40) + "\n";
+      const files = {
+        plain: minisign,
+        tauri: Buffer.from(rsign).toString("base64"),
+        minisignBase64: Buffer.from(minisign).toString("base64"),
+        clean: "untrusted comment: " + "minisign public key: 0123\n",
+      };
+      for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+      const flagged = filesWithKeyMaterial(Object.keys(files).map((name) => path.join(dir, name))).map((f) => path.basename(f));
+      expect(flagged.sort()).toEqual(["minisignBase64", "plain", "tauri"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

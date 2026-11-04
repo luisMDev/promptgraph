@@ -167,6 +167,7 @@ export const DESKTOP_DIALOGS = {
   "shim-offer": ["install", "skip"],
   "shim-replace": ["keep", "replace"],
   "path-warning": ["ok"],
+  "shim-failed": ["ok"],
   "version-mismatch": ["restart", "keep", "use"],
   update: ["update", "later"],
   "update-failed": ["ok"],

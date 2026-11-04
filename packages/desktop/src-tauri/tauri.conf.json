@@ -19,5 +19,12 @@
     "category": "DeveloperTool",
     "shortDescription": "Draw and run graphs of Claude Code steps",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png"]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/luisMDev/promptgraph/releases/latest/download/latest.json"],
+      "pubkey": "",
+      "requireSignedVersion": true
+    }
   }
 }
