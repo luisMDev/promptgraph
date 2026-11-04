@@ -2,9 +2,9 @@ import { isFinalRunStatus, webRoutes, type GraphListItem, type RepoSummary, type
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { ApiRequestError, errorMessage, repoApi } from "../api/rest";
 import { Icons } from "../components/common/icons";
+import { FolderBrowser, PathInput, splitTypedPath } from "../components/home/FolderPicker";
 import { Modal, Button } from "../components/common/ui";
 import { Logo } from "../components/header/Header";
 import { useTabContext } from "../components/tabs/tab-context";
@@ -17,7 +17,7 @@ import { removeRepository } from "../store/live";
 
 /**
  * Home (DESIGN §13.3): every registered repository with its availability, counters, last run and links to its
- * graphs and active runs; Add repository, Remove; the daemon's version and prerequisite warnings. It updates
+ * graphs and active runs; Add repository (a path field with folder suggestions and a folder browser), Remove; the daemon's version and prerequisite warnings. It updates
  * live from `repo:status` / `repo:removed` (through the daemon store).
  */
 export function HomeView() {
@@ -178,13 +178,13 @@ function AddRepository() {
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!path.trim()) return;
+  const [browsing, setBrowsing] = useState(false);
+  const add = async (value: string) => {
+    if (!value.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const repo = await useDaemonStore.getState().addRepo(path.trim());
+      const repo = await useDaemonStore.getState().addRepo(value.trim());
       setPath("");
       navigate(webRoutes.repo(repo.id));
     } catch (err) {
@@ -194,11 +194,18 @@ function AddRepository() {
       setBusy(false);
     }
   };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void add(path);
+  };
   return (
     <section className="space-y-2">
       <h2 className="text-sm font-semibold text-foreground">Add repository</h2>
-      <form className="flex gap-2" onSubmit={(e) => void submit(e)}>
-        <Input aria-label="Repository path" placeholder="/home/you/project or ~/project" value={path} onChange={(e) => setPath(e.target.value)} className="font-mono text-xs" />
+      <form className="flex gap-2" onSubmit={submit}>
+        <PathInput value={path} onChange={setPath} disabled={busy} />
+        <Button onClick={() => setBrowsing(true)} disabled={busy}>
+          <Icons.folder /> Browse…
+        </Button>
         <Button type="submit" variant="primary" disabled={busy || !path.trim()}>
           <Icons.plus /> Add
         </Button>
@@ -208,7 +215,18 @@ function AddRepository() {
           {error}
         </p>
       )}
-      <Note>Graphs in a repository can run commands on this machine: add only repositories you trust. There is no file picker in a browser: paste the path.</Note>
+      <Note>Type a path (Tab completes folder names) or browse for a folder. Graphs in a repository can run commands on this machine: add only repositories you trust.</Note>
+      {browsing && (
+        <FolderBrowser
+          initialPath={splitTypedPath(path) ? path : undefined}
+          onClose={() => setBrowsing(false)}
+          onSelect={(p) => {
+            setBrowsing(false);
+            setPath(p);
+            void add(p);
+          }}
+        />
+      )}
     </section>
   );
 }

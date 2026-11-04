@@ -116,7 +116,7 @@ describe("HomeView (DESIGN §13.3)", () => {
     };
     renderHome();
     expect(screen.getByText(/graphs in a repository can run commands/i)).toBeTruthy();
-    const input = screen.getByRole("textbox", { name: "Repository path" });
+    const input = screen.getByRole("combobox", { name: "Repository path" });
     const add = screen.getByRole("button", { name: /Add/ });
 
     fireEvent.change(input, { target: { value: "relative/dir" } });
@@ -131,6 +131,74 @@ describe("HomeView (DESIGN §13.3)", () => {
     fireEvent.click(add);
     await waitFor(() => expect(navigations).toEqual(["/r/new-0000cafe"]));
     expect(useDaemonStore.getState().repos?.map((r) => r.id)).toContain("new-0000cafe");
+  });
+
+  it("suggests subfolders while typing; Tab and Enter complete the highlighted one", async () => {
+    const dirs: Record<string, { name: string; isGitRepo: boolean }[]> = {
+      "~/": [
+        { name: "Projects", isGitRepo: false },
+        { name: "pics", isGitRepo: false },
+        { name: "notes", isGitRepo: true },
+      ],
+      "~/Projects/": [
+        { name: "alpha", isGitRepo: true },
+        { name: "beta", isGitRepo: false },
+      ],
+    };
+    daemon.override = (method, path) => {
+      if (method !== "GET" || !path.startsWith("/api/fs/dirs")) return undefined;
+      const dir = new URL(path, "http://x").searchParams.get("path") ?? "";
+      const entries = (dirs[dir] ?? []).map((e) => ({ ...e, path: `/home/you/${e.name}` }));
+      return json(200, { path: dir, parent: "/home", home: "/home/you", isGitRepo: false, entries });
+    };
+    renderHome();
+    const input = screen.getByRole("combobox", { name: "Repository path" });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "~/p" } });
+    const list = await screen.findByRole("listbox", { name: "Folder suggestions" });
+    expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual(["Projects", "pics"]);
+
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect((input as HTMLInputElement).value).toBe("~/Projects/");
+    const next = await screen.findByRole("listbox", { name: "Folder suggestions" });
+    await within(next).findByText("alpha");
+    expect(within(next).getByText("git")).toBeTruthy();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect((input as HTMLInputElement).value).toBe("~/Projects/beta/");
+    expect(daemon.calls.some((c) => !c.startsWith("GET "))).toBe(false);
+  });
+
+  it("browses folders in a dialog and adds the chosen one", async () => {
+    const tree: Record<string, { name: string; isGitRepo: boolean }[]> = {
+      "/home/you": [{ name: "work", isGitRepo: false }],
+      "/home/you/work": [{ name: "new", isGitRepo: true }],
+      "/home/you/work/new": [{ name: "src", isGitRepo: false }],
+    };
+    daemon.override = (method, path, body) => {
+      if (method === "POST" && path === "/api/repos") {
+        expect(body).toEqual({ path: "/home/you/work/new" });
+        return json(200, summaryOf({ id: "new-0000cafe", name: "new", path: "/home/you/work/new" }));
+      }
+      if (method !== "GET" || !path.startsWith("/api/fs/dirs")) return undefined;
+      const dir = new URL(path, "http://x").searchParams.get("path") ?? "/home/you";
+      if (!tree[dir]) return json(404, { error: `Not a directory: ${dir}`, code: "not_a_directory" });
+      const entries = tree[dir].map((e) => ({ ...e, path: `${dir}/${e.name}` }));
+      return json(200, { path: dir, parent: dir === "/" ? null : dir.slice(0, dir.lastIndexOf("/")) || "/", home: "/home/you", isGitRepo: dir.endsWith("/new"), entries });
+    };
+    renderHome();
+    // A typed path that is not a directory falls back to home.
+    fireEvent.change(screen.getByRole("combobox", { name: "Repository path" }), { target: { value: "/nope/x" } });
+    fireEvent.click(screen.getByRole("button", { name: /Browse/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Choose a repository folder" });
+    fireEvent.click(await within(dialog).findByRole("button", { name: /work/ }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: /new/ }));
+    expect(await within(dialog).findByText("This folder is a git repository.")).toBeTruthy();
+    expect(within(within(dialog).getByRole("navigation", { name: "Current folder" })).getByText("new").getAttribute("aria-current")).toBe("location");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add this folder" }));
+    await waitFor(() => expect(navigations).toEqual(["/r/new-0000cafe"]));
   });
 
   it("removes a repository after confirmation; a 409 offers Remove anyway (force)", async () => {

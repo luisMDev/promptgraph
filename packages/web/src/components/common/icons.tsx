@@ -127,6 +127,26 @@ export const Icons = {
       <path d="m6 9 6 6 6-6" />
     </Svg>
   ),
+  chevronRight: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="m9 6 6 6-6 6" />
+    </Svg>
+  ),
+  arrowUp: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </Svg>
+  ),
+  folder: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </Svg>
+  ),
+  home: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" />
+    </Svg>
+  ),
   terminal: (p: IconProps) => (
     <Svg {...p}>
       <rect x="2" y="4" width="20" height="16" rx="2" />

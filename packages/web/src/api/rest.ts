@@ -14,6 +14,7 @@ import {
   type Graph,
   type ListCommandsResponse,
   type ListGraphsResponse,
+  type ListDirsResponse,
   type ListReposResponse,
   type ListRunsResponse,
   type NodeRunResponse,
@@ -121,9 +122,13 @@ export const daemonApi = {
   repos(): Promise<ListReposResponse> {
     return request("GET", API.repos);
   },
-  /** 422 path_not_absolute / not_a_git_repo. */
+  /** 422 path_not_absolute / not_a_git_repo / lane_worktree. */
   addRepo(path: string): Promise<RepoSummary> {
     return request("POST", API.repos, { path });
+  },
+  /** Subdirectories of `path` (default: the daemon user's home); 422 path_not_absolute, 404 not_a_directory, 403 permission_denied. */
+  listDirs(path?: string, hidden = false): Promise<ListDirsResponse> {
+    return request("GET", API.dirs(path, hidden));
   },
   /** 409 repo_active while it has a running run, unless `force`. */
   async removeRepo(repoId: string, force = false): Promise<void> {
