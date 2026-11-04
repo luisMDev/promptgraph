@@ -35,7 +35,7 @@ export function runDesktopShim(opts: CliOptions, deps: CliDeps): Promise<number>
         } catch (err) {
           if (!(err instanceof ShimExistsError)) throw err;
           print({ v: 1, shim: err.status, backup: null });
-          throw new CliError(`${err.message}; it exists (pass --replace to keep it as a backup and install the shim)`);
+          throw new CliError(`${err.message}; pass --replace to keep it as a backup and install the shim`);
         }
         return 0;
       case "decline":

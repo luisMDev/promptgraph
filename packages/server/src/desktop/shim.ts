@@ -14,8 +14,13 @@ const PATH_CHECK_TIMEOUT_MS = 10_000;
 /** The shim refuses to publish: something else is at the path (DESIGN §20.8). Carries the re-read status. */
 export class ShimExistsError extends Error {
   constructor(readonly status: ShimStatus) {
-    super(`${status.path} exists and was not installed by the promptgraph desktop app${status.foreignTarget ? ` (→ ${status.foreignTarget})` : ""}`);
+    super(`${status.path} exists and was not installed by the promptgraph desktop app${foreignSuffix(status)}`);
   }
+}
+
+/** ` (→ <target>)` when the foreign entry resolves elsewhere (a symlink); "" for a plain file at the path. */
+function foreignSuffix(status: Pick<ShimStatus, "path" | "foreignTarget">): string {
+  return status.foreignTarget && status.foreignTarget !== status.path ? ` (→ ${status.foreignTarget})` : "";
 }
 
 /** `~/.local/bin` is not safe to write a command into (owned by another user, or group/other-writable). */

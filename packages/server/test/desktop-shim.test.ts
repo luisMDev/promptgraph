@@ -108,6 +108,14 @@ describe("the promptgraph command in ~/.local/bin (DESIGN §20.8)", () => {
     expect(await shimStatus(env)).toMatchObject({ state: "ours", foreignTarget: null });
   });
 
+  it("names the foreign target in the refusal only when it is elsewhere", () => {
+    const status = (foreignTarget: string | null) => ({ path: "/h/.local/bin/promptgraph", state: "foreign" as const, foreignTarget, decision: null, onPath: null, shadowedBy: null, pathHint: null, warn: false });
+    expect(new ShimExistsError(status("/h/.local/bin/promptgraph")).message).toBe("/h/.local/bin/promptgraph exists and was not installed by the promptgraph desktop app");
+    expect(new ShimExistsError(status("/usr/lib/node_modules/promptgraph/cli.js")).message).toBe(
+      "/h/.local/bin/promptgraph exists and was not installed by the promptgraph desktop app (→ /usr/lib/node_modules/promptgraph/cli.js)",
+    );
+  });
+
   it("never overwrites an entry that appears between the status and the write", async () => {
     const { env, paths } = setup();
     await expect(
