@@ -54,6 +54,22 @@ export const DESKTOP_STRIPPED_ENV = [
 ] as const;
 /** Prefixes of variables removed likewise (AppImage / GTK / GObject introspection / WebKit runtime). */
 export const DESKTOP_STRIPPED_ENV_PREFIXES = ["GTK_", "GDK_", "GIO_", "GI_", "GSETTINGS_", "WEBKIT_"] as const;
+/**
+ * Search-path variables an AppImage's AppRun and GTK hook prepend their mount to. The shell and the daemon
+ * remove every entry inside an AppImage mount (a path segment starting with `.mount_` or
+ * `appimage_extracted_`) and keep the user's own entries; a variable left empty is removed (DESIGN §20.1).
+ */
+export const DESKTOP_MOUNT_PATH_LISTS = [
+  "PATH",
+  "XDG_DATA_DIRS",
+  "XDG_CONFIG_DIRS",
+  "PYTHONHOME",
+  "PYTHONPATH",
+  "PERLLIB",
+  "QT_PLUGIN_PATH",
+  "GST_PLUGIN_SYSTEM_PATH",
+  "GST_PLUGIN_SYSTEM_PATH_1_0",
+] as const;
 
 // --- Distribution: bundled runtime, command shim, daemon handover (DESIGN §20.6–§20.9) ---------------
 
@@ -171,6 +187,7 @@ export const DESKTOP_DIALOGS = {
   "version-mismatch": ["restart", "keep", "use"],
   update: ["update", "later"],
   "update-failed": ["ok"],
+  "restart-failed": ["ok"],
 } as const;
 
 /** Arguments of the runtime installer the shell runs from the bundled runtime (DESIGN §20.7). */

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::{fs::MetadataExt, process::CommandExt};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
@@ -70,10 +70,7 @@ fn gate(app: &AppHandle) -> Result<(), String> {
 /// `APPIMAGE` names the running app: the variable is inherited, so an extracted `squashfs-root/AppRun`, or a
 /// binary started from another AppImage's terminal, would otherwise replace another app's file.
 fn appimage_is_self(env: &dyn Fn(&str) -> Option<OsString>, exe: &Path, tmp: &Path, uid: u32) -> Result<(), String> {
-    let appdir = env("APPDIR").filter(|v| !v.is_empty()).ok_or("APPDIR is not set")?;
-    let appdir = std::fs::canonicalize(&appdir).map_err(|e| format!("APPDIR: {e}"))?;
-    let exe = std::fs::canonicalize(exe).map_err(|e| format!("current_exe: {e}"))?;
-    if !exe.starts_with(&appdir) { return Err("the running binary is not inside APPDIR".into()); }
+    let appdir = crate::appdir_of(env, exe)?;
     let tmp_dirs = [std::fs::canonicalize(tmp).ok(), std::fs::canonicalize("/tmp").ok()];
     if !tmp_dirs.iter().flatten().any(|dir| appdir.parent() == Some(dir.as_path())) {
         return Err("APPDIR is not a mount in the temporary directory".into());
@@ -130,7 +127,14 @@ fn offer(app: &AppHandle, update: Update, declined: &mut HashSet<String>) {
         || {},
     ));
     match result {
-        Ok(()) => app.restart(),
+        Ok(()) => {
+            if let Err(e) = relaunch(app) {
+                eprintln!("promptgraph-desktop: could not restart: {e}");
+                let text = format!("promptgraph {version} is installed, but the app could not start it: {e}.\n\nStart promptgraph again to use the new version.");
+                ask(app, "restart-failed", "Restart promptgraph", &text, &[("ok", "OK".to_string())], 0);
+            }
+            app.exit(0);
+        }
         Err(e) => {
             let text = format!("The update could not be installed: {e}. promptgraph {current} keeps running.");
             ask(app, "update-failed", "The update failed", &text, &[("ok", "OK".to_string())], 0);
@@ -140,6 +144,17 @@ fn offer(app: &AppHandle, update: Update, declined: &mut HashSet<String>) {
             show_splash(app, &shared);
         }
     }
+}
+
+/// Starts the binary `AppHandle::restart()` would start, with this process's arguments. Not `restart()`
+/// itself: its variables, directory and inherited descriptors keep the old mount alive (§20.10).
+fn relaunch(app: &AppHandle) -> Result<(), String> {
+    let env = app.env();
+    let binary = tauri::process::current_binary(&env).map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(binary);
+    crate::strip_env(cmd.args(env.args_os.iter().skip(1)), false);
+    unsafe { cmd.pre_exec(|| { libc::syscall(libc::SYS_close_range, 3, u32::MAX, libc::CLOSE_RANGE_CLOEXEC); Ok(()) }) };
+    cmd.spawn().map(drop).map_err(|e| e.to_string())
 }
 
 /// Navigates to the splash (the daemon's page is unloaded and flushes its edits) and waits ≤ 2 s for it.

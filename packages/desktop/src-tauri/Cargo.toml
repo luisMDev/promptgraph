@@ -23,7 +23,8 @@ tauri = { version = "~2.12", features = [] }
 tauri-plugin-opener = "2"
 # Update checks run from Rust only (DESIGN §20.10); no updater permission reaches any webview.
 # Not tauri-plugin-dialog (it injects window.alert/confirm into the daemon's page) and not
-# tauri-plugin-process (AppHandle::restart suffices).
+# tauri-plugin-process: after an update the shell starts tauri::process::current_binary itself with a
+# cleaned environment and exits (not AppHandle::restart, which keeps the old AppImage mount alive).
 tauri-plugin-updater = "~2.14"
 # The version tauri already pulls: native message dialogs only (src/dialog.rs).
 gtk = "0.18"

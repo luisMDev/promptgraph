@@ -112,9 +112,11 @@ apply. A `--foreground` daemon keeps the environment of its terminal.
 bar and the Ctrl tab shortcuts. It is one more client of the daemon, not a replacement: it runs
 `promptgraph open --print-url --json` through your login shell to start the daemon if needed and to
 sign in, then loads the UI from `http://127.0.0.1:<port>`. Closing the window does not stop the daemon
-or its runs. You need Rust and WebKitGTK to build it (`pnpm install`, `pnpm build` and `pnpm test` never
-do). Requirements, commands and the manual checklist are in
-[packages/desktop/README.md](packages/desktop/README.md).
+or its runs. The released AppImage and `.deb` bundle Node and the server, so they work just by opening
+them (you still need `git`, `claude`, `curl` and `gh`), offer to install the `promptgraph` command in
+`~/.local/bin`, and update themselves from signed GitHub releases. You need Rust and WebKitGTK only to
+build it (`pnpm install`, `pnpm build` and `pnpm test` never do). Installing, building, releasing and the
+manual checklist are in [packages/desktop/README.md](packages/desktop/README.md).
 
 ## Use it from Claude Code (MCP server and plugin)
 

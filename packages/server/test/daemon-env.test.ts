@@ -110,11 +110,33 @@ describe("daemonEnv (DESIGN §4.1 item 5)", () => {
     expect(stripRuntimeEnv({ XDG_DATA_DIRS: "/srv/x.mount_y/share", XDG_CONFIG_DIRS: "" })).toEqual({ XDG_DATA_DIRS: "/srv/x.mount_y/share" });
   });
 
+  it("stripRuntimeEnv drops the PATH entries of any AppImage mount, e.g. the previous one after an update restart", () => {
+    const out = stripRuntimeEnv({
+      PATH: "/tmp/.mount_promptOld123/usr/bin/:/home/u/.local/bin:/tmp/appimage_extracted_ab/usr/bin:/usr/bin:/srv/x.mount_y/bin",
+      XDG_DATA_DIRS: "/tmp/appimage_extracted_ab/usr/share:/usr/share",
+    });
+    expect(out).toEqual({ PATH: "/home/u/.local/bin:/usr/bin:/srv/x.mount_y/bin", XDG_DATA_DIRS: "/usr/share" });
+  });
+
+  it("stripRuntimeEnv drops AppRun's PYTHONHOME, PYTHONPATH, PERLLIB, QT_ and GST_ search paths into the mount, keeping the user's", () => {
+    const m = "/tmp/.mount_promptAbc123";
+    const out = stripRuntimeEnv({
+      PYTHONHOME: `${m}/usr/`,
+      PYTHONPATH: `${m}/usr/share/pyshared/:/home/u/py`,
+      PERLLIB: `${m}/usr/share/perl5/:${m}/usr/lib/perl5/:`,
+      QT_PLUGIN_PATH: `${m}/usr/lib/qt5/plugins/`,
+      GST_PLUGIN_SYSTEM_PATH: `${m}/usr/lib/gstreamer:`,
+      GST_PLUGIN_SYSTEM_PATH_1_0: `${m}/usr/lib/gstreamer-1.0:/usr/lib/x86_64-linux-gnu/gstreamer-1.0`,
+    });
+    expect(out).toEqual({ PYTHONPATH: "/home/u/py", GST_PLUGIN_SYSTEM_PATH_1_0: "/usr/lib/x86_64-linux-gnu/gstreamer-1.0" });
+  });
+
   it("a detached daemon never gets the desktop variables, even through the PG_ allowlist", async () => {
     const env = await daemonEnv({
-      caller: { ...caller, PG_DESKTOP_AUTO_ANSWER: "update=update", GI_TYPELIB_PATH: "/tmp/.mount_a/gi", XDG_DATA_DIRS: "/tmp/.mount_a/share:/usr/share" },
+      caller: { ...caller, PG_DESKTOP_AUTO_ANSWER: "update=update", GI_TYPELIB_PATH: "/tmp/.mount_a/gi", XDG_DATA_DIRS: "/tmp/.mount_a/share:/usr/share", PATH: "/tmp/.mount_old/usr/bin:/usr/bin" },
       resolveShell: false,
     });
+    expect(env.PATH).toBe("/usr/bin");
     expect(env.PG_DESKTOP_AUTO_ANSWER).toBeUndefined();
     expect(env.GI_TYPELIB_PATH).toBeUndefined();
     expect(env.XDG_DATA_DIRS).toBe("/usr/share");

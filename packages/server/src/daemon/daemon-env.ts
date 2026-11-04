@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { DESKTOP_STRIPPED_ENV, DESKTOP_STRIPPED_ENV_PREFIXES } from "@promptgraph/shared";
+import { DESKTOP_MOUNT_PATH_LISTS, DESKTOP_STRIPPED_ENV, DESKTOP_STRIPPED_ENV_PREFIXES } from "@promptgraph/shared";
 import { DESKTOP_ENV_PREFIX, isClaudeNestingVar, PG_HOOK_ENV_VARS } from "../config/child-env.js";
 
 /** Caller variables a detached daemon keeps (DESIGN §4.1 item 5). */
@@ -48,20 +48,19 @@ function defined(env: NodeJS.ProcessEnv): Record<string, string> {
   return out;
 }
 
-/** XDG search-path variables an AppImage's GTK hook prepends its mount to (DESIGN §4.1 item 5). */
-const XDG_DIR_LISTS = ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] as const;
-
-/** Whether a path lies inside an AppImage mount: some path segment starts with `.mount_`. */
+/** Whether a path lies inside an AppImage mount: a segment starts with `.mount_` (FUSE) or `appimage_extracted_`. */
 function inAppImageMount(entry: string): boolean {
-  return entry.split("/").some((segment) => segment.startsWith(".mount_"));
+  return entry.split("/").some((segment) => segment.startsWith(".mount_") || segment.startsWith("appimage_extracted_"));
 }
 
 /**
  * Removes what a desktop runtime (AppImage, GTK, WebKit) or a Claude session injects and must not reach
  * the daemon's children: `DESKTOP_STRIPPED_ENV`, the `DESKTOP_STRIPPED_ENV_PREFIXES` (incl. `GI_`), every
  * `PG_DESKTOP_*`, the Claude nesting variables and a node run's hook variables (PG_HOOK_ENV_VARS, which
- * the `PG_` allowlist would otherwise keep). `XDG_DATA_DIRS` / `XDG_CONFIG_DIRS` lose their entries inside
- * an AppImage mount (`.mount_*`), which disappears with the app; a variable left empty is dropped.
+ * the `PG_` allowlist would otherwise keep). `DESKTOP_MOUNT_PATH_LISTS` (`PATH`, the XDG lists, `PYTHONHOME`,
+ * …) lose their entries inside an AppImage mount, which disappears with its app; a variable left empty is
+ * dropped. The shell removes them too, but an app relaunched by an update may still carry the previous
+ * mount's entries.
  */
 export function stripRuntimeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const stripped = new Set<string>(DESKTOP_STRIPPED_ENV);
@@ -71,7 +70,7 @@ export function stripRuntimeEnv(env: NodeJS.ProcessEnv): Record<string, string> 
     if (DESKTOP_STRIPPED_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
     out[k] = v;
   }
-  for (const name of XDG_DIR_LISTS) {
+  for (const name of DESKTOP_MOUNT_PATH_LISTS) {
     const value = out[name];
     if (value === undefined) continue;
     const kept = value.split(":").filter((entry) => entry !== "" && !inAppImageMount(entry));

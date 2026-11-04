@@ -8,6 +8,7 @@ import {
   DESKTOP_COMMANDS,
   DESKTOP_DIALOGS,
   DESKTOP_INSTALL_ARGS,
+  DESKTOP_MOUNT_PATH_LISTS,
   DESKTOP_OPEN_ARGS,
   DESKTOP_PERMISSIONS,
   DESKTOP_STRIPPED_ENV,
@@ -16,6 +17,7 @@ import {
   VERSION_MISMATCH_POLICIES,
 } from "@promptgraph/shared";
 import { describe, expect, it } from "vitest";
+import { NODE_VERSION as NODE_VERSION_PINNED } from "../scripts/prepare-runtime.mjs";
 
 /**
  * The desktop shell cannot be compiled where the suite runs (no Rust, no WebKitGTK), so its invariants
@@ -359,8 +361,11 @@ describe("CLI invocation", () => {
     expect(fnBody(mainRs, "drain")).toContain("extend_from_slice(&chunk[..n])");
     expect(run).toMatch(/out_reader\.is_finished\(\) && err_reader\.is_finished\(\)/);
     expect(run).not.toContain("recv_timeout");
-    // Every child goes through run_captured: the login shell, the installer and the shim commands.
-    for (const src of Object.values(rust)) expect(src.code.match(/\.spawn\(\)/g)?.length ?? 0).toBeLessThanOrEqual(src === mainRs ? 1 : 0);
+    // Every child goes through run_captured: the login shell, the installer and the shim commands. The one
+    // other spawn is the app's own relaunch after an update (update.rs), which nothing waits for.
+    const spawns = (src: RustSource) => src.code.match(/\.spawn\(\)/g)?.length ?? 0;
+    for (const src of Object.values(rust)) expect(spawns(src)).toBeLessThanOrEqual(src === mainRs || src === updateRs ? 1 : 0);
+    expect(fnBody(updateRs, "relaunch")).toContain("cmd.spawn()");
     expect(fnBody(mainRs, "run_json")).toContain("run_captured(cmd, timeout, &|_| {})");
     // The runtime is the app's own version: a missing line is reported as such, never as "≥ version required".
     expect(fnBody(mainRs, "run_json")).toContain("returned no result");
@@ -376,15 +381,33 @@ describe("CLI invocation", () => {
     expect(fnBody(mainRs, "install_runtime")).toMatch(/run_json::<ShimResult>\(&installed\.cli_path, &args, CLI_TIMEOUT\)/);
   });
 
-  it("removes exactly the DESKTOP_STRIPPED_ENV names and prefixes, and PATH/XDG_*_DIRS entries under $APPDIR", () => {
+  it("removes exactly the DESKTOP_STRIPPED_ENV names and prefixes, and the DESKTOP_MOUNT_PATH_LISTS entries under $APPDIR or any AppImage mount", () => {
     expect([...constArray(mainRs, "STRIPPED_ENV")].sort()).toEqual([...DESKTOP_STRIPPED_ENV].sort());
     expect([...constArray(mainRs, "STRIPPED_ENV_PREFIXES")].sort()).toEqual([...DESKTOP_STRIPPED_ENV_PREFIXES].sort());
-    const run = fnBody(mainRs, "run_captured");
-    expect(run).toMatch(/for name in STRIPPED_ENV \{\s*cmd\.env_remove\(name\);/);
-    expect(run).toMatch(/STRIPPED_ENV_PREFIXES\.iter\(\)\.any\(\|p\| k\.starts_with\(p\)\)/);
-    expect(run).toContain('for name in ["PATH", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"]');
-    expect(run).toContain('std::env::var("APPDIR")');
-    expect(run).toMatch(/without_dirs_under\(&value, &appdir\)[\s\S]*Ok\(None\) => \{ cmd\.env_remove\(name\); \}/);
+    expect(fnBody(mainRs, "run_captured").trimStart().startsWith("strip_env(&mut cmd, true);")).toBe(true);
+    const strip = fnBody(mainRs, "strip_env");
+    // Every name for the CLI. The app's own relaunch (cli = false) keeps the PG_DESKTOP_* settings, and the
+    // prefixed variables and RELAUNCH_FILTERED unless they point into a mount (WEBKIT_DISABLE_DMABUF_RENDERER=1).
+    expect(strip).toMatch(/for name in STRIPPED_ENV \{ if cli \|\| !\(name\.starts_with\("PG_DESKTOP_"\) \|\| RELAUNCH_FILTERED\.contains\(&name\)\) \{ cmd\.env_remove\(name\); \} \}/);
+    expect(DESKTOP_STRIPPED_ENV.filter((n) => n.startsWith("PG_DESKTOP_")).sort()).toEqual(["PG_DESKTOP_AUTO_ANSWER", "PG_DESKTOP_UPDATES"]);
+    expect(constArray(mainRs, "RELAUNCH_FILTERED")).toEqual(["LD_LIBRARY_PATH", "LD_PRELOAD"]);
+    for (const name of constArray(mainRs, "RELAUNCH_FILTERED")) expect(DESKTOP_STRIPPED_ENV, name).toContain(name);
+    expect(strip).toMatch(/STRIPPED_ENV_PREFIXES\.iter\(\)\.any\(\|p\| k\.starts_with\(p\)\)/);
+    expect(strip).toMatch(/if cli && prefixed \{\s*cmd\.env_remove\(&key\);\s*\} else if !cli && \(prefixed \|\| RELAUNCH_FILTERED\.contains\(&k\)\) \{/);
+    expect(strip).toMatch(/match relaunch_value\(v, &appdir\) \{[\s\S]*None => \{ cmd\.env_remove\(&key\); \}/);
+    expect(fnBody(mainRs, "relaunch_value")).toMatch(/if !entries\(\)\.any\(\|e\| in_mount\(e, appdir\)\) \{ return Some\(value\.to_string\(\)\); \}/);
+    expect(constArray(mainRs, "MOUNT_PATH_LISTS")).toEqual([...DESKTOP_MOUNT_PATH_LISTS]);
+    expect(strip).toContain("for name in MOUNT_PATH_LISTS {");
+    // OWD only from the AppImage it belongs to: it is inherited by anything started from that AppImage's terminal.
+    expect(strip).toContain("if let Some(dir) = owd() { cmd.current_dir(dir); }");
+    expect(fnBody(mainRs, "caller_dir")).toMatch(/^\s*appdir_of\(env, exe\?\)\.ok\(\)\?;\s*env\("OWD"\)/);
+    expect(mainRs.code.split("#[cfg(test)]")[0]!.match(/"OWD"/g)?.length).toBe(2); // STRIPPED_ENV and caller_dir
+    const appdirOf = fnBody(mainRs, "appdir_of");
+    for (const needle of ['env("APPDIR")', "std::fs::canonicalize(exe)", "exe.starts_with(&appdir)"]) expect(appdirOf, needle).toContain(needle);
+    expect(strip).toContain('std::env::var("APPDIR")');
+    expect(strip).toMatch(/without_dirs_under\(&value, &appdir\)[\s\S]*Ok\(None\) => \{ cmd\.env_remove\(name\); \}/);
+    expect(fnBody(mainRs, "without_dirs_under")).toContain("!in_mount(dir, appdir)");
+    expect(fnBody(mainRs, "in_mount")).toMatch(/s\.starts_with\("\.mount_"\) \|\| s\.starts_with\("appimage_extracted_"\)/);
     // Read from this process before anything else: the variable never reaches a child.
     expect(fnBody(mainRs, "main").trimStart().startsWith("dialog::init();")).toBe(true);
   });
@@ -464,9 +487,12 @@ describe("CLI invocation", () => {
 
   it("passes the repository argument on as an absolute path, even when it does not exist (DESIGN §20.1 item 1)", () => {
     const arg = fnBody(mainRs, "repo_arg");
-    expect(arg).toContain("std::fs::canonicalize(&path)");
-    expect(arg).toContain(".or_else(|_| std::env::current_dir().map(|dir| dir.join(&path)))");
-    expect(arg).not.toMatch(/unwrap_or\(path\)/);
+    // Joined to the caller's directory first (OWD in an AppImage, whose AppRun changes to $APPDIR/usr), so
+    // canonicalize never resolves a relative argument against the mount.
+    expect(arg).toContain("owd().map_or_else(std::env::current_dir, Ok)");
+    expect(arg).toContain("|dir| dir.join(&arg)");
+    expect(arg).toMatch(/std::fs::canonicalize\(&path\)\.unwrap_or\(path\)/);
+    expect(arg.indexOf("dir.join(&arg)")).toBeLessThan(arg.indexOf("canonicalize"));
     expect(fnBody(mainRs, "main")).toContain("std::env::args_os().nth(1).map(repo_arg)");
   });
 
@@ -537,8 +563,8 @@ describe("window and guards", () => {
     expect(rustFiles).toEqual(["dialog.rs", "main.rs", "update.rs"]);
     // Rust unit tests (`#[cfg(test)]`) do not count.
     const lines = (file: string) => read(`src-tauri/src/${file}`).split("#[cfg(test)]")[0]!.split("\n").length;
-    expect(lines("main.rs")).toBeLessThan(550);
-    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(240);
+    expect(lines("main.rs")).toBeLessThan(600);
+    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(250);
   });
 });
 
@@ -645,7 +671,8 @@ describe("updater (DESIGN §20.10)", () => {
     expect(gate).toMatch(/Some\(BundleType::AppImage\) => \{[\s\S]*std::env::current_exe\(\)[\s\S]*appimage_is_self\([\s\S]*libc::getuid\(\)/);
     expect(gate).toContain('_ => Err("not running from a .deb or an AppImage".into()),');
     const self_ = fnBody(updateRs, "appimage_is_self");
-    for (const needle of ['env("APPDIR")', 'env("APPIMAGE")', "exe.starts_with(&appdir)", "appdir.parent()", '".mount_"', '"appimage_extracted_"', "image.is_absolute()", "symlink_metadata(&image)", "is_file()", "meta.uid() != uid", '"promptgraph"', "to_ascii_lowercase()"]) {
+    expect(self_).toMatch(/^\s*let appdir = crate::appdir_of\(env, exe\)\?;/);
+    for (const needle of ['env("APPIMAGE")', "appdir.parent()", '".mount_"', '"appimage_extracted_"', "image.is_absolute()", "symlink_metadata(&image)", "is_file()", "meta.uid() != uid", '"promptgraph"', "to_ascii_lowercase()"]) {
       expect(self_, needle).toContain(needle);
     }
     const spawn = fnBody(updateRs, "spawn");
@@ -666,7 +693,21 @@ describe("updater (DESIGN §20.10)", () => {
     expect(updateRs.code).toContain("const NOTES_MAX_CHARS: usize = 600;");
     expect(offer).toMatch(/shared\.cli\.lock\(\)[\s\S]*shared\.restarting\.store\(true[\s\S]*show_splash\(app, &shared\)[\s\S]*download_and_install\(/);
     expect(offer).toContain('"__pgSplashStatus"');
-    expect(offer).toContain("Ok(()) => app.restart(),");
+    // Not AppHandle::restart(): the shell starts the binary tauri would restart (the AppImage file the update
+    // replaced, or the .deb's executable) itself, with this process's arguments and a cleaned environment.
+    const installed = /Ok\(\(\)\) => \{([\s\S]*?)\n {8}\}/.exec(offer)?.[1] ?? "";
+    // A relaunch that fails is shown, not just logged on stderr nobody sees; the app exits either way.
+    expect(installed).toMatch(/^\s*if let Err\(e\) = relaunch\(app\) \{[\s\S]*ask\(app, "restart-failed", [^;]*&\[\("ok", "OK"\.to_string\(\)\)\], 0\);\s*\}\s*app\.exit\(0\);$/);
+    expect(installed).toContain("is installed, but the app could not start it");
+    const relaunch = fnBody(updateRs, "relaunch");
+    expect(relaunch).toContain("let binary = tauri::process::current_binary(&env).map_err(|e| e.to_string())?;");
+    expect(relaunch).toMatch(/crate::strip_env\(cmd\.args\(env\.args_os\.iter\(\)\.skip\(1\)\), false\);/);
+    expect(relaunch).toMatch(/cmd\.spawn\(\)\.map\(drop\)\.map_err\(\|e\| e\.to_string\(\)\)\s*$/);
+    expect(relaunch).not.toContain("unwrap_or_default()");
+    // Inherited descriptors (the AppImage runtime's handle on this mount) are closed at exec, not before it,
+    // so the spawn's own error pipe keeps working.
+    expect(relaunch).toContain("cmd.pre_exec(|| { libc::syscall(libc::SYS_close_range, 3, u32::MAX, libc::CLOSE_RANGE_CLOEXEC); Ok(()) })");
+    expect(updateRs.code).not.toMatch(/\.restart\(\)/);
     expect(offer).toMatch(/ask\(app, "update-failed"[\s\S]*shared\.restarting\.store\(false/);
     expect(fnBody(updateRs, "show_splash")).toMatch(/showing_splash\.store\(true[\s\S]*window\.navigate\(/);
   });
@@ -720,5 +761,336 @@ describe("key material (DESIGN §20.11)", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The release workflow (DESIGN §20.11), read as text. A YAML document is split into blocks by indentation
+ * (no YAML dependency): a block starts at a line with exactly `indent` spaces and a key (or `- ` for a list
+ * item) and runs until the next such line or a line indented less.
+ */
+interface YamlBlock {
+  /** The key of the first line (`- uses: x` → "uses"), or "" for a bare `-`. */
+  key: string;
+  /** The first line, trimmed. */
+  head: string;
+  lines: string[];
+  text: string;
+}
+
+const indentOf = (line: string) => line.length - line.trimStart().length;
+
+/** Drops full-line comments and blank lines, keeping trailing comments (the `uses:` version comments). */
+function yamlLines(text: string): string[] {
+  return text.split("\n").filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"));
+}
+
+function yamlBlocks(lines: string[], indent: number, item = false): YamlBlock[] {
+  const blocks: YamlBlock[] = [];
+  const startsBlock = (line: string) => indentOf(line) === indent && (item ? line.trimStart().startsWith("-") : !line.trimStart().startsWith("-"));
+  for (const line of lines) {
+    if (indentOf(line) < indent) break;
+    if (startsBlock(line)) {
+      const head = line.trim();
+      const key = /^(?:-\s*)?([A-Za-z_][\w-]*):/.exec(head)?.[1] ?? "";
+      blocks.push({ key, head, lines: [line], text: line });
+    } else if (blocks.length > 0) {
+      const last = blocks[blocks.length - 1]!;
+      last.lines.push(line);
+      last.text += "\n" + line;
+    }
+  }
+  return blocks;
+}
+
+/** The lines below the `key:` line of a block, at deeper indentation. */
+function yamlChild(block: YamlBlock | undefined, key: string): string[] {
+  if (!block) return [];
+  const at = block.lines.findIndex((line) => new RegExp(`^(?:-\\s*)?${key}:`).test(line.trim()));
+  if (at === -1) return [];
+  const base = indentOf(block.lines[at]!) + (block.lines[at]!.trimStart().startsWith("-") ? 2 : 0);
+  const out: string[] = [];
+  for (const line of block.lines.slice(at + 1)) {
+    if (indentOf(line) <= base) break;
+    out.push(line);
+  }
+  return out;
+}
+
+/** `key: value` pairs of a flat mapping (the lines of yamlChild). */
+function yamlMap(lines: string[]): Record<string, string> {
+  return Object.fromEntries(
+    lines.map((line) => {
+      const at = /^\s*([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
+      if (!at) throw new Error(`not a mapping line: ${line}`);
+      return [at[1]!, at[2]!];
+    }),
+  );
+}
+
+describe("release workflow (DESIGN §20.11)", () => {
+  const TOOLS_STEP = "bash packages/desktop/scripts/appimage-tools.sh";
+  const repoRoot = path.resolve(root, "..", "..");
+  const lines = yamlLines(fs.readFileSync(path.join(repoRoot, ".github/workflows/release-desktop.yml"), "utf8"));
+  /** The workflow without its full-line comments. */
+  const raw = lines.join("\n");
+  const top = yamlBlocks(lines, 0);
+  const topKey = (key: string) => top.find((b) => b.key === key);
+  const jobsBlock = topKey("jobs")!;
+  const jobs = yamlBlocks(jobsBlock.lines.slice(1), 2);
+  const job = (name: string) => jobs.find((j) => j.key === name)!;
+  const steps = (name: string) => yamlBlocks(yamlChild(job(name), "steps"), 6, true);
+  const jobKeys = (name: string) => yamlBlocks(job(name).lines.slice(1), 4).map((b) => b.key);
+  const jobKey = (name: string, key: string) => yamlBlocks(job(name).lines.slice(1), 4).find((b) => b.key === key);
+  const usesOf = (step: YamlBlock) => /\buses:\s*([^@\s]+)@/.exec(step.text)?.[1];
+  const tauriActionStep = (name: string) => {
+    const found = steps(name).filter((s) => usesOf(s) === "tauri-apps/tauri-action");
+    expect(found, name).toHaveLength(1);
+    return found[0]!;
+  };
+  const withOf = (step: YamlBlock) => yamlMap(yamlChild(step, "with").filter((line) => /^\s*[A-Za-z_][\w-]*:/.test(line) && indentOf(line) === 10));
+
+  it("is split into the expected top-level keys and the jobs build and release", () => {
+    expect(top.map((b) => b.key)).toEqual(["name", "on", "permissions", "concurrency", "jobs"]);
+    expect(topKey("name")!.head).toBe("name: Release desktop app");
+    expect(jobs.map((j) => j.key)).toEqual(["build", "release"]);
+    expect(steps("build").length).toBeGreaterThan(8);
+    expect(steps("release").length).toBeGreaterThan(6);
+  });
+
+  it("triggers on desktop-v* tags and manual runs only", () => {
+    const on = topKey("on")!;
+    expect(yamlBlocks(on.lines.slice(1), 2).map((b) => b.key)).toEqual(["push", "workflow_dispatch"]);
+    expect(yamlChild(on, "push").map((l) => l.trim())).toEqual(["tags: ['desktop-v*']"]);
+  });
+
+  it("grants nothing at the top, and never cancels a running release", () => {
+    expect(topKey("permissions")!.lines).toEqual(["permissions: {}"]);
+    expect(yamlMap(yamlChild(topKey("concurrency"), "concurrency"))).toEqual({ group: "release-desktop-${{ github.ref }}", "cancel-in-progress": "false" });
+  });
+
+  it("build reads contents only, has no environment and never references a secret", () => {
+    expect(yamlMap(yamlChild(jobKey("build", "permissions"), "permissions"))).toEqual({ contents: "read" });
+    expect(jobKeys("build")).not.toContain("environment");
+    expect(jobKeys("build")).not.toContain("env");
+    expect(job("build").text).not.toMatch(/secrets\./);
+    expect(job("build").text).not.toMatch(/GITHUB_TOKEN|TAURI_SIGNING/);
+  });
+
+  it("release runs only for a pushed desktop-v tag, in the desktop-release environment, with contents: write only", () => {
+    const head = Object.fromEntries(yamlBlocks(job("release").lines.slice(1), 4).filter((b) => b.lines.length === 1).map((b) => [b.key, b.head.slice(b.key.length + 1).trim()]));
+    expect(head.needs).toBe("build");
+    expect(head.if).toBe("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-v')");
+    expect(head.environment).toBe("desktop-release");
+    expect(yamlMap(yamlChild(jobKey("release", "permissions"), "permissions"))).toEqual({ contents: "write" });
+    expect(jobKeys("release")).not.toContain("env");
+  });
+
+  it("both jobs run on ubuntu-22.04 with a 60 minute timeout", () => {
+    for (const name of ["build", "release"]) {
+      expect(job(name).text, name).toContain("\n    runs-on: ubuntu-22.04");
+      expect(job(name).text, name).toContain("\n    timeout-minutes: 60");
+    }
+  });
+
+  it("references secrets only in the env of the release job's tauri-action step, never in a script", () => {
+    const step = tauriActionStep("release");
+    expect(yamlMap(yamlChild(step, "env"))).toEqual({
+      GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
+      TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
+    });
+    const total = raw.split("secrets.").length - 1;
+    expect(total).toBe(3);
+    expect(yamlChild(step, "env").join("\n").split("secrets.").length - 1).toBe(3);
+    // No script mentions the signing variables, so none can echo them.
+    for (const name of ["build", "release"]) {
+      for (const s of steps(name)) {
+        const run = yamlChild(s, "run").join("\n") + (/\brun:\s*(\S.*)$/m.exec(s.text)?.[1] ?? "");
+        expect(run, s.head).not.toMatch(/TAURI_SIGNING|GITHUB_TOKEN|secrets\./);
+      }
+    }
+    expect(raw).not.toMatch(/echo[^\n]*(TAURI_SIGNING|secrets\.)/);
+  });
+
+  it("uses no cache of any kind", () => {
+    for (const line of raw.split("\n")) {
+      if (line.trim() === "package-manager-cache: false") continue; // turns setup-node's automatic cache off
+      expect(line).not.toMatch(/cache/i);
+    }
+    expect(raw).toContain("package-manager-cache: false");
+    expect(raw).not.toMatch(/rust-cache|cache-bin|actions\/cache/);
+  });
+
+  it("pins every action to a full commit SHA with a version comment", () => {
+    const uses = raw.split("\n").filter((line) => /^\s*(-\s*)?uses:/.test(line));
+    expect(uses.length).toBe(steps("build").filter(usesOf).length + steps("release").filter(usesOf).length);
+    for (const line of uses) {
+      expect(line).toMatch(/uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40} # \S/);
+      if (!line.includes("dtolnay/rust-toolchain@")) expect(line).toMatch(/@[0-9a-f]{40} # (action-)?v\d+\.\d+\.\d+$/);
+    }
+  });
+
+  it("pins the Rust toolchain and installs tauri-cli 2.12.4 --locked in both jobs", () => {
+    for (const name of ["build", "release"]) {
+      const rust = steps(name).filter((s) => usesOf(s) === "dtolnay/rust-toolchain");
+      expect(rust, name).toHaveLength(1);
+      expect(withOf(rust[0]!)).toEqual({ toolchain: "1.99.0" });
+      expect(steps(name).filter((s) => s.text.includes("run: cargo install tauri-cli --version 2.12.4 --locked")), name).toHaveLength(1);
+    }
+    const rustVersion = /^rust-version = "(\d+)\.(\d+)"/m.exec(read("src-tauri/Cargo.toml"))!;
+    expect(99).toBeGreaterThanOrEqual(Number(rustVersion[2]));
+    expect(raw).not.toMatch(/cargo install(?![^\n]*--locked)/);
+  });
+
+  it("checks out without persisted credentials and installs the same apt packages in both jobs", () => {
+    const apt = "sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf xdg-utils file build-essential python3";
+    for (const name of ["build", "release"]) {
+      const first = steps(name)[0]!;
+      expect(usesOf(first), name).toBe("actions/checkout");
+      expect(withOf(first)).toEqual({ "persist-credentials": "false" });
+      expect(job(name).text.split(apt).length - 1, name).toBe(1);
+    }
+  });
+
+  it("build installs, tests and stages the runtime with the bundled Node, then builds unsigned bundles", () => {
+    const build = steps("build");
+    const order = (needle: string) => build.findIndex((s) => s.text.includes(needle));
+    const node = build.find((s) => usesOf(s) === "actions/setup-node")!;
+    expect(withOf(node)).toEqual({ "node-version": NODE_VERSION_PINNED, "package-manager-cache": "false" });
+    expect(build.some((s) => usesOf(s) === "pnpm/action-setup")).toBe(true);
+    const install = "pnpm install --frozen-lockfile --filter . --filter @promptgraph/shared --filter @promptgraph/server --filter @promptgraph/web --filter @promptgraph/desktop";
+    const guard = build.find((s) => s.head === "- name: Guards")!;
+    expect(guard.text).toContain("set -euo pipefail");
+    expect(guard.text).toContain('"${GITHUB_REF_NAME#desktop-v}" != "$version"');
+    expect(guard.text).toContain("require('./$conf').version");
+    expect(guard.text).toContain("require('./$conf').plugins.updater.pubkey");
+    expect(guard.text).toMatch(/\n {10}pnpm --filter @promptgraph\/desktop test$/);
+    const pack = build.find((s) => s.text.includes("id: stage"))!;
+    expect(pack.text).toContain("tar -C packages/desktop -cJf runtime-stage.tar.xz runtime-stage");
+    expect(pack.text).toContain('>> "$GITHUB_OUTPUT"');
+    expect(yamlMap(yamlChild(jobKey("build", "outputs"), "outputs"))).toEqual({ stage_sha256: "${{ steps.stage.outputs.sha256 }}" });
+    const upload = build.find((s) => usesOf(s) === "actions/upload-artifact")!;
+    expect(withOf(upload)).toMatchObject({ name: "runtime-stage", path: "runtime-stage.tar.xz", "retention-days": "1" });
+    const tauri = tauriActionStep("build");
+    expect(withOf(tauri)).toEqual({
+      projectPath: "packages/desktop",
+      tauriScript: "cargo tauri",
+      args: "--bundles deb,appimage --config src-tauri/tauri.bundle.conf.json -- --locked",
+      uploadWorkflowArtifacts: "true",
+    });
+    expect(yamlChild(tauri, "env")).toEqual([]);
+    const sequence = [install, "- name: Guards", "runtime:prepare", "id: stage", "actions/upload-artifact@", TOOLS_STEP, "tauri-apps/tauri-action@"].map(order);
+    expect(order(TOOLS_STEP)).toBe(order("tauri-apps/tauri-action@") - 1);
+    expect(sequence.every((i) => i >= 0)).toBe(true);
+    expect([...sequence].sort((a, b) => a - b)).toEqual(sequence);
+  });
+
+  it("release installs no Node package, verifies the stage and warms up without secrets before signing", () => {
+    const release = steps("release");
+    expect(job("release").text).not.toMatch(/pnpm|npm |npx|setup-node|action-setup/);
+    const download = release.find((s) => usesOf(s) === "actions/download-artifact")!;
+    expect(withOf(download)).toEqual({ name: "runtime-stage" });
+    const unpack = release.find((s) => s.text.includes("sha256sum -c"))!;
+    expect(yamlMap(yamlChild(unpack, "env"))).toEqual({ STAGE_SHA256: "${{ needs.build.outputs.stage_sha256 }}" });
+    expect(unpack.text).toContain('echo "$STAGE_SHA256  runtime-stage.tar.xz" | sha256sum -c');
+    expect(unpack.text).toContain("tar -C packages/desktop -xJf runtime-stage.tar.xz");
+    const tools = release.find((s) => s.text.includes(TOOLS_STEP))!;
+    expect(yamlChild(tools, "env")).toEqual([]);
+    const warm = release.find((s) => s.text.includes("--no-bundle"))!;
+    expect(warm.text).toContain("working-directory: packages/desktop");
+    expect(warm.text).toContain("run: cargo tauri build --no-bundle --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.release.conf.json -- --locked");
+    expect(yamlChild(warm, "env")).toEqual([]);
+    const tauri = tauriActionStep("release");
+    const index = (s: YamlBlock) => release.indexOf(s);
+    expect(index(download)).toBeLessThan(index(unpack));
+    expect(index(unpack)).toBeLessThan(index(tools));
+    // The AppImage tools are in place and verified before the key exists, so the signing step downloads nothing.
+    expect(index(tools)).toBe(index(warm) - 1);
+    const signing = release.findIndex((s) => usesOf(s) === "tauri-apps/tauri-action");
+    expect(index(warm)).toBe(signing - 1);
+    expect(signing).toBe(release.length - 1);
+    const inputs = withOf(tauri);
+    expect(inputs).toMatchObject({
+      projectPath: "packages/desktop",
+      tauriScript: "cargo tauri",
+      args: "--bundles deb,appimage --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.release.conf.json -- --locked",
+      tagName: "${{ github.ref_name }}",
+      releaseName: "promptgraph desktop v__VERSION__",
+      releaseBody: "|",
+      releaseDraft: "true",
+      prerelease: "false",
+      uploadUpdaterJson: "true",
+      retryAttempts: "1",
+    });
+    const body = yamlChild(tauri, "releaseBody").join("\n");
+    for (const needle of ["packages/desktop/README.md", "`git`", "`claude`", "`curl`", "`gh`"]) expect(body).toContain(needle);
+  });
+
+  it("fetches every AppImage tool the bundler and appimagetool would download, pinned by SHA-256 (DESIGN §17 D13)", () => {
+    for (const name of ["build", "release"]) {
+      const found = steps(name).filter((s) => s.text.includes(TOOLS_STEP));
+      expect(found, name).toHaveLength(1);
+      expect(found[0]!.text, name).toContain(`run: ${TOOLS_STEP}`);
+    }
+    const script = fs.readFileSync(path.join(root, "scripts/appimage-tools.sh"), "utf8");
+    expect(script).toContain("set -euo pipefail");
+    const pins = [...script.matchAll(/^\s*"([^|"]+)\|(https:\/\/[^|"]+)\|([0-9a-f]{64})\|([0-9a-f]{64}|-)"$/gm)].map((m) => ({ name: m[1]!, url: m[2]! }));
+    // The file names tauri-bundler 2.10.4 (tauri-cli 2.12.4) looks up in its tool directory, and the runtime.
+    expect(pins.map((p) => p.name)).toEqual(["AppRun-x86_64", "linuxdeploy-07333c6-x86_64.AppImage", "linuxdeploy-plugin-appimage.AppImage", "appimage-runtime-20251108-x86_64"]);
+    expect(pins.find((p) => p.name.startsWith("appimage-runtime"))!.url).toBe("https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64");
+    for (const { url } of pins) expect(url).toMatch(/^https:\/\/github\.com\/(tauri-apps\/binary-releases|linuxdeploy\/linuxdeploy-plugin-appimage|AppImage\/type2-runtime)\/releases\/download\//);
+    expect(script).toContain('dir="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"');
+    expect(script).toMatch(/if \[\[ "\$got" != "\$want" \]\]; then[\s\S]*exit 1/);
+    expect(script).toContain("curl --proto '=https' --tlsv1.2 -fsSL");
+    expect(script).toContain('echo "LDAI_RUNTIME_FILE=$runtime" >>"$GITHUB_ENV"');
+    expect(script.split("\n").filter((line) => !line.trimStart().startsWith("#")).join("\n")).not.toMatch(/TAURI_SIGNING|secrets/);
+  });
+
+  it("builds every crate from the committed Cargo.lock (--locked is forwarded to cargo build)", () => {
+    const builds = raw.split("\n").filter((line) => /cargo tauri build|^\s*args: --bundles/.test(line));
+    expect(builds).toHaveLength(3);
+    for (const line of builds) expect(line).toMatch(/ -- --locked$/);
+  });
+
+  it("uses the signing overlay only in the release job", () => {
+    expect(job("build").text).not.toContain("tauri.release.conf.json");
+    expect(job("release").text.split("tauri.release.conf.json").length - 1).toBe(2);
+  });
+});
+
+describe("README (DESIGN §20.11)", () => {
+  const readme = read("README.md");
+  it("documents the key, environment, secrets and ruleset commands the maintainer runs", () => {
+    for (const command of [
+      "cargo tauri signer generate -w ~/.tauri/promptgraph.key",
+      "plugins.updater.pubkey",
+      "gh api -X PUT repos/luisMDev/promptgraph/environments/desktop-release",
+      "gh api user --jq .id",
+      '"custom_branch_policies": true',
+      "gh api -X POST repos/luisMDev/promptgraph/environments/desktop-release/deployment-branch-policies -f name='desktop-v*' -f type=tag",
+      "gh api -X POST repos/luisMDev/promptgraph/rulesets --input",
+      '"include": ["refs/tags/desktop-v*"]',
+      "gh secret set TAURI_SIGNING_PRIVATE_KEY --env desktop-release --repo luisMDev/promptgraph < ~/.tauri/promptgraph.key",
+      "gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env desktop-release --repo luisMDev/promptgraph\n",
+      "node scripts/set-version.mjs X.Y.Z",
+      "git tag desktop-vX.Y.Z",
+      "SHASUMS256.txt",
+      "make_latest: false",
+      "/mcp",
+      "promptgraph desktop shim uninstall --json",
+      "cargo install tauri-cli --version 2.12.4 --locked",
+      "scripts/appimage-tools.sh",
+      "LDAI_RUNTIME_FILE",
+    ]) {
+      expect(readme, command).toContain(command);
+    }
+  });
+
+  it("lists every variable the shell reads", () => {
+    const vars = new Set(rustStrings.filter((s) => /^(PG_DESKTOP_[A-Z_]+|PROMPTGRAPH_BIN)$/.test(s)));
+    expect(vars.size).toBeGreaterThanOrEqual(5);
+    for (const name of vars) expect(readme, name).toContain(`| \`${name}\` |`);
+    for (const id of Object.keys(DESKTOP_DIALOGS)) expect(readme, id).toContain(`\`${id}\``);
   });
 });

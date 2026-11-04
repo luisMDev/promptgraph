@@ -23,11 +23,14 @@ use tauri_plugin_opener::OpenerExt;
 
 /// `promptgraph open --print-url --json` (DESKTOP_OPEN_ARGS in packages/shared/src/desktop.ts).
 const OPEN_ARGS: [&str; 3] = ["open", "--print-url", "--json"];
-/// Removed from the CLI's environment (DESKTOP_STRIPPED_ENV / DESKTOP_STRIPPED_ENV_PREFIXES).
-const STRIPPED_ENV: [&str; 8] = [
-    "LD_LIBRARY_PATH", "LD_PRELOAD", "APPDIR", "APPIMAGE", "ARGV0", "OWD", "PG_DESKTOP_AUTO_ANSWER", "PG_DESKTOP_UPDATES",
-];
+/// Removed from the CLI's environment, and the search paths AppRun and the GTK hook prepend the mount to
+/// (DESKTOP_STRIPPED_ENV, DESKTOP_STRIPPED_ENV_PREFIXES, DESKTOP_MOUNT_PATH_LISTS).
+const STRIPPED_ENV: [&str; 8] = ["LD_LIBRARY_PATH", "LD_PRELOAD", "APPDIR", "APPIMAGE", "ARGV0", "OWD", "PG_DESKTOP_AUTO_ANSWER", "PG_DESKTOP_UPDATES"];
 const STRIPPED_ENV_PREFIXES: [&str; 6] = ["GTK_", "GDK_", "GIO_", "GI_", "GSETTINGS_", "WEBKIT_"];
+/// Names of STRIPPED_ENV the relaunch after an update keeps unless they point into a mount (strip_env).
+const RELAUNCH_FILTERED: [&str; 2] = ["LD_LIBRARY_PATH", "LD_PRELOAD"];
+const MOUNT_PATH_LISTS: [&str; 9] = ["PATH", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "PYTHONHOME", "PYTHONPATH", "PERLLIB",
+    "QT_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0"];
 /// Granted to the daemon's origin (DESKTOP_PERMISSIONS); the opener one is added scoped to https.
 const PERMISSIONS: [&str; 9] = [
     "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-internal-toggle-maximize",
@@ -133,22 +136,7 @@ fn login_shell() -> (String, &'static str, &'static str) {
 /// `on_stderr_line`) and used 500 ms after exit even without EOF; then the whole session is killed on every
 /// path, so jobs of start-up files close the pipes (the daemon has its own session).
 fn run_captured(mut cmd: Command, timeout: Duration, on_stderr_line: &dyn Fn(&str)) -> Result<Captured, String> {
-    for name in STRIPPED_ENV { cmd.env_remove(name); }
-    for (key, _) in std::env::vars_os() {
-        if key.to_str().is_some_and(|k| STRIPPED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))) {
-            cmd.env_remove(&key);
-        }
-    }
-    // AppRun and the AppImage's GTK hook prepend the mount, which disappears with the app (APPDIR is read
-    // from this process: it is removed only from the child's environment).
-    let appdir = std::env::var("APPDIR").unwrap_or_default();
-    for name in ["PATH", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
-        match std::env::var(name).map(|value| without_dirs_under(&value, &appdir)) {
-            Ok(Some(value)) => { cmd.env(name, value); }
-            Ok(None) => { cmd.env_remove(name); }
-            Err(_) => {}
-        }
-    }
+    strip_env(&mut cmd, true);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     unsafe { cmd.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }) };
     let program = cmd.get_program().to_string_lossy().into_owned();
@@ -188,13 +176,72 @@ fn run_captured(mut cmd: Command, timeout: Duration, on_stderr_line: &dyn Fn(&st
     Ok(Captured { status, stdout, stderr })
 }
 
-/// `PATH`/`XDG_DATA_DIRS`/`XDG_CONFIG_DIRS` without the entries under `appdir`; None when nothing is left.
+/// Removes STRIPPED_ENV, the prefixes and every mount entry of MOUNT_PATH_LISTS, and runs in the caller's
+/// directory (OWD of this AppImage), not AppRun's `$APPDIR/usr` (§20.1). For the app's own relaunch after an
+/// update (`cli` false) the user's settings for the app stay: `PG_DESKTOP_*`, and the prefixed variables and
+/// RELAUNCH_FILTERED that do not point into a mount (`WEBKIT_DISABLE_DMABUF_RENDERER=1`, `GDK_BACKEND=x11`).
+pub(crate) fn strip_env(cmd: &mut Command, cli: bool) {
+    let appdir = std::env::var("APPDIR").unwrap_or_default();
+    for name in STRIPPED_ENV { if cli || !(name.starts_with("PG_DESKTOP_") || RELAUNCH_FILTERED.contains(&name)) { cmd.env_remove(name); } }
+    for (key, value) in std::env::vars_os() {
+        let Some(k) = key.to_str() else { continue };
+        let prefixed = STRIPPED_ENV_PREFIXES.iter().any(|p| k.starts_with(p));
+        if cli && prefixed {
+            cmd.env_remove(&key);
+        } else if !cli && (prefixed || RELAUNCH_FILTERED.contains(&k)) {
+            let Some(v) = value.to_str() else { continue };
+            match relaunch_value(v, &appdir) { Some(kept) if kept == v => {} Some(kept) => { cmd.env(&key, kept); } None => { cmd.env_remove(&key); } }
+        }
+    }
+    if let Some(dir) = owd() { cmd.current_dir(dir); }
+    for name in MOUNT_PATH_LISTS {
+        match std::env::var(name).map(|value| without_dirs_under(&value, &appdir)) {
+            Ok(Some(value)) => { cmd.env(name, value); }
+            Ok(None) => { cmd.env_remove(name); }
+            Err(_) => {}
+        }
+    }
+}
+
+/// A path under `appdir` or inside any AppImage mount (`.mount_*`, `appimage_extracted_*`: the old one's after an update).
+fn in_mount(dir: &str, appdir: &str) -> bool {
+    dir.split('/').any(|s| s.starts_with(".mount_") || s.starts_with("appimage_extracted_"))
+        || (!appdir.is_empty() && Path::new(dir).starts_with(appdir))
+}
+
+/// A MOUNT_PATH_LISTS value without its mount entries; None when nothing is left.
 fn without_dirs_under(value: &str, appdir: &str) -> Option<String> {
-    let kept: Vec<&str> = value.split(':')
-        .filter(|dir| !dir.is_empty() && (appdir.is_empty() || !Path::new(dir).starts_with(appdir)))
-        .collect();
+    let kept: Vec<&str> = value.split(':').filter(|dir| !dir.is_empty() && !in_mount(dir, appdir)).collect();
     (!kept.is_empty()).then(|| kept.join(":"))
 }
+
+/// A value kept on the relaunch: unchanged unless one of its entries (split at `:` and whitespace, as in
+/// LD_PRELOAD) is in a mount; then the other entries joined by `:`, None when nothing is left.
+fn relaunch_value(value: &str, appdir: &str) -> Option<String> {
+    let entries = || value.split(|c: char| c == ':' || c.is_whitespace()).filter(|e| !e.is_empty());
+    if !entries().any(|e| in_mount(e, appdir)) { return Some(value.to_string()); }
+    let kept: Vec<&str> = entries().filter(|e| !in_mount(e, appdir)).collect();
+    (!kept.is_empty()).then(|| kept.join(":"))
+}
+
+/// The canonical `APPDIR` when the canonical `exe` lies inside it: the proof that this process runs from that
+/// AppImage, because `APPDIR`, `APPIMAGE` and `OWD` are inherited by anything started from its environment.
+pub(crate) fn appdir_of(env: &dyn Fn(&str) -> Option<OsString>, exe: &Path) -> Result<PathBuf, String> {
+    let appdir = env("APPDIR").filter(|v| !v.is_empty()).ok_or("APPDIR is not set")?;
+    let appdir = std::fs::canonicalize(&appdir).map_err(|e| format!("APPDIR: {e}"))?;
+    let exe = std::fs::canonicalize(exe).map_err(|e| format!("current_exe: {e}"))?;
+    if !exe.starts_with(&appdir) { return Err("the running binary is not inside APPDIR".into()); }
+    Ok(appdir)
+}
+
+/// `OWD` (the directory AppRun was started in) when this process is that AppImage, else None: a `.deb` or
+/// bare binary started from another AppImage's terminal inherits that app's `OWD`.
+fn caller_dir(env: &dyn Fn(&str) -> Option<OsString>, exe: Option<&Path>) -> Option<PathBuf> {
+    appdir_of(env, exe?).ok()?;
+    env("OWD").map(PathBuf::from).filter(|d| d.is_dir())
+}
+
+fn owd() -> Option<PathBuf> { caller_dir(&|name| std::env::var_os(name), std::env::current_exe().ok().as_deref()) }
 
 /// The last 10 lines of stderr: the CLI's message (stderr also carries start-up files' messages).
 fn stderr_tail(out: &Captured) -> String {
@@ -498,13 +545,12 @@ fn build_window(app: &AppHandle, shared: Arc<Shared>) -> tauri::Result<()> {
 }
 
 /// `promptgraph-desktop [repo-dir]`, made absolute even when it does not exist, so the CLI never reads it as
-/// an option (`-h` becomes `<cwd>/-h`). Symlinks are resolved when the path exists.
+/// an option (`-h` becomes `<cwd>/-h`); symlinks are resolved when it exists. The caller's directory is OWD in
+/// this AppImage (its AppRun changes to `$APPDIR/usr`), else the working directory.
 fn repo_arg(arg: OsString) -> String {
-    let path = PathBuf::from(arg);
-    std::fs::canonicalize(&path)
-        .or_else(|_| std::env::current_dir().map(|dir| dir.join(&path)))
-        .unwrap_or_else(|_| Path::new(".").join(&path))
-        .to_string_lossy().into_owned()
+    let cwd = owd().map_or_else(std::env::current_dir, Ok);
+    let path = cwd.map_or_else(|_| Path::new(".").join(&arg), |dir| dir.join(&arg));
+    std::fs::canonicalize(&path).unwrap_or(path).to_string_lossy().into_owned()
 }
 
 fn main() {
@@ -541,17 +587,59 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_json_object, without_dirs_under};
+    use super::{caller_dir, last_json_object, relaunch_value, without_dirs_under};
+    use std::ffi::OsString;
 
     #[test]
     fn drops_xdg_dirs_under_the_appimage_mount() {
         let appdir = "/tmp/.mount_promptAbc123";
         let value = "/tmp/.mount_promptAbc123/usr/share:/usr/local/share::/tmp/.mount_promptAbc1234/share:/usr/share";
-        assert_eq!(without_dirs_under(value, appdir).as_deref(), Some("/usr/local/share:/tmp/.mount_promptAbc1234/share:/usr/share"));
+        assert_eq!(without_dirs_under(value, appdir).as_deref(), Some("/usr/local/share:/usr/share"));
         assert_eq!(without_dirs_under("/tmp/.mount_promptAbc123/usr/share", appdir), None);
         assert_eq!(without_dirs_under("/usr/share:/etc/xdg", "").as_deref(), Some("/usr/share:/etc/xdg"));
         let path = "/tmp/.mount_promptAbc123/usr/bin/:/home/u/.local/bin:/tmp/.mount_promptAbc123/bin/:/usr/bin";
         assert_eq!(without_dirs_under(path, appdir).as_deref(), Some("/home/u/.local/bin:/usr/bin"));
+        let mount_name_in_a_segment = "/home/u/my.mount_notes/bin:/opt/x.appimage_extracted_y";
+        assert_eq!(without_dirs_under(mount_name_in_a_segment, "").as_deref(), Some(mount_name_in_a_segment));
+    }
+
+    #[test]
+    fn drops_entries_of_another_appimage_mount_after_an_update_restart() {
+        // A relaunched app inherits the previous mount's entries; APPDIR names only the new mount.
+        let path = "/tmp/.mount_promptNew456/usr/bin/:/tmp/.mount_promptOld123/usr/bin/:/tmp/appimage_extracted_ab12/usr/bin:/usr/bin";
+        assert_eq!(without_dirs_under(path, "/tmp/.mount_promptNew456").as_deref(), Some("/usr/bin"));
+    }
+
+    #[test]
+    fn keeps_the_users_settings_on_the_relaunch_unless_they_point_into_a_mount() {
+        let appdir = "/tmp/.mount_promptNew456";
+        assert_eq!(relaunch_value("1", appdir).as_deref(), Some("1"));
+        assert_eq!(relaunch_value("x11", appdir).as_deref(), Some("x11"));
+        assert_eq!(relaunch_value("", appdir).as_deref(), Some(""));
+        assert_eq!(relaunch_value("/home/u/lib/libfix.so /usr/lib/x.so", appdir).as_deref(), Some("/home/u/lib/libfix.so /usr/lib/x.so"));
+        assert_eq!(relaunch_value("/tmp/.mount_promptNew456/usr/lib/loaders.cache", appdir), None);
+        assert_eq!(relaunch_value("/tmp/.mount_promptOld123/usr/lib/gio/modules", ""), None);
+        assert_eq!(relaunch_value("/tmp/.mount_promptNew456/usr/lib:/opt/mine/lib", appdir).as_deref(), Some("/opt/mine/lib"));
+        assert_eq!(relaunch_value("/opt/a.so /tmp/appimage_extracted_ab12/usr/lib/b.so", "").as_deref(), Some("/opt/a.so"));
+    }
+
+    #[test]
+    fn trusts_owd_only_from_the_appimage_it_belongs_to() {
+        let root = std::env::temp_dir().join(format!("pg-owd-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (appdir, caller, elsewhere) = (root.join(".mount_promptAbc123"), root.join("src"), root.join("usr/bin"));
+        for dir in [appdir.join("usr/bin"), caller.clone(), elsewhere.clone()] { std::fs::create_dir_all(dir).unwrap(); }
+        let (inside, outside) = (appdir.join("usr/bin/promptgraph-desktop"), elsewhere.join("promptgraph-desktop"));
+        for exe in [&inside, &outside] { std::fs::write(exe, b"").unwrap(); }
+        let vars = [("APPDIR", appdir.clone().into_os_string()), ("OWD", caller.clone().into_os_string())];
+        let env = |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.clone());
+        assert_eq!(caller_dir(&env, Some(&inside)), Some(caller.clone()));
+        // A .deb or bare binary started from that AppImage's terminal inherits APPDIR and OWD.
+        assert_eq!(caller_dir(&env, Some(&outside)), None);
+        assert_eq!(caller_dir(&env, None), None);
+        let only_owd = |name: &str| (name == "OWD").then(|| OsString::from(&caller));
+        assert_eq!(caller_dir(&only_owd, Some(&outside)), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
