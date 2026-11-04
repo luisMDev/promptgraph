@@ -76,9 +76,9 @@ describe("desktop runtime installation (DESIGN §20.7)", () => {
     expect(fs.lstatSync(paths.currentLink).isSymbolicLink()).toBe(true);
     expect(readCurrent(paths.runtimeDir)).toBe(b.name);
     expect(fs.readdirSync(paths.runtimeDir).sort()).toEqual([b.name, "current"].sort());
-    expect(isInstalledRuntime(env, root)).toBe(true);
-    expect(isInstalledRuntime(env, path.join(paths.runtimeDir, "current"))).toBe(true);
-    expect(isInstalledRuntime(env, b.dir)).toBe(false);
+    expect(isInstalledRuntime(root)).toBe(true);
+    expect(isInstalledRuntime(path.join(paths.runtimeDir, "current"))).toBe(true);
+    expect(isInstalledRuntime(b.dir)).toBe(false);
   });
 
   it("installing another version keeps current (installing is not activating); a re-install is a no-op", async () => {
@@ -160,7 +160,7 @@ describe("desktop runtime installation (DESIGN §20.7)", () => {
     const cur = bundle("0.2.0");
     await installRuntime({ from: old.dir, env, selfCheck: okCheck, proc: fakeProc() });
     await installRuntime({ from: cur.dir, env, selfCheck: okCheck, proc: fakeProc({ 1: path.join(paths.runtimeDir, old.name, "node/bin/node") }) });
-    await activateRuntime(env, path.join(paths.runtimeDir, cur.name));
+    await activateRuntime(path.join(paths.runtimeDir, cur.name));
     // A read-only subdirectory makes the recursive removal fail with EACCES.
     const locked = path.join(paths.runtimeDir, old.name, "server");
     fs.chmodSync(locked, 0o555);
@@ -199,7 +199,7 @@ describe("desktop runtime installation (DESIGN §20.7)", () => {
     // Install the old builds without pruning in between, then make 0.2.0 current.
     for (const b of [old1, old2]) await installRuntime({ from: b.dir, env, selfCheck: okCheck, proc: fakeProc({ 1: "/x" }) });
     await installRuntime({ from: cur.dir, env, selfCheck: okCheck, proc: fakeProc({ 1: path.join(paths.runtimeDir, old1.name, "node/bin/node"), 2: path.join(paths.runtimeDir, old2.name, "node/bin/node") }) });
-    await activateRuntime(env, path.join(paths.runtimeDir, cur.name));
+    await activateRuntime(path.join(paths.runtimeDir, cur.name));
     // Stale staging of a dead process, and one of a live process.
     fs.mkdirSync(path.join(paths.runtimeDir, ".staging-deadbeef-999999"));
     fs.mkdirSync(path.join(paths.runtimeDir, ".staging-cafebabe-4242"));
@@ -262,16 +262,43 @@ describe("desktop runtime installation (DESIGN §20.7)", () => {
     const b = bundle("0.3.0");
     await installRuntime({ from: a.dir, env, selfCheck: okCheck, proc: fakeProc() });
     await installRuntime({ from: b.dir, env, selfCheck: okCheck, proc: fakeProc() });
-    expect(await activateRuntime(env, path.join(paths.runtimeDir, b.name))).toEqual({ switched: true, current: b.name });
+    expect(await activateRuntime(path.join(paths.runtimeDir, b.name))).toEqual({ switched: true, current: b.name });
     expect(readCurrent(paths.runtimeDir)).toBe(b.name);
-    expect(await activateRuntime(env, path.join(paths.runtimeDir, b.name))).toEqual({ switched: false, current: b.name });
+    expect(await activateRuntime(path.join(paths.runtimeDir, b.name))).toEqual({ switched: false, current: b.name });
     expect(fs.readdirSync(paths.runtimeDir).filter((n) => n.startsWith(".current-"))).toEqual([]);
-    await expect(activateRuntime(env, b.dir)).rejects.toThrow("is not an installed promptgraph runtime");
+    await expect(activateRuntime(b.dir)).rejects.toThrow("is not an installed promptgraph runtime");
     // A directory with a manifest whose name does not match it is not an installed build either.
     const renamed = path.join(paths.runtimeDir, "0.9.0-00000000");
     fs.cpSync(path.join(paths.runtimeDir, a.name), renamed, { recursive: true });
-    expect(isInstalledRuntime(env, renamed)).toBe(false);
+    expect(isInstalledRuntime(renamed)).toBe(false);
     expect(readCurrent(paths.runtimeDir)).toBe(b.name);
+  });
+
+  it("an installed build is recognised from its own location, whatever the environment says (DESIGN §4.3)", async () => {
+    const { env, paths, bundle } = setup();
+    const a = bundle("0.2.0");
+    const b = bundle("0.3.0");
+    await installRuntime({ from: a.dir, env, selfCheck: okCheck, proc: fakeProc() });
+    await installRuntime({ from: b.dir, env, selfCheck: okCheck, proc: fakeProc() });
+    const root = path.join(paths.runtimeDir, b.name);
+    // No environment is read: an XDG_DATA_HOME that only the login shell exports changes nothing.
+    expect(isInstalledRuntime(root)).toBe(true);
+    expect(await activateRuntime(root)).toEqual({ switched: true, current: b.name });
+    expect(readCurrent(paths.runtimeDir)).toBe(b.name);
+    // Another user's runtime directory, and one anyone can write to, are not ours to switch.
+    expect(isInstalledRuntime(root, process.getuid!() + 1)).toBe(false);
+    fs.chmodSync(paths.runtimeDir, 0o777);
+    expect(isInstalledRuntime(root)).toBe(false);
+    await expect(activateRuntime(root)).rejects.toThrow("is not an installed promptgraph runtime");
+    fs.chmodSync(paths.runtimeDir, 0o700);
+    // Without `current` it is no installed runtime either (desktop install always sets one).
+    fs.unlinkSync(paths.currentLink);
+    expect(isInstalledRuntime(root)).toBe(false);
+    // A build copied into a directory not named runtime is not one.
+    const copy = path.join(paths.dataDir, "elsewhere", b.name);
+    fs.cpSync(root, copy, { recursive: true });
+    fs.symlinkSync(b.name, path.join(paths.dataDir, "elsewhere", "current"));
+    expect(isInstalledRuntime(copy)).toBe(false);
   });
 
   it("`desktop install --json` prints one DesktopInstallResult line; a checkout is refused (exit 1)", async () => {

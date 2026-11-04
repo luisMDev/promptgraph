@@ -156,7 +156,11 @@ export function parseCliArgs(argv: readonly string[], cwd: string = process.cwd(
         opts.command = "desktop-shim";
         opts.shimAction = action as ShimAction;
         i = 3;
-      } else throw new UsageError(argv[1] === undefined ? "desktop: missing action (install, shim)" : `Unknown desktop action: ${argv[1]}`);
+      } else {
+        // `promptgraph desktop` used to open a directory named desktop: say how to do that now.
+        const hint = "'desktop' is an internal command of the desktop app; to open a directory named desktop, run promptgraph ./desktop";
+        throw new UsageError(`${argv[1] === undefined ? "desktop: missing action (install, shim)" : `Unknown desktop action: ${argv[1]}`}\n${hint}`);
+      }
     }
   }
 

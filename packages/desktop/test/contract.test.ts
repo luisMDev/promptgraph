@@ -313,7 +313,7 @@ describe("CLI invocation", () => {
     expect(constArray(mainRs, "OPEN_ARGS")).toEqual([...DESKTOP_OPEN_ARGS]);
     const run = fnBody(mainRs, "run_cli");
     expect(run).toContain("let (shell, flags, script) = login_shell();");
-    expect(run).toMatch(/\.arg\(flags\)\.arg\(script\)\.arg\(&cli\.path\)\.args\(OPEN_ARGS\)\.args\(\["--on-version-mismatch", policy\]\)/);
+    expect(run).toContain('.arg(flags).arg(script).arg(&cli.path).args(OPEN_ARGS).args(handshake.then_some(["--on-version-mismatch", policy]).into_iter().flatten());');
     expect(run).toContain("run_captured(cmd, timeout, &progress)");
     expect(fnBody(mainRs, "run_captured")).toContain("stdin(Stdio::null())");
   });
@@ -403,6 +403,9 @@ describe("CLI invocation", () => {
     // stderr also carries the login shell's start-up messages: never guess "not found" from its text.
     expect(run).not.toMatch(/stderr\.contains\(/);
     expect(run).toContain("Some(2) => return Err(version_required())");
+    // A CLI of another checkout (PROMPTGRAPH_BIN, PATH) that predates the handshake runs once more without it;
+    // the bundled runtime is this app's own version, so its usage error is final.
+    expect(run).toMatch(/Some\(2\) if handshake && !cli\.bundled => \{[^\n]*handshake = false; continue; \}\n\s*Some\(2\) => return Err\(version_required\(\)\),/);
     expect(run).toContain("CLI_TIMEOUT");
     expect(mainRs.strings).toContain("promptgraph CLI not found: install it with `npm i -g promptgraph` or set `PROMPTGRAPH_BIN`");
     expect(mainRs.strings.some((s) => s.startsWith("promptgraph ≥ {} is required"))).toBe(true);
@@ -420,8 +423,9 @@ describe("CLI invocation", () => {
     expect(mainRs.strings).toContain("--on-version-mismatch");
     expect(mainRs.code).toMatch(/mismatch_policy: Mutex::new\("auto"\)/);
     const run = fnBody(mainRs, "run_cli");
-    expect(run).toContain("for attempt in 0..2 {");
-    expect(run).toContain("Some(EXIT_VERSION_MISMATCH) if attempt == 0 => { policy = handover(app, shared, &out.stdout)?; continue; }");
+    expect(run).toContain("for _ in 0..3 {");
+    // Asked once: the answer is "restart" or "attach", never "auto" again.
+    expect(run).toContain('Some(EXIT_VERSION_MISMATCH) if policy == "auto" => { policy = handover(app, shared, &out.stdout)?; continue; }');
     expect(run).toContain("Some(EXIT_VERSION_MISMATCH) => return Err(version_required())");
     const handover = fnBody(mainRs, "handover");
     expect(handover).toContain('ask(app, "version-mismatch"');
@@ -545,7 +549,7 @@ describe("window and guards", () => {
     // Rust unit tests (`#[cfg(test)]`) do not count.
     const lines = (file: string) => read(`src-tauri/src/${file}`).split("#[cfg(test)]")[0]!.split("\n").length;
     expect(lines("main.rs")).toBeLessThan(600);
-    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(260);
+    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(275);
   });
 });
 
@@ -682,7 +686,22 @@ describe("updater (DESIGN §20.10)", () => {
     expect(installed).toMatch(/^\s*status\(app, &format!\("promptgraph \{version\} is installed; restarting…"\)\);\s*if let Err\(e\) = relaunch\(app\) \{[\s\S]*ask\(app, "restart-failed", [^;]*&\[\("ok", "OK"\.to_string\(\)\)\], 0\);\s*\}\s*app\.exit\(0\);$/);
     expect(installed).toContain("is installed, but the app could not start it");
     const relaunch = fnBody(updateRs, "relaunch");
-    expect(relaunch).toContain("let binary = tauri::process::current_binary(&env).map_err(|e| e.to_string())?;");
+    // An AppImage starts the file `gate` validated; anything else the binary it started from, never an
+    // inherited APPIMAGE (tauri::process::current_binary prefers APPIMAGE whenever it is set).
+    expect(updateRs.code).not.toContain("current_binary(");
+    expect(relaunch).toContain("let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;");
+    expect(relaunch).toContain("let appimage = matches!(bundle_type(), Some(BundleType::AppImage));");
+    expect(relaunch).toContain("let (binary, extract_and_run) = relaunch_target(appimage, &|name| std::env::var_os(name), &exe)?;");
+    const target = fnBody(updateRs, "relaunch_target");
+    expect(target).toContain("if !appimage { return Ok((exe.to_path_buf(), false)); }");
+    expect(target).toContain('env("APPIMAGE")');
+    expect(target).toContain("crate::appdir_of(env, exe)?");
+    // The type2 runtime drops --appimage-extract-and-run from argv and exports nothing: without FUSE the
+    // relaunched AppImage must be told again, or it tries to mount and the app disappears.
+    expect(target).toContain('starts_with("appimage_extracted_")');
+    expect(relaunch).toContain('if extract_and_run { cmd.env("APPIMAGE_EXTRACT_AND_RUN", "1"); }');
+    expect(constArray(mainRs, "STRIPPED_ENV")).not.toContain("APPIMAGE_EXTRACT_AND_RUN");
+    expect(constArray(mainRs, "STRIPPED_ENV")).not.toContain("NO_CLEANUP");
     expect(relaunch).toMatch(/crate::strip_env\(cmd\.args\(env\.args_os\.iter\(\)\.skip\(1\)\), false\);/);
     expect(relaunch).toMatch(/cmd\.spawn\(\)\.map\(drop\)\.map_err\(\|e\| e\.to_string\(\)\)\s*$/);
     expect(relaunch).not.toContain("unwrap_or_default()");
@@ -968,7 +987,14 @@ describe("release workflow (DESIGN §20.11)", () => {
     const pack = build.find((s) => s.text.includes("id: stage"))!;
     expect(pack.text).toContain("tar -C packages/desktop -cJf runtime-stage.tar.xz runtime-stage");
     expect(pack.text).toContain('>> "$GITHUB_OUTPUT"');
-    expect(yamlMap(yamlChild(jobKey("build", "outputs"), "outputs"))).toEqual({ stage_sha256: "${{ steps.stage.outputs.sha256 }}" });
+    expect(yamlMap(yamlChild(jobKey("build", "outputs"), "outputs"))).toEqual({
+      stage_sha256: "${{ steps.stage.outputs.sha256 }}",
+      prerelease: "${{ steps.guards.outputs.prerelease }}",
+    });
+    // A tag of an X.Y.Z-pre version becomes a pre-release: releases/latest never offers it to installed apps.
+    expect(guard.text).toContain("id: guards");
+    expect(guard.text).toContain('if [[ "$version" == *-* ]]; then prerelease=true; else prerelease=false; fi');
+    expect(guard.text).toContain('echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"');
     const upload = build.find((s) => usesOf(s) === "actions/upload-artifact")!;
     expect(withOf(upload)).toMatchObject({ name: "runtime-stage", path: "runtime-stage.tar.xz", "retention-days": "1" });
     const tauri = tauriActionStep("build");
@@ -991,7 +1017,11 @@ describe("release workflow (DESIGN §20.11)", () => {
     const download = release.find((s) => usesOf(s) === "actions/download-artifact")!;
     expect(withOf(download)).toEqual({ name: "runtime-stage" });
     const unpack = release.find((s) => s.text.includes("sha256sum -c"))!;
-    expect(yamlMap(yamlChild(unpack, "env"))).toEqual({ STAGE_SHA256: "${{ needs.build.outputs.stage_sha256 }}" });
+    expect(yamlMap(yamlChild(unpack, "env"))).toEqual({
+      STAGE_SHA256: "${{ needs.build.outputs.stage_sha256 }}",
+      PRERELEASE: "${{ needs.build.outputs.prerelease }}",
+    });
+    expect(unpack.text).toContain('[[ "$PRERELEASE" == true || "$PRERELEASE" == false ]]');
     expect(unpack.text).toContain('echo "$STAGE_SHA256  runtime-stage.tar.xz" | sha256sum -c');
     expect(unpack.text).toContain("tar -C packages/desktop -xJf runtime-stage.tar.xz");
     const tools = release.find((s) => s.text.includes(TOOLS_STEP))!;
@@ -1018,7 +1048,7 @@ describe("release workflow (DESIGN §20.11)", () => {
       releaseName: "promptgraph desktop v__VERSION__",
       releaseBody: "|",
       releaseDraft: "true",
-      prerelease: "false",
+      prerelease: "${{ needs.build.outputs.prerelease }}",
       uploadUpdaterJson: "true",
       retryAttempts: "1",
     });

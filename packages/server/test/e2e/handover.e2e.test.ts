@@ -230,7 +230,7 @@ describe("e2e: daemon handover (open --on-version-mismatch)", () => {
         runtimeRoot: rb.root,
       };
       const current = () => fs.readlinkSync(desktopPaths(h.env).currentLink);
-      return { a: path.basename(ra.root), b: path.basename(rb.root), deps, out, err, current };
+      return { a: path.basename(ra.root), b: path.basename(rb.root), bundleB: b, deps, out, err, current };
     }
 
     const open = (deps: CliDeps, dir: string, policy: VersionMismatchPolicy) => runOpen(parseCliArgs(openArgs(dir, policy)), deps);
@@ -252,6 +252,31 @@ describe("e2e: daemon handover (open --on-version-mismatch)", () => {
       expect(await open(rt.deps, r, "restart"), rt.err.join("\n")).toBe(0);
       expect(rt.current()).toBe(rt.b);
       expect(readDaemonInfo(h.paths)!.serverVersion).toBe(VERSION);
+    });
+
+    it("current follows the CLI's own runtime directory even when open's environment names another data directory", { timeout: 90_000 }, async () => {
+      // `desktop install` runs with the app's environment, `open` through the login shell, whose start-up
+      // files may export an XDG_DATA_HOME the app never saw.
+      const h = home();
+      const r = repo();
+      const rt = await runtimes(h);
+      await daemonOf(h, OLDER, r);
+      const other = path.join(h.root, "other-data");
+      const deps: CliDeps = { ...rt.deps, env: { ...rt.deps.env, XDG_DATA_HOME: other } };
+      expect(await open(deps, r, "auto"), rt.err.join("\n")).toBe(0);
+      expect(rt.current()).toBe(rt.b);
+      expect(rt.err.filter((l) => l.startsWith("warning:"))).toEqual([]);
+      expect(fs.existsSync(path.join(other, "promptgraph"))).toBe(false);
+    });
+
+    it("a bundled runtime that is not installed (the AppImage's mount) warns and never touches current", { timeout: 90_000 }, async () => {
+      const h = home();
+      const r = repo();
+      const rt = await runtimes(h);
+      await daemonOf(h, OLDER, r);
+      expect(await open({ ...rt.deps, runtimeRoot: rt.bundleB }, r, "auto"), rt.err.join("\n")).toBe(0);
+      expect(rt.current()).toBe(rt.a);
+      expect(rt.err).toContainEqual(expect.stringMatching(/^warning: .*bundle-b is a bundled promptgraph runtime but not an installed one/));
     });
 
     it("attach and a mismatch exit leave current alone", { timeout: 90_000 }, async () => {

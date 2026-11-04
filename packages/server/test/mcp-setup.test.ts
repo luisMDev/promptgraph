@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MCP_SKILLS, MCP_TOOL_GROUPS, ClaudeSetupResponseSchema } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildClaudeSetup, checkClaudeSetup, cliCommandFor, shellQuote } from "../src/mcp/setup.js";
+import { buildClaudeSetup, checkClaudeSetup, cliCommandFor, GITHUB_MARKETPLACE, pluginMarketplace, shellQuote } from "../src/mcp/setup.js";
 import { makeRuntime } from "./desktop-fixtures.js";
 import { createTempRepo, tempDir } from "./helpers.js";
 
@@ -29,7 +29,7 @@ describe("buildClaudeSetup", () => {
     const setup = buildClaudeSetup({
       repoPath: "/work/my repo",
       cliCommand: ["/usr/bin/node", "/opt/promptgraph dir/cli/index.js"],
-      marketplaceRoot: "/opt/promptgraph",
+      marketplace: { kind: "checkout", root: "/opt/promptgraph" },
     });
     expect(ClaudeSetupResponseSchema.parse(setup)).toBeTruthy();
     expect(setup.mcpAddCommand).toBe("claude mcp add promptgraph -- /usr/bin/node '/opt/promptgraph dir/cli/index.js' mcp");
@@ -43,12 +43,12 @@ describe("buildClaudeSetup", () => {
   });
 
   it("says the plugin is unavailable when the checkout does not bundle it", () => {
-    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: ["/n", "/c.js"], marketplaceRoot: null });
+    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: ["/n", "/c.js"], marketplace: null });
     expect(setup.plugin).toMatchObject({ available: false, marketplacePath: null, addMarketplaceCommand: null });
   });
 
   it("uses the stable launcher of a desktop runtime for both commands", () => {
-    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: ["/home/u/.local/share/promptgraph/runtime/current/bin/promptgraph"], marketplaceRoot: null });
+    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: ["/home/u/.local/share/promptgraph/runtime/current/bin/promptgraph"], marketplace: null });
     expect(setup.mcpAddCommand).toBe("claude mcp add promptgraph -- /home/u/.local/share/promptgraph/runtime/current/bin/promptgraph mcp");
     expect(setup.binPath).toBe("/home/u/.local/share/promptgraph/runtime/current/bin/promptgraph");
   });
@@ -103,6 +103,26 @@ describe("cliCommandFor (DESIGN §19.5)", () => {
     expect(cliCommandFor({ nodePath: NODE, cliEntry: ENTRY })).toEqual([NODE, ENTRY]);
   });
 
+  it("a desktop runtime, which ships no plugin files, offers the plugin from GitHub (DESIGN §19.5)", () => {
+    const { aDir } = layout("a");
+    // SERVER_PACKAGE_DIR of a runtime is <runtime>/<build>/server.
+    const marketplace = pluginMarketplace(path.join(aDir, "server"));
+    expect(marketplace).toEqual({ kind: "github", repo: GITHUB_MARKETPLACE });
+    expect(fs.existsSync(path.join(aDir, ".claude-plugin"))).toBe(false);
+    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: cliCommandFor({ serverRoot: aDir, nodePath: NODE, cliEntry: ENTRY }), marketplace });
+    expect(setup.plugin).toEqual({
+      available: true,
+      marketplacePath: null,
+      addMarketplaceCommand: "/plugin marketplace add luisMDev/promptgraph",
+      installCommand: "/plugin install promptgraph@promptgraph",
+    });
+    // This checkout bundles it; a directory that is neither has no plugin to offer.
+    expect(pluginMarketplace()).toEqual({ kind: "checkout", root: REPO_ROOT });
+    const t = tempDir("pg-no-marketplace-");
+    cleanups.push(t.cleanup);
+    expect(pluginMarketplace(path.join(t.dir, "a", "server"))).toBeNull();
+  });
+
   it("ignores an inherited PG_CLI_PATH pointing at a foreign executable", () => {
     const t = tempDir("pg-foreign-cli-");
     cleanups.push(t.cleanup);
@@ -112,7 +132,7 @@ describe("cliCommandFor (DESIGN §19.5)", () => {
     const { aDir, runtimeDir } = layout("a");
     expect(cliCommandFor({ serverRoot: aDir, nodePath: NODE, cliEntry: ENTRY })).toEqual([path.join(runtimeDir, "current", "bin", "promptgraph")]);
     expect(cliCommandFor({ nodePath: NODE, cliEntry: ENTRY })).toEqual([NODE, ENTRY]);
-    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: cliCommandFor({ nodePath: NODE, cliEntry: ENTRY }), marketplaceRoot: null });
+    const setup = buildClaudeSetup({ repoPath: "/r", cliCommand: cliCommandFor({ nodePath: NODE, cliEntry: ENTRY }), marketplace: null });
     expect(JSON.stringify(setup)).not.toContain(foreign);
   });
 });

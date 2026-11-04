@@ -18,6 +18,9 @@ const BUILD_DIR = /^.+-[0-9a-f]{8}$/;
 const STAGING_DIR = /^\.staging-[0-9a-f]{8}-(\d+)$/;
 const CURRENT_TMP = /^\.current-(\d+)$/;
 
+/** The directories `checkRuntimeDirs`, the lock and `current` work on. */
+type RuntimeDirs = Pick<DesktopPaths, "dataDir" | "runtimeDir" | "currentLink">;
+
 /** The data or runtime directory is not safe to install into (DESIGN §20.7). */
 export class RuntimeDirError extends Error {}
 
@@ -98,7 +101,7 @@ function lstatOrNull(p: string): fs.Stats | null {
  * than 0700 on `<data>/runtime` is tightened.
  * @throws RuntimeDirError
  */
-export function checkRuntimeDirs(paths: DesktopPaths, uid: number = currentUid()): void {
+export function checkRuntimeDirs(paths: RuntimeDirs, uid: number = currentUid()): void {
   fs.mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 });
   const data = fs.statSync(paths.dataDir);
   if (!data.isDirectory()) throw new RuntimeDirError(`${paths.dataDir} is not a directory`);
@@ -114,12 +117,12 @@ export function checkRuntimeDirs(paths: DesktopPaths, uid: number = currentUid()
   if (runtime.mode & 0o077) fs.chmodSync(paths.runtimeDir, 0o700);
 }
 
-function runtimeLock<T>(paths: DesktopPaths, fn: () => Promise<T> | T): Promise<T> {
+function runtimeLock<T>(paths: RuntimeDirs, fn: () => Promise<T> | T): Promise<T> {
   return withSocketLock(namedLockName("runtime", paths.runtimeDir), { timeoutMs: LOCK_TIMEOUT_MS, what: "the promptgraph runtime lock" }, fn);
 }
 
 /** Name `current` points at when it resolves to a build directory with a valid manifest; else null. */
-function validCurrent(paths: DesktopPaths): string | null {
+function validCurrent(paths: RuntimeDirs): string | null {
   try {
     const link = fs.readlinkSync(paths.currentLink);
     if (link.includes("/") || !BUILD_DIR.test(link)) return null;
@@ -132,7 +135,7 @@ function validCurrent(paths: DesktopPaths): string | null {
 }
 
 /** Points `current` at `name` atomically: a relative symlink `.current-<pid>` renamed over it. */
-function switchCurrent(paths: DesktopPaths, name: string): void {
+function switchCurrent(paths: RuntimeDirs, name: string): void {
   const tmp = path.join(paths.runtimeDir, `.current-${process.pid}`);
   removeEntry(tmp);
   fs.symlinkSync(name, tmp);
@@ -331,39 +334,54 @@ export async function installRuntime(opts: InstallRuntimeOptions): Promise<Deskt
 }
 
 /**
- * Whether `root` is an installed build: `<data>/runtime/<version>-<id8>` (by realpath) with a valid
- * manifest whose name matches the directory. Never throws.
+ * The runtime directory `root` is installed in, from `root`'s own location (DESIGN §4.3 "Runtime
+ * activation"), never from the environment: `desktop install` runs with the app's environment and `open`
+ * through the login shell, whose start-up files may export another `XDG_DATA_HOME`. `root` must resolve
+ * to `<runtime>/<version>-<id8>` with a valid manifest of that name, in a real directory named `runtime`
+ * that belongs to `uid`, is not group- or world-writable, and already holds `current`. Never throws.
  */
-export function isInstalledRuntime(env: NodeJS.ProcessEnv, root: string): boolean {
+export function installedRuntimeOf(root: string, uid: number = currentUid()): { name: string; dirs: RuntimeDirs } | null {
   try {
-    const paths = desktopPaths(env);
     const manifest = readManifest(root);
-    if (!manifest) return false;
+    if (!manifest) return null;
     const real = fs.realpathSync(root);
-    return path.basename(real) === buildDirName(manifest) && path.dirname(real) === fs.realpathSync(paths.runtimeDir);
+    const name = path.basename(real);
+    const runtimeDir = path.dirname(real);
+    if (name !== buildDirName(manifest) || path.basename(runtimeDir) !== "runtime") return null;
+    const st = fs.lstatSync(runtimeDir);
+    if (!st.isDirectory() || st.uid !== uid || st.mode & 0o022) return null;
+    const currentLink = path.join(runtimeDir, "current");
+    if (!fs.lstatSync(currentLink).isSymbolicLink()) return null;
+    return { name, dirs: { dataDir: path.dirname(runtimeDir), runtimeDir, currentLink } };
   } catch {
-    return false;
+    return null;
   }
 }
 
+/** Whether `root` is an installed build (installedRuntimeOf). Never throws. */
+export function isInstalledRuntime(root: string, uid?: number): boolean {
+  return installedRuntimeOf(root, uid) !== null;
+}
+
 /**
- * Switches `current` to the installed build `root` (DESIGN §4.3 "Runtime activation"), under the runtime
- * lock, atomically. @throws when `root` is not an installed build, or the runtime directory is unsafe.
+ * Switches `current` of the runtime directory `root` is installed in to `root` (DESIGN §4.3 "Runtime
+ * activation"), under the runtime lock, atomically. @throws when `root` is not an installed build, or the
+ * runtime directory is unsafe.
  */
-export async function activateRuntime(env: NodeJS.ProcessEnv, root: string, opts: { uid?: number } = {}): Promise<{ switched: boolean; current: string }> {
-  const paths = desktopPaths(env);
-  if (!isInstalledRuntime(env, root)) throw new Error(`${root} is not an installed promptgraph runtime`);
-  checkRuntimeDirs(paths, opts.uid);
-  const name = path.basename(fs.realpathSync(root));
-  return runtimeLock(paths, () => {
+export async function activateRuntime(root: string, opts: { uid?: number } = {}): Promise<{ switched: boolean; current: string }> {
+  const installed = installedRuntimeOf(root, opts.uid);
+  if (!installed) throw new Error(`${root} is not an installed promptgraph runtime`);
+  const { name, dirs } = installed;
+  checkRuntimeDirs(dirs, opts.uid);
+  return runtimeLock(dirs, () => {
     let link: string | null = null;
     try {
-      link = fs.readlinkSync(paths.currentLink);
+      link = fs.readlinkSync(dirs.currentLink);
     } catch {
       // Missing (or not a link): switched below.
     }
     if (link === name) return { switched: false, current: name };
-    switchCurrent(paths, name);
+    switchCurrent(dirs, name);
     return { switched: true, current: name };
   });
 }

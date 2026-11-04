@@ -10,7 +10,7 @@ Guidance for coding agents (Claude Code, Codex, etc.) working in this repository
 
 ## Status
 
-Milestones M0–M9 are implemented: M7 (daemon managing many repositories, `docs/DESIGN.md` §4, §11–§14, §19), M8 (router, Home, in-app tabs, §13) and M9 (Tauri desktop shell, §20). `docs/CONTRACTS.md` documents the module boundaries as built. The desktop shell's Rust code has not been compiled or run yet (no Rust toolchain on the development machine): its first build and the manual checklist in `packages/desktop/README.md` are still open (§17 D1–D5, §20.5).
+Milestones M0–M9 are implemented: M7 (daemon managing many repositories, `docs/DESIGN.md` §4, §11–§14, §19), M8 (router, Home, in-app tabs, §13) and M9 (Tauri desktop shell, §20). `docs/CONTRACTS.md` documents the module boundaries as built. The desktop app bundles Node, the server and the native modules (§20.6), installs them per user (§20.7), offers the `promptgraph` command in `~/.local/bin` (§20.8) and updates itself from signed GitHub releases (§20.10, §20.11). Its Rust shell builds, passes `cargo test` and runs locally on WSLg (Rust 1.99, tauri-cli 2.12.4); signed release builds and an AppImage update were exercised locally (§17 D7, D11, D13). Still open: the first real run of `.github/workflows/release-desktop.yml` (it needs the signing key, the `desktop-release` environment and a merge to `main`), the `.deb` update, and the rest of the manual checklist in `packages/desktop/README.md` (X11/Wayland outside WSLg, §17 D1–D5, D8).
 
 ## Stack
 
@@ -49,7 +49,13 @@ docs/
   `promptgraph open --print-url --web-port <vite port>`). Use a separate `PG_HOME` when a promptgraph daemon already runs
 - Manual runs of the daemon or CLI: always with a temp `PG_HOME`, temp repositories, `PG_DAEMON_SHELL_ENV=0` and
   `PG_PORT_DEFAULT=0`, never against the user's `~/.promptgraph`
-- Desktop (needs Rust + WebKitGTK): `pnpm --filter @promptgraph/desktop tauri:dev`; its TypeScript contract test runs in `pnpm test`
+- Desktop (needs Rust + WebKitGTK, see `packages/desktop/README.md`): `pnpm --filter @promptgraph/desktop tauri:dev`
+  (set `PROMPTGRAPH_BIN` to a CLI of this checkout); `pnpm --filter @promptgraph/desktop runtime:prepare` stages the bundled
+  runtime (pinned, checksum-verified Node); `pnpm --filter @promptgraph/desktop tauri:build` builds the AppImage and `.deb`;
+  Rust unit tests: `cargo test --locked` in `packages/desktop/src-tauri`. Its TypeScript contract tests run in `pnpm test`
+- Versions and releases: `node scripts/set-version.mjs X.Y.Z` bumps every version file; a pushed `desktop-vX.Y.Z` tag runs
+  `.github/workflows/release-desktop.yml` (draft release, signed updater artifacts). Signing keys, secrets and the release
+  steps: `packages/desktop/README.md` (agents never push, tag, create releases or set secrets)
 
 ## Conventions
 

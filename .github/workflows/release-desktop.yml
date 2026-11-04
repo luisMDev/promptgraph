@@ -31,6 +31,7 @@ jobs:
       contents: read
     outputs:
       stage_sha256: ${{ steps.stage.outputs.sha256 }}
+      prerelease: ${{ steps.guards.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,6 +64,7 @@ jobs:
         run: pnpm install --frozen-lockfile --filter . --filter @promptgraph/shared --filter @promptgraph/server --filter @promptgraph/web --filter @promptgraph/desktop
 
       - name: Guards
+        id: guards
         shell: bash
         run: |
           set -euo pipefail
@@ -78,6 +80,9 @@ jobs:
               echo "::error::plugins.updater.pubkey is empty in $conf (packages/desktop/README.md, Signing keys)"
               exit 1
             fi
+            # X.Y.Z-pre is published as a pre-release, which releases/latest never serves to installed apps.
+            if [[ "$version" == *-* ]]; then prerelease=true; else prerelease=false; fi
+            echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           fi
           pnpm --filter @promptgraph/desktop test
 
@@ -146,9 +151,11 @@ jobs:
         shell: bash
         env:
           STAGE_SHA256: ${{ needs.build.outputs.stage_sha256 }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
           set -euo pipefail
           [[ "$STAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no runtime stage checksum from the build job"; exit 1; }
+          [[ "$PRERELEASE" == true || "$PRERELEASE" == false ]] || { echo "::error::no pre-release flag from the build job"; exit 1; }
           echo "$STAGE_SHA256  runtime-stage.tar.xz" | sha256sum -c
           tar -C packages/desktop -xJf runtime-stage.tar.xz
           test -f packages/desktop/runtime-stage/manifest.json
@@ -180,6 +187,6 @@ jobs:
 
             The app bundles Node and the promptgraph server. You still need `git`, `claude` (Claude Code), `curl` and, for pull-request steps, `gh`.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ needs.build.outputs.prerelease }}
           uploadUpdaterJson: true
           retryAttempts: 1

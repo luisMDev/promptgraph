@@ -340,16 +340,17 @@ fn path_warning(app: &AppHandle, shim: &ShimStatus) {
     ask(app, "path-warning", "The promptgraph command is not on your PATH", &format!("{problem}{hint}"), &[("ok", "OK".to_string())], 0);
 }
 
-/// `$SHELL -ilc 'exec "$0" "$@"' <bin> open --print-url --json --on-version-mismatch <policy> [--next <path>]
-/// [repo]`: an app started from a desktop menu has neither the user's PATH nor a clean environment (DESIGN
-/// §20.1 item 2). Exit 4 asks the version-mismatch question and runs the CLI once more (DESIGN §20.9).
+/// `$SHELL -ilc 'exec "$0" "$@"' <bin> open --print-url --json --on-version-mismatch <policy> [--next <path>] [repo]`:
+/// a menu-started app has neither the user's PATH nor a clean environment (DESIGN §20.1 item 2). Exit 4 asks the
+/// version question and runs the CLI again (§20.9); exit 2 of a non-bundled CLI (older?) runs it without the option.
 fn run_cli(app: &AppHandle, shared: &Shared, repo: Option<&str>, next: Option<&str>) -> Result<OpenUrlResult, String> {
     let cli = cli_bin(app, shared)?;
     let mut policy = *shared.mismatch_policy.lock().unwrap();
-    for attempt in 0..2 {
+    let mut handshake = true;
+    for _ in 0..3 {
         let (shell, flags, script) = login_shell();
         let mut cmd = Command::new(&shell);
-        cmd.arg(flags).arg(script).arg(&cli.path).args(OPEN_ARGS).args(["--on-version-mismatch", policy]);
+        cmd.arg(flags).arg(script).arg(&cli.path).args(OPEN_ARGS).args(handshake.then_some(["--on-version-mismatch", policy]).into_iter().flatten());
         cmd.args(next.into_iter().flat_map(|next| ["--next", next])).args(repo);
         let timeout = if cli.bundled && policy != "attach" { HANDOVER_TIMEOUT } else { CLI_TIMEOUT };
         let progress = |line: &str| if line.starts_with(RESTART_PROGRESS) { status(app, line) };
@@ -357,8 +358,9 @@ fn run_cli(app: &AppHandle, shared: &Shared, repo: Option<&str>, next: Option<&s
         // Only 127 means not found: stderr also holds start-up files' messages, so text would hide a real failure.
         match out.status.code() {
             Some(127) => return Err(NOT_FOUND.into()),
+            Some(2) if handshake && !cli.bundled => { eprintln!("promptgraph-desktop: {}: retrying without --on-version-mismatch", cli.path); handshake = false; continue; }
             Some(2) => return Err(version_required()),
-            Some(EXIT_VERSION_MISMATCH) if attempt == 0 => { policy = handover(app, shared, &out.stdout)?; continue; }
+            Some(EXIT_VERSION_MISMATCH) if policy == "auto" => { policy = handover(app, shared, &out.stdout)?; continue; }
             Some(0) => {}
             Some(EXIT_VERSION_MISMATCH) => return Err(version_required()),
             _ => return Err(stderr_tail(&out)),

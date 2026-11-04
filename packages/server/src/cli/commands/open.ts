@@ -11,7 +11,7 @@ import {
 } from "@promptgraph/shared";
 import { ensureDaemon, mintLoginUrl, registerRepo, type DaemonConnection } from "../../daemon/client.js";
 import { openWithPolicy } from "../../daemon/handover.js";
-import { activateRuntime, isInstalledRuntime } from "../../desktop/runtime.js";
+import { activateRuntime, isInstalledRuntime, readManifest } from "../../desktop/runtime.js";
 import { errorMessage } from "../../util/text.js";
 import type { CliOptions } from "../args.js";
 import { CliError, repoRootOf, runCommand, uiOrigin, type CliDeps } from "../deps.js";
@@ -37,12 +37,18 @@ async function resolveOpenTarget(conn: DaemonConnection, target: string, deps: C
 
 /**
  * Runtime activation (DESIGN §4.3): once the daemon runs this CLI's version and this CLI is an installed
- * desktop runtime, `current` (and with it the ~/.local/bin command) follows it. Never fails `open`.
+ * desktop runtime, the `current` next to it (and with it the ~/.local/bin command) follows it. The
+ * runtime directory comes from the CLI's own location, not from `deps.env`, which is the login shell's.
+ * A bundled runtime that is not installed (the AppImage's mount, a copy) is a warning. Never fails `open`.
  */
 async function activateIfRuntime(deps: CliDeps): Promise<void> {
   try {
-    if (!isInstalledRuntime(deps.env, deps.runtimeRoot)) return;
-    await activateRuntime(deps.env, deps.runtimeRoot);
+    if (!readManifest(deps.runtimeRoot)) return;
+    if (!isInstalledRuntime(deps.runtimeRoot)) {
+      deps.stderr(`warning: ${deps.runtimeRoot} is a bundled promptgraph runtime but not an installed one; the promptgraph command keeps its version`);
+      return;
+    }
+    await activateRuntime(deps.runtimeRoot);
   } catch (err) {
     deps.stderr(`warning: could not switch the promptgraph runtime to ${deps.version}: ${errorMessage(err)}`);
   }

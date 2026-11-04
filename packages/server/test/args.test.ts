@@ -121,6 +121,11 @@ describe("parseCliArgs (DESIGN §4)", () => {
     expect(parse("desktop", "shim", "install", "--replace", "--json")).toMatchObject({ command: "desktop-shim", shimAction: "install", replace: true });
     // A repository named like the command is still a directory.
     expect(parse("./desktop")).toMatchObject({ command: "open-repo", repoDir: "/work/desktop" });
+    // `promptgraph desktop [--no-open]` used to open ./desktop: the error says how to do that now.
+    for (const argv of [["desktop"], ["desktop", "--no-open"], ["desktop", "run"]]) {
+      expect(() => parse(...argv), argv.join(" ")).toThrow("to open a directory named desktop, run promptgraph ./desktop");
+    }
+    expect(() => parse("desktop", "shim", "delete", "--json")).not.toThrow(/\.\/desktop/);
     const bad: Array<[string[], string]> = [
       [["desktop", "install"], "desktop install requires --json"],
       [["desktop", "shim", "install"], "desktop shim requires --json"],

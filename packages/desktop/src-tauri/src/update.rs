@@ -148,15 +148,29 @@ fn offer(app: &AppHandle, update: Update, declined: &mut HashSet<String>) {
     }
 }
 
-/// Starts the binary `AppHandle::restart()` would start, with this process's arguments. Not `restart()`
-/// itself: its variables, directory and inherited descriptors keep the old mount alive (§20.10).
+/// Starts the updated app with this process's arguments. Not `restart()` itself: its variables, directory
+/// and inherited descriptors keep the old mount alive (§20.10).
 fn relaunch(app: &AppHandle) -> Result<(), String> {
     let env = app.env();
-    let binary = tauri::process::current_binary(&env).map_err(|e| e.to_string())?;
+    let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
+    let appimage = matches!(bundle_type(), Some(BundleType::AppImage));
+    let (binary, extract_and_run) = relaunch_target(appimage, &|name| std::env::var_os(name), &exe)?;
     let mut cmd = std::process::Command::new(binary);
     crate::strip_env(cmd.args(env.args_os.iter().skip(1)), false);
+    if extract_and_run { cmd.env("APPIMAGE_EXTRACT_AND_RUN", "1"); }
     unsafe { cmd.pre_exec(|| { libc::syscall(libc::SYS_close_range, 3, u32::MAX, libc::CLOSE_RANGE_CLOEXEC); Ok(()) }) };
     cmd.spawn().map(drop).map_err(|e| e.to_string())
+}
+
+/// The relaunch's binary and whether it must extract-and-run (§20.10): the AppImage `gate` validated, else the
+/// binary this process started from, never an inherited `APPIMAGE`. The runtime drops `--appimage-extract-and-run`
+/// from argv and exports nothing, so an `appimage_extracted_*` app (no FUSE) must pass the variable on.
+fn relaunch_target(appimage: bool, env: &dyn Fn(&str) -> Option<OsString>, exe: &Path) -> Result<(PathBuf, bool), String> {
+    if !appimage { return Ok((exe.to_path_buf(), false)); }
+    let image = env("APPIMAGE").filter(|v| !v.is_empty()).map(PathBuf::from).ok_or("APPIMAGE is not set")?;
+    let appdir = crate::appdir_of(env, exe)?;
+    let extracted = appdir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("appimage_extracted_"));
+    Ok((image, extracted))
 }
 
 /// Navigates to the splash (the daemon's page is unloaded and flushes its edits) and waits ≤ 2 s for it.
@@ -174,7 +188,8 @@ fn show_splash(app: &AppHandle, shared: &Shared) {
 
 #[cfg(test)]
 mod tests {
-    use super::appimage_is_self;
+    use super::{appimage_is_self, relaunch_target};
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     struct Fake {
@@ -250,6 +265,28 @@ mod tests {
         // A mount that does not carry the image's name is another AppImage's mount.
         let (fake, appdir, exe, image) = Fake::new("mount", ".mount_OtherAAbc123", "promptgraph.AppImage");
         assert!(fake.check(&appdir, &image, &exe).unwrap_err().contains("not the mount of APPIMAGE"));
+    }
+
+    fn vars(appdir: &Path, image: &Path) -> impl Fn(&str) -> Option<OsString> {
+        let vars = [("APPDIR", appdir.as_os_str().to_owned()), ("APPIMAGE", image.as_os_str().to_owned())];
+        move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn relaunches_a_fuse_appimage_as_is_and_an_extracted_one_with_extract_and_run() {
+        let (_fake, appdir, exe, image) = Fake::new("relaunch-fuse", ".mount_promptAbc123", "promptgraph.AppImage");
+        assert_eq!(relaunch_target(true, &vars(&appdir, &image), &exe), Ok((image.clone(), false)));
+        let (_fake, appdir, exe, image) = Fake::new("relaunch-extracted", "appimage_extracted_0123abcd", "promptgraph.AppImage");
+        assert_eq!(relaunch_target(true, &vars(&appdir, &image), &exe), Ok((image.clone(), true)));
+    }
+
+    #[test]
+    fn relaunches_a_deb_from_its_own_binary_even_with_an_inherited_appimage() {
+        // A .deb started from another AppImage's terminal (Cursor, VS Code) inherits APPIMAGE and APPDIR.
+        let (_fake, appdir, _exe, _image) = Fake::new("relaunch-deb", "appimage_extracted_0123abcd", "promptgraph.AppImage");
+        let other = PathBuf::from("/home/u/Apps/Cursor.AppImage");
+        let deb = Path::new("/usr/bin/promptgraph-desktop");
+        assert_eq!(relaunch_target(false, &vars(&appdir, &other), deb), Ok((deb.to_path_buf(), false)));
     }
 
     #[test]

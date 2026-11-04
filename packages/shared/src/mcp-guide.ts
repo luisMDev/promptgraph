@@ -113,8 +113,9 @@ export const ClaudeSetupResponseSchema = z.object({
   /** `claude mcp add` line that registers the MCP server alone (no skills). */
   mcpAddCommand: z.string(),
   plugin: z.object({
-    /** The plugin is bundled with this checkout (the marketplace file exists). */
+    /** The plugin can be added: from this checkout (the marketplace file exists) or, for a desktop runtime, from GitHub. */
     available: z.boolean(),
+    /** The checkout that bundles the plugin; null when it comes from GitHub or is unavailable. */
     marketplacePath: z.string().nullable(),
     addMarketplaceCommand: z.string().nullable(),
     installCommand: z.string(),
