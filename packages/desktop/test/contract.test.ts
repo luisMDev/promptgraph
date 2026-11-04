@@ -18,6 +18,7 @@ import {
 } from "@promptgraph/shared";
 import { describe, expect, it } from "vitest";
 import { NODE_VERSION as NODE_VERSION_PINNED } from "../scripts/prepare-runtime.mjs";
+import { filesWithKeyMaterial, repoFiles, repoFilesWithKeyMaterial } from "./key-scan.js";
 
 /**
  * The desktop shell cannot be compiled where the suite runs (no Rust, no WebKitGTK), so its invariants
@@ -175,28 +176,6 @@ function jsonStrings(value: unknown): string[] {
   return [];
 }
 
-/**
- * Updater private-key material (DESIGN §20.11): the minisign/rsign header in plain text, and the base64 of
- * its whole 3-byte groups (a Tauri key file is the base64 of the whole minisign file, so the plain header
- * never appears in it). Assembled at run time so this file never matches itself.
- */
-const KEY_NEEDLES = ["rsign", "minisign"].flatMap((kind) => {
-  const header = "untrusted comment: " + kind + " encrypted secret key";
-  const aligned = header.slice(0, header.length - (header.length % 3));
-  return [header, Buffer.from(aligned).toString("base64")];
-});
-
-function filesWithKeyMaterial(files: string[]): string[] {
-  return files.filter((file) => {
-    let data: Buffer;
-    try {
-      data = fs.readFileSync(file);
-    } catch {
-      return false; // deleted in the working tree
-    }
-    return KEY_NEEDLES.some((needle) => data.includes(needle));
-  });
-}
 const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
   identifier: string;
   productName: string;
@@ -741,10 +720,27 @@ describe("dialogs (DESIGN §20.10)", () => {
 describe("key material (DESIGN §20.11)", () => {
   it("no tracked or untracked file of the repository carries an updater private key", () => {
     const repoRoot = path.resolve(root, "..", "..");
-    const listed = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: repoRoot, encoding: "utf8" });
-    const files = listed.split("\0").filter(Boolean).map((f) => path.join(repoRoot, f));
-    expect(files.length).toBeGreaterThan(100);
-    expect(filesWithKeyMaterial(files)).toEqual([]);
+    expect(repoFiles(repoRoot).length).toBeGreaterThan(100);
+    expect(repoFilesWithKeyMaterial(repoRoot)).toEqual([]);
+  });
+
+  it("the repository scan reports a committed key file and an untracked one, not an ignored one", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pg-key-repo-"));
+    try {
+      const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { cwd: dir, stdio: "pipe" });
+      git("init", "-q");
+      // A Tauri key file: the base64 of the whole minisign file, as `cargo tauri signer generate` writes it.
+      const key = Buffer.from("untrusted comment: " + "rsign encrypted secret key\nRWRTY0Iy" + "C".repeat(40) + "\n").toString("base64");
+      fs.writeFileSync(path.join(dir, "committed.key.txt"), key);
+      fs.writeFileSync(path.join(dir, ".gitignore"), "*.key\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "key");
+      fs.writeFileSync(path.join(dir, "untracked.txt"), key);
+      fs.writeFileSync(path.join(dir, "ignored.key"), key);
+      expect(repoFilesWithKeyMaterial(dir).map((f) => path.basename(f)).sort()).toEqual(["committed.key.txt", "untracked.txt"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("the scanner flags a key file, plain or base64", () => {
