@@ -22,6 +22,8 @@ scripts/set-version.mjs `node scripts/set-version.mjs X.Y.Z`: writes X.Y.Z to pa
                         PACKAGE_VERSION in packages/server/src/config/version.ts, src-tauri/Cargo.toml (+ the promptgraph-desktop
                         entry of Cargo.lock), src-tauri/tauri.conf.json and plugins/promptgraph/.claude-plugin/plugin.json; exports `VERSION_FILES` and `readVersions(root)`
                         for the sync test (packages/desktop/test/versions.test.ts). Refuses anything but X.Y.Z[-pre]
+                        Each file is replaced atomically (sibling temp file + rename, mode kept); a failed write restores the
+                        files already rewritten from the text read before, so a failed run changes no file
 .github/workflows/release-desktop.yml  jobs `build` (contents: read, no secrets) and `release` (environment desktop-release,
                         contents: write, signing secrets on the tauri-action step only); tag desktop-vX.Y.Z (DESIGN §20.11)
 .gitignore              also ignores packages/desktop/runtime-stage/, *.key (not *.key.pub)
@@ -65,7 +67,14 @@ scripts/prepare-runtime.mjs  DESIGN §20.6: stages packages/desktop/runtime-stag
                        verifySha256(file, expected) (throws and deletes on mismatch; called on every use of the tarball, cache hit
                        or not, right before extraction), assertPtyBuilt(serverDir) (node-pty build/Release/pty.node exists), PRUNE_PATHS (relative globs under
                        server/node_modules and the package dirs), pruneTree(dir), assertNoSymlinks(dir), treeSize(dir),
-                       SIZE_BUDGET_BYTES (170 MB), computeBuildId(dir) (sha256 over sorted "path\0mode\0sha256(content)" of
+                       SIZE_BUDGET_BYTES (170 MB), assertWithinBudget(dir, budget?), obtainTarball(cacheDir, {expected?, url?,
+                       download?}) (cache or download, then verifySha256; logs "cache hit … re-verifying"), DEPLOY_ARGS(serverDir)
+                       (lockfile-based deploy: --config.inject-workspace-packages=true deploy --prod --frozen-lockfile, hoisted,
+                       package-import-method copy; not --legacy, DESIGN §20.6 step 4), DEFAULT_STAGE (packages/desktop/runtime-stage),
+                       assertSafeStage(dir, {repoRoot?, home?, defaultStage?}) (called at start and again right before the stage
+                       is removed; refuses /, home and the repo or their ancestors, any in-repo path but DEFAULT_STAGE or below it,
+                       a symlink, a non-directory, and a non-empty dir that is not a previous stage: only bin/ node/ server/ web/
+                       manifest.json and at least server/ or manifest.json; paths compared as given and realpath'd), computeBuildId(dir) (sha256 over sorted "path\0mode\0sha256(content)" of
                        every file but manifest.json), LAUNCHER (the bin/promptgraph text: readlink -f, exec the sibling node and
                        server/dist/cli/index.js; it exports no variable), writeManifest(dir, {version,
                        nodeVersion}) (RuntimeManifestSchema-validated, written last). CLI flags: --stage <dir> (default
@@ -169,7 +178,8 @@ test/contract.test.ts  lexes src/*.rs and build.rs (comments stripped, string li
                        job-level env, no rust-cache / `cache:` / cache-bin, every `uses:` a 40-hex SHA with a version comment,
                        toolchain 1.99.0, tauri-cli 2.12.4 --locked, releaseDraft true, both --config overlays only in the
                        release job
-test/prepare-runtime.test.ts  the exported helpers of scripts/prepare-runtime.mjs on fixture trees (no network)
+test/prepare-runtime.test.ts  the exported helpers of scripts/prepare-runtime.mjs on fixture trees (no network); imported from TS
+                       through allowJs (tsconfig: allowJs, checkJs false; the scripts carry JSDoc types)
 test/versions.test.ts  every file of VERSION_FILES carries the same version (scripts/set-version.mjs readVersions)
 README.md              prerequisites, the pinned Tauri version, commands, environment and the manual checklist (D1, D2, D4, D5…)
 ```

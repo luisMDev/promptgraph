@@ -13,3 +13,8 @@ scripts/spike/cfg/
 # Tauri / Rust build output
 target/
 packages/desktop/src-tauri/gen/
+# Runtime staged for the desktop bundle (packages/desktop/scripts/prepare-runtime.mjs)
+packages/desktop/runtime-stage/
+# Signing keys (the private updater key never enters the repository; public keys may)
+*.key
+!*.key.pub

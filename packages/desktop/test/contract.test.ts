@@ -403,9 +403,29 @@ describe("package.json", () => {
     expect(pkg.name).toBe("@promptgraph/desktop");
     expect(pkg.private).toBe(true);
     expect(pkg.scripts.build).toBeUndefined();
-    expect(Object.keys(pkg.scripts).sort()).toEqual(["tauri:build", "tauri:dev", "test", "typecheck"]);
-    expect(pkg.scripts["tauri:build"]).toBe("cargo tauri build --bundles deb,appimage");
+    expect(Object.keys(pkg.scripts).sort()).toEqual(["runtime:prepare", "tauri:build", "tauri:dev", "test", "typecheck"]);
+    expect(pkg.scripts["runtime:prepare"]).toBe("node scripts/prepare-runtime.mjs");
+    expect(pkg.scripts["tauri:build"]).toBe("pnpm runtime:prepare && cargo tauri build --bundles deb,appimage --config src-tauri/tauri.bundle.conf.json");
     expect(pkg.dependencies).toBeUndefined();
     for (const version of Object.values(pkg.devDependencies ?? {})) expect(version).toMatch(/^workspace:/);
+  });
+});
+
+describe("bundle overlay (DESIGN §20.4)", () => {
+  it("tauri.bundle.conf.json only adds the staged runtime as the runtime/ resource", () => {
+    expect(JSON.parse(read("src-tauri/tauri.bundle.conf.json"))).toEqual({ bundle: { resources: { "../runtime-stage/": "runtime/" } } });
+  });
+
+  it("tauri.conf.json, which tauri dev uses, has no resources (the stage may not exist)", () => {
+    const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as { bundle: Record<string, unknown> };
+    expect(conf.bundle.resources).toBeUndefined();
+    expect(conf.bundle.createUpdaterArtifacts).toBeUndefined();
+  });
+
+  it("the stage and private keys are git-ignored, public keys are not", () => {
+    const ignore = fs.readFileSync(path.join(root, "..", "..", ".gitignore"), "utf8").split("\n").map((l) => l.trim());
+    expect(ignore).toContain("packages/desktop/runtime-stage/");
+    expect(ignore).toContain("*.key");
+    expect(ignore).toContain("!*.key.pub");
   });
 });
