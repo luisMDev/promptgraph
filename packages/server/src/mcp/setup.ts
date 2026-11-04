@@ -10,6 +10,7 @@ import {
 import { claudeBin } from "../config/child-env.js";
 import { SERVER_PACKAGE_DIR } from "../config/paths.js";
 import { VERSION } from "../config/version.js";
+import { readManifest } from "../desktop/runtime.js";
 import { errorMessage, tailLines } from "../util/text.js";
 
 /** Quotes one shell word: plain words stay bare, anything else is single-quoted. */
@@ -23,29 +24,78 @@ export function bundledMarketplaceRoot(serverPackageDir: string = SERVER_PACKAGE
   return fs.existsSync(path.join(root, ".claude-plugin", "marketplace.json")) ? root : null;
 }
 
+/** The repository whose `.claude-plugin/marketplace.json` lists the plugin, as `/plugin marketplace add` takes it. */
+export const GITHUB_MARKETPLACE = "luisMDev/promptgraph";
+
+/** Where `/plugin marketplace add` takes the plugin from: a checkout that bundles it, or GitHub. */
+export type PluginMarketplace = { kind: "checkout"; root: string } | { kind: "github"; repo: string };
+
+/**
+ * The plugin's marketplace for this daemon (DESIGN §19.5): the checkout it runs from when that bundles
+ * the plugin; for an installed desktop runtime, which ships no plugin files (§20.6), the same marketplace
+ * on GitHub (the plugin runs `${PROMPTGRAPH_BIN:-promptgraph} mcp`, which the ~/.local/bin command
+ * provides, §20.8); else null.
+ */
+export function pluginMarketplace(serverPackageDir: string = SERVER_PACKAGE_DIR): PluginMarketplace | null {
+  const root = bundledMarketplaceRoot(serverPackageDir);
+  if (root) return { kind: "checkout", root };
+  return readManifest(path.resolve(serverPackageDir, "..")) ? { kind: "github", repo: GITHUB_MARKETPLACE } : null;
+}
+
+export interface CliCommandInputs {
+  /** The directory the daemon's code runs from (`SERVER_PACKAGE_DIR/..`: a runtime root when bundled). */
+  serverRoot?: string;
+  /** Node binary running the CLI (process.execPath). */
+  nodePath: string;
+  /** Entry point of the daemon's promptgraph CLI (process.argv[1]). */
+  cliEntry: string;
+}
+
+/**
+ * The command that runs this promptgraph CLI for the setup wizard (DESIGN §19.5): the stable launcher
+ * `<parent>/current/bin/promptgraph` when `serverRoot` is an installed desktop runtime (a valid
+ * manifest.json) and `<parent>/current` resolves to that very directory, so the command survives
+ * updates; else `[nodePath, cliEntry]`. Derived from the daemon's own location only: no environment
+ * variable is read, so an inherited `PG_CLI_PATH` (or any other) cannot put a foreign path into
+ * `claude mcp add`.
+ */
+export function cliCommandFor({ serverRoot = path.resolve(SERVER_PACKAGE_DIR, ".."), nodePath, cliEntry }: CliCommandInputs): string[] {
+  try {
+    if (readManifest(serverRoot)) {
+      const parent = path.dirname(path.resolve(serverRoot));
+      const current = path.join(parent, "current");
+      if (fs.realpathSync(current) === fs.realpathSync(serverRoot)) return [path.join(current, "bin", "promptgraph")];
+    }
+  } catch {
+    // No `current`, or it does not resolve: the versioned paths below.
+  }
+  return [nodePath, cliEntry];
+}
+
 export interface SetupInputs {
   repoPath: string;
-  /** Entry point of the daemon's promptgraph CLI (process.argv[1]); `promptgraph mcp` re-runs it. */
-  cliEntry: string;
-  /** Node binary running the CLI. */
-  nodePath: string;
-  marketplaceRoot: string | null;
+  /** cliCommandFor(...): argv that runs the daemon's promptgraph CLI; `mcp` is appended. */
+  cliCommand: readonly string[];
+  marketplace: PluginMarketplace | null;
   version?: string;
 }
 
 /** Everything the setup wizard shows, derived from the running daemon (no side effects). */
 export function buildClaudeSetup(input: SetupInputs): ClaudeSetupResponse {
-  const { cliEntry, nodePath, marketplaceRoot } = input;
-  const mcpAddCommand = ["claude", "mcp", "add", "promptgraph", "--", nodePath, cliEntry, "mcp"].map(shellQuote).join(" ");
+  const { cliCommand, marketplace } = input;
+  const marketplaceRoot = marketplace?.kind === "checkout" ? marketplace.root : null;
+  const source = marketplace?.kind === "github" ? marketplace.repo : marketplaceRoot;
+  const mcpAddCommand = ["claude", "mcp", "add", "promptgraph", "--", ...cliCommand, "mcp"].map(shellQuote).join(" ");
   return {
     version: input.version ?? VERSION,
     repoPath: input.repoPath,
-    binPath: cliEntry,
+    // What PROMPTGRAPH_BIN must name: an executable that takes `mcp` (the launcher, or the CLI entry).
+    binPath: cliCommand.at(-1) ?? "promptgraph",
     mcpAddCommand,
     plugin: {
-      available: marketplaceRoot !== null,
+      available: source !== null,
       marketplacePath: marketplaceRoot,
-      addMarketplaceCommand: marketplaceRoot ? `/plugin marketplace add ${shellQuote(marketplaceRoot)}` : null,
+      addMarketplaceCommand: source !== null ? `/plugin marketplace add ${shellQuote(source)}` : null,
       installCommand: "/plugin install promptgraph@promptgraph",
     },
     skills: [...MCP_SKILLS],

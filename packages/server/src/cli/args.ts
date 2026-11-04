@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isSafeNextPath, SessionIdPrefixSchema } from "@promptgraph/shared";
+import { isSafeNextPath, SessionIdPrefixSchema, VERSION_MISMATCH_POLICIES, type VersionMismatchPolicy } from "@promptgraph/shared";
 
 /** Commands of the `promptgraph` bin (DESIGN §4). */
 export type CliCommand =
@@ -18,7 +18,15 @@ export type CliCommand =
   | "token-rotate"
   | "sessions"
   /** `sessions revoke <id>|--all` */
-  | "sessions-revoke";
+  | "sessions-revoke"
+  /** `desktop install --json` (internal: the desktop app's runtime installer, DESIGN §20.7) */
+  | "desktop-install"
+  /** `desktop shim status|install|decline|uninstall --json` (internal: ~/.local/bin/promptgraph, DESIGN §20.8) */
+  | "desktop-shim";
+
+/** Actions of `desktop shim`. */
+export const SHIM_ACTIONS = ["status", "install", "decline", "uninstall"] as const;
+export type ShimAction = (typeof SHIM_ACTIONS)[number];
 
 export interface CliOptions {
   command: CliCommand;
@@ -51,6 +59,12 @@ export interface CliOptions {
   all: boolean;
   help: boolean;
   version: boolean;
+  /** open: what to do with a daemon of another version (requires `--json`, DESIGN §4.3); null = fail as usual. */
+  onVersionMismatch: VersionMismatchPolicy | null;
+  /** desktop-shim: the action. */
+  shimAction: ShimAction | null;
+  /** desktop-shim install: replace a foreign entry (kept as a backup). */
+  replace: boolean;
 }
 
 /** A command line that does not parse: the CLI prints it with USAGE and exits 2. */
@@ -67,6 +81,7 @@ const SUBCOMMANDS: Record<string, CliCommand> = {
   stop: "stop",
   token: "token-rotate",
   sessions: "sessions",
+  desktop: "desktop-install",
 };
 
 /** Options each command accepts (`--help` and `--version` are global). */
@@ -75,12 +90,14 @@ const ALLOWED: Record<CliCommand, ReadonlySet<string>> = {
   daemon: new Set(["port"]),
   mcp: new Set(),
   ls: new Set(["json"]),
-  open: new Set(["json", "print-url", "next", "web-port"]),
+  open: new Set(["json", "print-url", "next", "web-port", "on-version-mismatch"]),
   rm: new Set(["force"]),
   stop: new Set(),
   "token-rotate": new Set(),
   sessions: new Set(["json"]),
   "sessions-revoke": new Set(["all"]),
+  "desktop-install": new Set(["json"]),
+  "desktop-shim": new Set(["json", "replace"]),
 };
 
 function parsePort(value: string | undefined, name: string, min = 0): number {
@@ -113,6 +130,9 @@ export function parseCliArgs(argv: readonly string[], cwd: string = process.cwd(
     all: false,
     help: false,
     version: false,
+    onVersionMismatch: null,
+    shimAction: null,
+    replace: false,
   };
   let i = 0;
   const first = argv[0];
@@ -125,6 +145,22 @@ export function parseCliArgs(argv: readonly string[], cwd: string = process.cwd(
     } else if (first === "sessions" && argv[1] === "revoke") {
       opts.command = "sessions-revoke";
       i = 2;
+    } else if (first === "desktop") {
+      // Internal commands of the desktop app (hidden from USAGE).
+      if (argv[1] === "install") i = 2;
+      else if (argv[1] === "shim") {
+        const action = argv[2];
+        if (!(SHIM_ACTIONS as readonly string[]).includes(action ?? "")) {
+          throw new UsageError(action === undefined ? "desktop shim: missing action (status, install, decline, uninstall)" : `Unknown desktop shim action: ${action}`);
+        }
+        opts.command = "desktop-shim";
+        opts.shimAction = action as ShimAction;
+        i = 3;
+      } else {
+        // `promptgraph desktop` used to open a directory named desktop: say how to do that now.
+        const hint = "'desktop' is an internal command of the desktop app; to open a directory named desktop, run promptgraph ./desktop";
+        throw new UsageError(`${argv[1] === undefined ? "desktop: missing action (install, shim)" : `Unknown desktop action: ${argv[1]}`}\n${hint}`);
+      }
     }
   }
 
@@ -148,24 +184,37 @@ export function parseCliArgs(argv: readonly string[], cwd: string = process.cwd(
     } else if (arg === "--web-port" || arg.startsWith("--web-port=")) {
       allow("web-port", arg);
       opts.webPort = parsePort(valueOf(arg, "web-port"), "web port", 1);
+    } else if (arg === "--on-version-mismatch" || arg.startsWith("--on-version-mismatch=")) {
+      allow("on-version-mismatch", arg);
+      const policy = valueOf(arg, "on-version-mismatch");
+      if (!(VERSION_MISMATCH_POLICIES as readonly string[]).includes(policy ?? "")) {
+        throw new UsageError(`Invalid --on-version-mismatch: ${policy ?? "(missing)"} (${VERSION_MISMATCH_POLICIES.join(", ")})`);
+      }
+      opts.onVersionMismatch = policy as VersionMismatchPolicy;
     } else if (arg === "--next" || arg.startsWith("--next=")) {
       allow("next", arg);
       const next = valueOf(arg, "next");
       if (!isSafeNextPath(next)) throw new UsageError(`Invalid --next: ${next ?? "(missing)"} (a path starting with a single /)`);
       opts.next = next;
-    } else if (arg === "--no-open" || arg === "--foreground" || arg === "--json" || arg === "--print-url" || arg === "--force" || arg === "--all") {
+    } else if (arg === "--no-open" || arg === "--foreground" || arg === "--json" || arg === "--print-url" || arg === "--force" || arg === "--all" || arg === "--replace") {
       allow(name, arg);
       if (arg === "--no-open") opts.open = false;
       else if (arg === "--foreground") opts.foreground = true;
       else if (arg === "--json") opts.json = true;
       else if (arg === "--print-url") opts.printUrl = true;
       else if (arg === "--force") opts.force = true;
+      else if (arg === "--replace") opts.replace = true;
       else opts.all = true;
     } else if (arg.startsWith("-")) throw new UsageError(`Unknown option: ${arg}`);
     else positionals.push(arg);
   }
 
   applyPositionals(opts, positionals, cwd);
+  if (!opts.help) {
+    if (opts.onVersionMismatch !== null && !opts.json) throw new UsageError("--on-version-mismatch requires --json");
+    if ((opts.command === "desktop-install" || opts.command === "desktop-shim") && !opts.json) throw new UsageError(`${commandName(opts.command)} requires --json`);
+    if (opts.replace && opts.shimAction !== "install") throw new UsageError("--replace is only valid with desktop shim install");
+  }
   // The desktop shell's interface: one JSON line and no browser (DESIGN §4.3).
   if (opts.command === "open" && opts.json) opts.printUrl = true;
   return opts;
@@ -206,6 +255,8 @@ function commandName(command: CliCommand): string {
   if (command === "token-rotate") return "token rotate";
   if (command === "sessions-revoke") return "sessions revoke";
   if (command === "open-repo") return "promptgraph";
+  if (command === "desktop-install") return "desktop install";
+  if (command === "desktop-shim") return "desktop shim";
   return command;
 }
 
@@ -213,7 +264,7 @@ export const USAGE = `Usage: promptgraph [repo-dir] [--port 4777] [--no-open] [-
        promptgraph daemon [--port 4777]                                  run the daemon in this terminal
        promptgraph ls [--json]                                           daemon status and repositories
        promptgraph open [repo-dir|repo-id] [--next <path>] [--print-url] [--json] [--web-port <p>]
-                                                                         open the UI, signed in
+                        [--on-version-mismatch auto|restart|attach]      open the UI, signed in
        promptgraph rm <repo-dir|repo-id> [--force]                       forget a repository (alias: close)
        promptgraph stop                                                  stop the daemon
        promptgraph token rotate                                          new token; every window signs in again
@@ -221,4 +272,5 @@ export const USAGE = `Usage: promptgraph [repo-dir] [--port 4777] [--no-open] [-
        promptgraph sessions revoke <id>|--all                            sign one or every session out
        promptgraph mcp                                                   MCP server on stdio, for Claude Code
 A repository directory named like a command is passed as ./name.
-Exit codes: 0 ok, 1 error (also "not running" and a version mismatch), 2 usage, 3 daemon lock held.`;
+Exit codes: 0 ok, 1 error (also "not running" and a version mismatch), 2 usage, 3 daemon lock held,
+4 (open --json --on-version-mismatch auto) a daemon of another version runs and the caller must decide.`;

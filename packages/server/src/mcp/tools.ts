@@ -21,10 +21,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { errorMessage, truncate } from "../util/text.js";
-import { DaemonVersionMismatch, findDaemon, mintLoginUrl } from "../daemon/client.js";
+import { findDaemon, mintLoginUrl } from "../daemon/client.js";
 import { VERSION } from "../config/version.js";
 import { ApiRequestError } from "./client.js";
-import { connect, resolveRepo, startDaemonFor, type Connection, type McpEnvironment } from "./connection.js";
+import { connect, resolveRepo, startDaemonFor, versionMismatchError, type Connection, type McpEnvironment } from "./connection.js";
 import { GraphDraftError, normalizeGraphDraft } from "./draft.js";
 import { compactDiff, compactNodeRun, compactReport, compactRunDetail, compactRunSummary, latestAttempts, needsAttention } from "./format.js";
 import { GRAPH_REFERENCE, graphJsonSchema } from "./reference.js";
@@ -124,7 +124,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       const version = mcpEnv.version ?? VERSION;
       const base = { running: true, pid: found.info.pid, version: found.serverVersion, port: found.info.port, repoPath } as const;
       if (found.serverVersion !== version) {
-        return json({ ...base, registered: false, versionMismatch: new DaemonVersionMismatch(found.serverVersion, version).message } satisfies ServerStatusResult);
+        return json({ ...base, registered: false, versionMismatch: versionMismatchError(found.serverVersion, version).message } satisfies ServerStatusResult);
       }
       const { repos } = await found.client.get<ListReposResponse>(API.repos);
       const status = repos.find((r) => r.path === repoPath);

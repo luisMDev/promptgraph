@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { API, type RepoApiPaths } from "@promptgraph/shared";
+import { API, compareVersions, type RepoApiPaths } from "@promptgraph/shared";
 import { isInWorktreesDir, type PgPaths } from "../config/paths.js";
 import { VERSION } from "../config/version.js";
-import { ensureDaemon, findDaemon, registerRepo, type DaemonConnection, type EnsuredDaemon } from "../daemon/client.js";
+import { DaemonVersionMismatch, ensureDaemon, findDaemon, registerRepo, type DaemonConnection, type EnsuredDaemon } from "../daemon/client.js";
 import { resolveMainWorktree, resolveRepoRoot } from "../git/repo.js";
 import { errorMessage } from "../util/text.js";
 import { ApiRequestError, PromptgraphClient } from "./client.js";
@@ -73,9 +73,38 @@ export function resolveRepo(mcpEnv: McpEnvironment, repo?: string): Promise<stri
 const repoIds = new Map<string, string>();
 const cacheKey = (d: DaemonConnection, repoPath: string) => `${d.info.pid}:${d.info.pidStart}:${repoPath}`;
 
-/** The verified daemon of this client's version, or null. @throws DaemonVersionMismatch (its message is the §4.1 item 4 text). */
+/**
+ * The daemon is newer than this MCP server (DESIGN §4.1 item 4, §20.9): the desktop app handed it over
+ * to a new version while this Claude Code session kept the MCP server it started with.
+ */
+export class McpOutdatedError extends Error {
+  constructor(
+    readonly daemonVersion: string,
+    readonly ownVersion: string,
+  ) {
+    super(
+      `promptgraph was updated to ${daemonVersion} while this MCP server still runs ${ownVersion}; run /mcp in Claude Code and reconnect promptgraph (or restart Claude Code)`,
+    );
+  }
+}
+
+/** The error an MCP tool reports for a daemon of `daemonVersion`: the reconnect text when it is newer, else the §4.1 item 4 text. */
+export function versionMismatchError(daemonVersion: string, ownVersion: string): Error {
+  return compareVersions(daemonVersion, ownVersion) > 0 ? new McpOutdatedError(daemonVersion, ownVersion) : new DaemonVersionMismatch(daemonVersion, ownVersion);
+}
+
+/** Rethrows a DaemonVersionMismatch as versionMismatchError (McpOutdatedError for a newer daemon). */
+function rethrowMismatch(err: unknown): never {
+  if (err instanceof DaemonVersionMismatch) throw versionMismatchError(err.running, err.client);
+  throw err;
+}
+
+/**
+ * The verified daemon of this client's version, or null.
+ * @throws DaemonVersionMismatch (the §4.1 item 4 text), or McpOutdatedError when the daemon is newer.
+ */
 export function findConnection(mcpEnv: McpEnvironment): Promise<DaemonConnection | null> {
-  return findDaemon(mcpEnv.paths, { version: mcpEnv.version ?? VERSION, fetchImpl: mcpEnv.fetchImpl });
+  return findDaemon(mcpEnv.paths, { version: mcpEnv.version ?? VERSION, fetchImpl: mcpEnv.fetchImpl }).catch(rethrowMismatch);
 }
 
 const isUnknownRepo = (err: unknown): boolean => err instanceof ApiRequestError && err.status === 404 && err.code === "unknown_repo";
@@ -145,6 +174,6 @@ export async function startDaemonFor(
     version: mcpEnv.version ?? VERSION,
     timeoutMs: opts.timeoutMs,
     fetchImpl: mcpEnv.fetchImpl,
-  });
+  }).catch(rethrowMismatch);
   return { connection: await withRepo(mcpEnv, daemon, repoPath), daemon };
 }

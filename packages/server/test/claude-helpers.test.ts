@@ -117,6 +117,11 @@ describe("child environment", () => {
     expect(env).toEqual({ PATH: "/bin", PG_OTHER: "1", TERM: "xterm-256color", EXTRA: "1" });
     expect(Object.keys(env)).not.toContain("PG_HOME");
   });
+
+  it("strips the desktop shell's PG_DESKTOP_* variables (DESIGN §4.1 item 5)", () => {
+    const env = childEnv({}, { PATH: "/bin", PG_DESKTOP_AUTO_ANSWER: "update=update", PG_DESKTOP_UPDATES: "0", PG_DESKTOP_ORIGIN: "http://x", PG_OTHER: "1" });
+    expect(env).toEqual({ PATH: "/bin", PG_OTHER: "1", TERM: "xterm-256color" });
+  });
 });
 
 describe("hooks settings and pg-hook", () => {

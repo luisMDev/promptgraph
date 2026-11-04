@@ -2,6 +2,7 @@
 import { errorMessage } from "../util/text.js";
 import { parseCliArgs, USAGE, UsageError, type CliOptions } from "./args.js";
 import { runDaemon, runForeground } from "./commands/daemon.js";
+import { runDesktopInstall, runDesktopShim } from "./commands/desktop.js";
 import { runLs } from "./commands/ls.js";
 import { runOpenRepo } from "./commands/open-repo.js";
 import { runOpen } from "./commands/open.js";
@@ -21,11 +22,14 @@ const COMMANDS: Record<Exclude<CliOptions["command"], "mcp">, (opts: CliOptions,
   "token-rotate": runTokenRotate,
   sessions: runSessions,
   "sessions-revoke": runSessionsRevoke,
+  "desktop-install": runDesktopInstall,
+  "desktop-shim": runDesktopShim,
 };
 
 /**
  * `promptgraph` bin (DESIGN §4). Exit codes: 0 ok, 1 error (also "not running" and a version mismatch),
- * 2 usage, 3 (`daemon` only) another daemon holds the lock.
+ * 2 usage, 3 (`daemon` only) another daemon holds the lock, 4 (`open --json --on-version-mismatch auto`)
+ * a daemon of another version runs and the caller must decide.
  */
 export async function main(argv: readonly string[], makeDeps: () => CliDeps = () => defaultDeps()): Promise<number> {
   let opts: CliOptions;

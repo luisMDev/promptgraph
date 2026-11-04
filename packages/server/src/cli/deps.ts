@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { REPO_ID_PATTERN, type RepoSummary } from "@promptgraph/shared";
 import open from "open";
-import { getPaths, type PgPaths } from "../config/paths.js";
+import { getPaths, SERVER_PACKAGE_DIR, type PgPaths } from "../config/paths.js";
 import { VERSION } from "../config/version.js";
 import { currentCliCommand, type DaemonConnection } from "../daemon/client.js";
 import { resolveRepoRoot } from "../git/repo.js";
@@ -27,6 +27,11 @@ export interface CliDeps {
   /** This CLI's version: a daemon of another version is refused (DESIGN §4.1 item 4). */
   version: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Directory this CLI runs from when it is a bundled desktop runtime: `SERVER_PACKAGE_DIR/..` (DESIGN
+   * §20.7). Read by `desktop install` and the runtime activation of `open`; tests inject a fixture.
+   */
+  runtimeRoot: string;
 }
 
 export function defaultDeps(env: NodeJS.ProcessEnv = process.env): CliDeps {
@@ -43,6 +48,7 @@ export function defaultDeps(env: NodeJS.ProcessEnv = process.env): CliDeps {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     serverCommand: currentCliCommand(),
     version: VERSION,
+    runtimeRoot: path.resolve(SERVER_PACKAGE_DIR, ".."),
   };
 }
 

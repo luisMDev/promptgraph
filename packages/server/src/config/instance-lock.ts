@@ -16,15 +16,89 @@ export function daemonPidPath(paths: PgPaths): string {
   return path.join(locksDir(paths), "daemon.pid");
 }
 
+/** The current uid. */
+export function currentUid(): number {
+  return typeof process.getuid === "function" ? process.getuid() : os.userInfo().uid;
+}
+
+/**
+ * Name of an abstract-socket lock guarding `dir`: `\0promptgraph-[<kind>-]<uid>-<sha256(realpath dir)[:16]>`.
+ * `dir` must exist (it is resolved, so two spellings of one directory share the lock).
+ */
+export function namedLockName(kind: string | null, dir: string): string {
+  const real = fs.realpathSync(dir);
+  return `\0promptgraph-${kind ? `${kind}-` : ""}${currentUid()}-${createHash("sha256").update(real).digest("hex").slice(0, 16)}`;
+}
+
 /**
  * Name of the daemon lock (DESIGN §4.1 item 1): the Linux abstract Unix socket
  * `\0promptgraph-<uid>-<sha256(realpath PG_HOME)[:16]>`. Creates PG_HOME (0700) so it can be resolved.
  */
 export function daemonLockName(paths: PgPaths): string {
   fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
-  const home = fs.realpathSync(paths.home);
-  const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().uid;
-  return `\0promptgraph-${uid}-${createHash("sha256").update(home).digest("hex").slice(0, 16)}`;
+  return namedLockName(null, paths.home);
+}
+
+/**
+ * A lock held by the kernel: a listening abstract Unix socket, released when the process dies (no stale
+ * lock, no takeover race, no pid reuse). Unref'd: it does not keep the process alive by itself. Used by
+ * the daemon lock and the desktop runtime lock (DESIGN §20.7).
+ */
+export class SocketLock {
+  private constructor(private readonly server: net.Server) {}
+
+  /** Takes the lock, or null when another holder has it (EADDRINUSE). */
+  static tryAcquire(name: string): Promise<SocketLock | null> {
+    return new Promise((resolve, reject) => {
+      const server = net.createServer((socket) => socket.destroy());
+      server.once("error", (err: NodeJS.ErrnoException) => (err.code === "EADDRINUSE" ? resolve(null) : reject(err)));
+      server.listen(name, () => {
+        server.unref();
+        // The socket is only a lock: a late error (none is expected) must not crash the process.
+        server.on("error", () => undefined);
+        resolve(new SocketLock(server));
+      });
+    });
+  }
+
+  /** Waits up to `timeoutMs` for the lock (polling every `pollMs`). @throws when it stays held. */
+  static async acquire(name: string, opts: { timeoutMs: number; pollMs?: number; what?: string }): Promise<SocketLock> {
+    const deadline = Date.now() + opts.timeoutMs;
+    for (;;) {
+      const lock = await SocketLock.tryAcquire(name);
+      if (lock) return lock;
+      if (Date.now() >= deadline) throw new Error(`${opts.what ?? "the lock"} is held by another process; retry later`);
+      await new Promise((r) => setTimeout(r, opts.pollMs ?? 100));
+    }
+  }
+
+  /** Whether someone holds it right now (binds and closes the socket at once when it is free). */
+  static isHeld(name: string): Promise<boolean> {
+    return SocketLock.tryAcquire(name).then(async (lock) => {
+      if (!lock) return true;
+      await lock.release();
+      return false;
+    });
+  }
+
+  get held(): boolean {
+    return this.server.listening;
+  }
+
+  async release(): Promise<void> {
+    if (!this.server.listening) return;
+    await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  }
+}
+
+/** Runs `fn` while holding the named lock (waiting up to `timeoutMs` for it). */
+export async function withSocketLock<T>(name: string, opts: { timeoutMs: number; what?: string }, fn: () => Promise<T> | T): Promise<T> {
+  const lock = await SocketLock.acquire(name, opts);
+  try {
+    return await fn();
+  } finally {
+    await lock.release();
+  }
 }
 
 /** First line of a pid file as a positive integer, or null. */
@@ -67,41 +141,31 @@ export interface DaemonLockHeld {
 }
 
 /**
- * One daemon per PG_HOME. The lock is held by the kernel: a listening abstract Unix socket, released
- * when the process dies (no stale lock, no takeover race, no pid reuse). `locks/daemon.pid` is written
- * next to it for messages only and never decides anything. The socket is unref'd: it does not keep the
- * process alive by itself.
+ * One daemon per PG_HOME. The lock is a SocketLock on daemonLockName. `locks/daemon.pid` is written
+ * next to it for messages only and never decides anything.
  */
 export class DaemonLock {
   private constructor(
-    private readonly server: net.Server,
+    private readonly lock: SocketLock,
     private readonly pidFile: string,
     private readonly pid: number,
   ) {}
 
-  static acquire(paths: PgPaths, pid: number = process.pid): Promise<DaemonLock | DaemonLockHeld> {
+  static async acquire(paths: PgPaths, pid: number = process.pid): Promise<DaemonLock | DaemonLockHeld> {
     const name = daemonLockName(paths);
     const pidFile = daemonPidPath(paths);
-    return new Promise((resolve, reject) => {
-      const server = net.createServer((socket) => socket.destroy());
-      server.once("error", (err: NodeJS.ErrnoException) => {
-        if (err.code !== "EADDRINUSE") return reject(err);
-        const holder = readPid(pidFile);
-        resolve({ heldBy: holder !== null && isProcessAlive(holder) ? holder : null });
-      });
-      server.listen(name, () => {
-        server.unref();
-        // The socket is only a lock: a late error (none is expected) must not crash the process.
-        server.on("error", () => undefined);
-        try {
-          fs.mkdirSync(locksDir(paths), { recursive: true, mode: 0o700 });
-          writeAtomic(pidFile, `${pid}\n`);
-        } catch {
-          // Informational only.
-        }
-        resolve(new DaemonLock(server, pidFile, pid));
-      });
-    });
+    const lock = await SocketLock.tryAcquire(name);
+    if (!lock) {
+      const holder = readPid(pidFile);
+      return { heldBy: holder !== null && isProcessAlive(holder) ? holder : null };
+    }
+    try {
+      fs.mkdirSync(locksDir(paths), { recursive: true, mode: 0o700 });
+      writeAtomic(pidFile, `${pid}\n`);
+    } catch {
+      // Informational only.
+    }
+    return new DaemonLock(lock, pidFile, pid);
   }
 
   /**
@@ -109,19 +173,13 @@ export class DaemonLock {
    * without touching `locks/daemon.pid`. A daemon may take it right after this answers false.
    */
   static isHeld(paths: PgPaths): Promise<boolean> {
-    const name = daemonLockName(paths);
-    return new Promise((resolve, reject) => {
-      const server = net.createServer((socket) => socket.destroy());
-      server.once("error", (err: NodeJS.ErrnoException) => (err.code === "EADDRINUSE" ? resolve(true) : reject(err)));
-      server.listen(name, () => server.close(() => resolve(false)));
-    });
+    return SocketLock.isHeld(daemonLockName(paths));
   }
 
   /** Closes the socket (the next acquire succeeds) and removes `locks/daemon.pid` if it is still ours. */
   async release(): Promise<void> {
     if (readPid(this.pidFile) === this.pid) fs.rmSync(this.pidFile, { force: true });
-    if (!this.server.listening) return;
-    await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    await this.lock.release();
   }
 }
 

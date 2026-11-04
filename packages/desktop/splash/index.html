@@ -7,7 +7,7 @@
     <!--
       The desktop shell's splash (DESIGN §20.1): bundled, no network, no IPC. The shell runs the CLI every
       time this page finishes loading, so Retry is a reload. Errors are shown by the shell evaluating
-      window.__pgSplashError(message) (defined in splash.js).
+      window.__pgSplashError(message), progress with window.__pgSplashStatus(text) (both in splash.js).
     -->
     <style>
       :root {
@@ -101,7 +101,7 @@
     <main>
       <div id="starting">
         <div class="spinner" aria-hidden="true"></div>
-        <p class="status" role="status">Starting promptgraph…</p>
+        <p id="status" class="status" role="status">Starting promptgraph…</p>
       </div>
       <div id="error" role="alert">
         <p class="title">promptgraph could not start</p>
