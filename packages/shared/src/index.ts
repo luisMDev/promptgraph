@@ -14,6 +14,7 @@ export * from "./server-info.js";
 export * from "./mcp-guide.js";
 export * from "./daemon-info.js";
 export * from "./repos.js";
+export * from "./fs.js";
 export * from "./sessions.js";
 export * from "./urls.js";
 export * from "./desktop.js";

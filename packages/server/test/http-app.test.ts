@@ -273,6 +273,17 @@ describe("misc routes", () => {
     expect(d.supportedNodeTypes).toContain("condition");
   });
 
+  it("lists directories for the folder picker, behind the token", async () => {
+    expect((await app.request(`/api/fs/dirs?path=${encodeURIComponent(path.dirname(repo))}`, { headers: HOST })).status).toBe(401);
+    const res = await app.request(`/api/fs/dirs?path=${encodeURIComponent(path.dirname(repo))}`, { headers: AUTH });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string; entries: Array<{ path: string; isGitRepo: boolean }> };
+    expect(body.entries).toContainEqual({ name: path.basename(repo), path: repo, isGitRepo: true });
+    const bad = await app.request("/api/fs/dirs?path=relative", { headers: AUTH });
+    expect(bad.status).toBe(422);
+    expect(((await bad.json()) as { code: string }).code).toBe("path_not_absolute");
+  });
+
   it("reads and persists app settings without resetting unspecified keys", async () => {
     expect(await (await app.request("/api/settings", { headers: AUTH })).json()).toEqual({ notifications: true });
     const off = await app.request("/api/settings", { method: "PUT", headers: JSON_AUTH, body: JSON.stringify({ notifications: false }) });

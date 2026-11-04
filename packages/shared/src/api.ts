@@ -365,6 +365,14 @@ export const API = {
   /** DELETE → OkResponse (409 repo_active unless `force`). */
   removeRepo: (repoId: string, force = false) => `/api/repos/${enc(repoId)}${force ? "?force=1" : ""}`,
   settings: "/api/settings",
+  /** GET → ListDirsResponse: subdirectories of `path` (default: home), for Home's folder picker. */
+  dirs: (path?: string, hidden = false) => {
+    const q = new URLSearchParams();
+    if (path !== undefined) q.set("path", path);
+    if (hidden) q.set("hidden", "1");
+    const qs = q.toString();
+    return `/api/fs/dirs${qs ? `?${qs}` : ""}`;
+  },
   loginCodes: "/api/daemon/login-codes",
   rotateToken: "/api/daemon/token/rotate",
   sessions: "/api/daemon/sessions",

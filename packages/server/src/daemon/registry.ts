@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { RepoSummary } from "@promptgraph/shared";
 import type { LegacyRepoLocks } from "../config/instance-lock.js";
@@ -10,6 +9,7 @@ import { resolveRepoRoot } from "../git/repo.js";
 import { HttpError } from "../http/errors.js";
 import type { RepoRow, RepoStatusCounts, Store } from "../store/store.js";
 import { errorMessage } from "../util/text.js";
+import { expandHome, homeDir } from "./dir-browser.js";
 import type { RepoContext } from "./repo-context.js";
 
 /** `meta` key set once the backfill committed (DESIGN §4.4). */
@@ -127,8 +127,7 @@ export class RepoRegistry {
    */
   async add(inputPath: string): Promise<RepoSummary> {
     this.assertOpen();
-    const home = this.deps.env.HOME || os.homedir();
-    const expanded = inputPath === "~" ? home : inputPath.startsWith("~/") ? path.join(home, inputPath.slice(2)) : inputPath;
+    const expanded = expandHome(inputPath, homeDir(this.deps.env));
     if (!path.isAbsolute(expanded)) {
       throw new HttpError(422, "path_not_absolute", `Repository path must be absolute (or start with ~/): ${inputPath}`);
     }
