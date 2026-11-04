@@ -3,7 +3,7 @@ import { RepoIdSchema } from "./repos.js";
 
 /**
  * Contract between the desktop shell (Tauri, DESIGN §20) and the CLI: the shell runs
- * `promptgraph open --print-url --json` and reads the last JSON line of stdout as OpenUrlResult.
+ * `promptgraph open --print-url --json` and reads the last `{"v":` JSON object of stdout as OpenUrlResult.
  */
 export const OPEN_URL_RESULT_VERSION = 1;
 

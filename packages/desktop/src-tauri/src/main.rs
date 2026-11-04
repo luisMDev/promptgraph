@@ -134,12 +134,23 @@ fn run_cli(repo: Option<&str>, next: Option<&str>) -> Result<OpenUrlResult, Stri
             return Err(if tail.is_empty() { format!("promptgraph failed ({status})") } else { tail });
         }
     }
-    // Shell start-up files may print to stdout: the last line that parses as a JSON object counts.
-    let last = stdout.lines().rev()
-        .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok().filter(|v| v.is_object()))
-        .ok_or_else(version_required)?;
+    let last = last_json_object(&stdout).ok_or_else(version_required)?;
     if last.get("v") != Some(&serde_json::json!(1)) { return Err(version_required()); }
     serde_json::from_value(last).map_err(|_| version_required())
+}
+
+/// Shell start-up files may print to stdout, even on the CLI's own line (terminal integrations such as
+/// Warp emit escape sequences without a newline): the last JSON object that starts with `{"v":` counts,
+/// else the last line that parses as a JSON object.
+fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
+    let parse_at = |start: usize| {
+        serde_json::Deserializer::from_str(&stdout[start..]).into_iter::<serde_json::Value>().next()
+            .and_then(Result::ok).filter(serde_json::Value::is_object)
+    };
+    stdout.rmatch_indices("{\"v\":").find_map(|(start, _)| parse_at(start)).or_else(|| {
+        stdout.lines().rev()
+            .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok().filter(|v| v.is_object()))
+    })
 }
 
 /// The URL to load and the origin to allow: the login URL on `http://127.0.0.1:<port>`.
@@ -305,4 +316,21 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running promptgraph");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::last_json_object;
+
+    #[test]
+    fn finds_the_cli_object_after_start_up_noise_on_the_same_line() {
+        let out = "P$f{\"hook\": \"SourcedRcFileForWarp\", \"value\": {}}\u{9c}{\"v\":1,\"url\":\"u\",\"port\":4777}\n";
+        assert_eq!(last_json_object(out).unwrap()["port"], 4777);
+    }
+
+    #[test]
+    fn falls_back_to_the_last_json_line_and_rejects_garbage() {
+        assert_eq!(last_json_object("hello\n{\"a\":1}\n").unwrap()["a"], 1);
+        assert!(last_json_object("no json here\n[1]\n").is_none());
+    }
 }
