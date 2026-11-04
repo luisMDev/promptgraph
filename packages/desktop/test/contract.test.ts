@@ -450,7 +450,9 @@ describe("CLI invocation", () => {
     expect(handover).toMatch(/else \{ return Err\(version_required\(\)\) \}/);
     expect(handover).toContain("Restarting promptgraph {new}…");
     expect(constStr(mainRs, "RESTART_PROGRESS")).toBe(DAEMON_RESTART_PROGRESS_PREFIX);
-    expect(run).toMatch(/line\.starts_with\(RESTART_PROGRESS\)[^\n]*"__pgSplashStatus"/);
+    expect(run).toMatch(/line\.starts_with\(RESTART_PROGRESS\)[^\n]*\bstatus\(app, line\)/);
+    // Status lines go to the splash and to stderr, so a run without a screen shows the steps (DESIGN §20.8, testing aid).
+    expect(fnBody(mainRs, "status")).toMatch(/eprintln!\("promptgraph-desktop: status: \{text\}"\);\s*splash\(app, "__pgSplashStatus", text\);/);
   });
 
   it("installs the bundled runtime and runs its versioned launcher, after PROMPTGRAPH_BIN (DESIGN §20.7)", () => {
@@ -466,7 +468,7 @@ describe("CLI invocation", () => {
     expect(install).toContain('(shim.decision.is_none() && shim.state != "ours").then(|| shim_question(app, &shim)).flatten()');
     expect(install).toMatch(/if args\.contains\(&"install"\) \{ shim_failed\(app, &shim\.path, &e\); \}/);
     expect(install).toContain("if shim.warn { path_warning(app, &shim); }");
-    expect(install).toMatch(/"__pgSplashStatus", &format!\("Installing promptgraph/);
+    expect(install).toMatch(/status\(app, &format!\("Installing promptgraph/);
   });
 
   it("uses exactly the questions and button keys of DESKTOP_DIALOGS", () => {
@@ -564,7 +566,7 @@ describe("window and guards", () => {
     // Rust unit tests (`#[cfg(test)]`) do not count.
     const lines = (file: string) => read(`src-tauri/src/${file}`).split("#[cfg(test)]")[0]!.split("\n").length;
     expect(lines("main.rs")).toBeLessThan(600);
-    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(250);
+    expect(lines("dialog.rs") + lines("update.rs")).toBeLessThan(260);
   });
 });
 
@@ -693,11 +695,12 @@ describe("updater (DESIGN §20.10)", () => {
     expect(updateRs.code).toContain("const NOTES_MAX_CHARS: usize = 600;");
     expect(offer).toMatch(/shared\.cli\.lock\(\)[\s\S]*shared\.restarting\.store\(true[\s\S]*show_splash\(app, &shared\)[\s\S]*download_and_install\(/);
     expect(offer).toContain('"__pgSplashStatus"');
+    expect(offer).toMatch(/Err\(e\) => \{\s*eprintln!\("promptgraph-desktop: update to \{version\} failed: \{e\}"\);/);
     // Not AppHandle::restart(): the shell starts the binary tauri would restart (the AppImage file the update
     // replaced, or the .deb's executable) itself, with this process's arguments and a cleaned environment.
     const installed = /Ok\(\(\)\) => \{([\s\S]*?)\n {8}\}/.exec(offer)?.[1] ?? "";
     // A relaunch that fails is shown, not just logged on stderr nobody sees; the app exits either way.
-    expect(installed).toMatch(/^\s*if let Err\(e\) = relaunch\(app\) \{[\s\S]*ask\(app, "restart-failed", [^;]*&\[\("ok", "OK"\.to_string\(\)\)\], 0\);\s*\}\s*app\.exit\(0\);$/);
+    expect(installed).toMatch(/^\s*status\(app, &format!\("promptgraph \{version\} is installed; restarting…"\)\);\s*if let Err\(e\) = relaunch\(app\) \{[\s\S]*ask\(app, "restart-failed", [^;]*&\[\("ok", "OK"\.to_string\(\)\)\], 0\);\s*\}\s*app\.exit\(0\);$/);
     expect(installed).toContain("is installed, but the app could not start it");
     const relaunch = fnBody(updateRs, "relaunch");
     expect(relaunch).toContain("let binary = tauri::process::current_binary(&env).map_err(|e| e.to_string())?;");

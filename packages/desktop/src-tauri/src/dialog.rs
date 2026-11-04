@@ -21,6 +21,14 @@ fn parse_answers(value: &str) -> Vec<(String, String)> {
     value.split(',').filter_map(|pair| pair.split_once('=')).map(|(id, key)| (id.trim().into(), key.trim().into())).collect()
 }
 
+/// The answers given for question `id` (it may be listed twice: `version-mismatch=keep,version-mismatch=use`
+/// covers an older and a newer daemon) and the index of the first one that is a button.
+fn auto_answer<'a>(answers: &'a [(String, String)], id: &str, keys: &[&str]) -> (Vec<&'a str>, Option<usize>) {
+    let given: Vec<&str> = answers.iter().filter(|(question, _)| question == id).map(|(_, key)| key.as_str()).collect();
+    let index = given.iter().find_map(|key| keys.iter().position(|k| k == key));
+    (given, index)
+}
+
 /// Text that did not come from the app (release notes, paths, versions) is shown as is: no markup, and no
 /// control characters but newlines.
 pub fn plain_text(text: &str) -> String {
@@ -33,11 +41,14 @@ pub fn plain_text(text: &str) -> String {
 pub fn ask<'a>(app: &AppHandle, id: &str, title: &str, text: &str, buttons: &[(&'a str, String)], default: usize) -> Option<&'a str> {
     debug_assert_ne!(std::thread::current().name(), Some("main"), "dialog::ask on the main thread");
     let key_at = |i: usize| buttons.get(i).or(buttons.get(default)).map_or("", |(key, _)| *key);
-    let auto = AUTO_ANSWERS.get().and_then(|answers| answers.iter().find(|(question, _)| question == id));
-    if let Some(index) = auto.and_then(|(_, key)| buttons.iter().position(|(k, _)| k == key)) {
+    let keys: Vec<&str> = buttons.iter().map(|(key, _)| *key).collect();
+    let (given, auto) = auto_answer(AUTO_ANSWERS.get().map_or(&[], Vec::as_slice), id, &keys);
+    if let Some(index) = auto {
         eprintln!("promptgraph-desktop: auto-answered {id}={}", key_at(index));
         return Some(key_at(index));
     }
+    // A test run must not wait on a question nobody sees without saying why.
+    if !given.is_empty() { eprintln!("promptgraph-desktop: auto-answer {id}={} is not a button ({}); asking", given.join("|"), keys.join(", ")); }
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let (tx, rx) = mpsc::channel::<usize>();
     let (title, text) = (plain_text(title), plain_text(text));
@@ -72,7 +83,18 @@ pub fn ask<'a>(app: &AppHandle, id: &str, title: &str, text: &str, buttons: &[(&
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_answers, plain_text};
+    use super::{auto_answer, parse_answers, plain_text};
+
+    #[test]
+    fn picks_the_first_auto_answer_that_is_a_button() {
+        let answers = parse_answers("update=later,version-mismatch=keep,version-mismatch=use");
+        // An older daemon (restart, keep) and a newer one (use, restart) are both answered.
+        assert_eq!(auto_answer(&answers, "version-mismatch", &["restart", "keep"]).1, Some(1));
+        assert_eq!(auto_answer(&answers, "version-mismatch", &["use", "restart"]).1, Some(0));
+        assert_eq!(auto_answer(&answers, "update", &["update", "later"]).1, Some(1));
+        assert_eq!(auto_answer(&answers, "shim-offer", &["install", "skip"]), (vec![], None));
+        assert_eq!(auto_answer(&answers, "update", &["ok"]), (vec!["later"], None));
+    }
 
     #[test]
     fn plain_text_drops_control_characters_but_newlines() {

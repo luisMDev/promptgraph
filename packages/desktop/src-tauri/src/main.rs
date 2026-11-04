@@ -65,7 +65,7 @@ struct OpenMismatchResult { v: u8, mismatch: Mismatch }
 struct Mismatch { server_version: String, cli_version: String, running_runs: Option<u64>, daemon_is_older: bool }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DesktopInstallResult { cli_path: String, shim: ShimStatus }
+struct DesktopInstallResult { cli_path: String, installed: bool, pruned: Vec<String>, shim: ShimStatus }
 #[derive(Deserialize)]
 struct ShimResult { shim: ShimStatus }
 #[derive(Deserialize)]
@@ -282,10 +282,11 @@ fn cli_bin<'a>(app: &AppHandle, shared: &'a Shared) -> Result<&'a Cli, String> {
 /// `desktop install`, then the `~/.local/bin/promptgraph` question when there is no decision yet, then the
 /// PATH warning (DESIGN §20.8). Returns the versioned launcher, never one through `current`.
 fn install_runtime(app: &AppHandle, runtime: &Path) -> Result<String, String> {
-    splash(app, "__pgSplashStatus", &format!("Installing promptgraph {}…", env!("CARGO_PKG_VERSION")));
+    status(app, &format!("Installing promptgraph {}…", env!("CARGO_PKG_VERSION")));
     let launcher = runtime.join("bin").join("promptgraph").to_string_lossy().into_owned();
     let installed: DesktopInstallResult = run_json(&launcher, &INSTALL_ARGS, INSTALL_TIMEOUT)
         .map_err(|e| format!("The promptgraph runtime could not be installed:\n{e}"))?;
+    eprintln!("promptgraph-desktop: runtime {} (installed: {}, pruned: [{}])", installed.cli_path, installed.installed, installed.pruned.join(", "));
     let mut shim = installed.shim;
     // A question that could not be shown records nothing: it is asked again on the next start.
     if let Some(args) = (shim.decision.is_none() && shim.state != "ours").then(|| shim_question(app, &shim)).flatten() {
@@ -299,7 +300,7 @@ fn install_runtime(app: &AppHandle, runtime: &Path) -> Result<String, String> {
         }
     }
     if shim.warn { path_warning(app, &shim); }
-    splash(app, "__pgSplashStatus", "Starting promptgraph…");
+    status(app, "Starting promptgraph…");
     Ok(installed.cli_path)
 }
 
@@ -314,7 +315,8 @@ fn shim_question(app: &AppHandle, shim: &ShimStatus) -> Option<Vec<&'static str>
         let install = ask(app, "shim-offer", "Install the promptgraph command?", text, &buttons, 1)? == "install";
         return Some(if install { vec!["desktop", "shim", "install", "--json"] } else { decline });
     }
-    let target = shim.foreign_target.as_deref().map(|t| format!(" (→ {t})")).unwrap_or_default();
+    // A plain file reports itself as its target: name the target only when it is elsewhere (a symlink).
+    let target = shim.foreign_target.as_deref().filter(|t| *t != shim.path).map(|t| format!(" (→ {t})")).unwrap_or_default();
     let text = format!("{}{target} already exists and was not installed by this app. Replace it with the app's \
         command? The current file is kept as promptgraph.bak.", shim.path);
     let buttons = [("keep", "Keep the existing one".to_string()), ("replace", "Replace".to_string())];
@@ -350,7 +352,7 @@ fn run_cli(app: &AppHandle, shared: &Shared, repo: Option<&str>, next: Option<&s
         cmd.arg(flags).arg(script).arg(&cli.path).args(OPEN_ARGS).args(["--on-version-mismatch", policy]);
         cmd.args(next.into_iter().flat_map(|next| ["--next", next])).args(repo);
         let timeout = if cli.bundled && policy != "attach" { HANDOVER_TIMEOUT } else { CLI_TIMEOUT };
-        let progress = |line: &str| if line.starts_with(RESTART_PROGRESS) { splash(app, "__pgSplashStatus", line) };
+        let progress = |line: &str| if line.starts_with(RESTART_PROGRESS) { status(app, line) };
         let out = run_captured(cmd, timeout, &progress)?;
         // Only 127 means not found: stderr also holds start-up files' messages, so text would hide a real failure.
         match out.status.code() {
@@ -384,7 +386,7 @@ fn handover(app: &AppHandle, shared: &Shared, stdout: &str) -> Result<&'static s
         (text, [("use", "Use the running one".to_string()), ("restart", format!("Restart with {new}"))], 0)
     };
     if ask(app, "version-mismatch", "promptgraph is running another version", &text, &buttons, default) == Some("restart") {
-        splash(app, "__pgSplashStatus", &format!("Restarting promptgraph {new}…"));
+        status(app, &format!("Restarting promptgraph {new}…"));
         return Ok("restart");
     }
     *shared.mismatch_policy.lock().unwrap() = "attach";
@@ -472,6 +474,13 @@ fn start_from_splash(app: AppHandle, shared: Arc<Shared>) {
             splash(&app, "__pgSplashError", &message);
         }
     });
+}
+
+/// A status line on the splash, also logged on stderr, so a run without a screen (PG_DESKTOP_AUTO_ANSWER)
+/// shows the steps. The texts are the shell's own and the CLI's progress line: never a URL or a code.
+pub(crate) fn status(app: &AppHandle, text: &str) {
+    eprintln!("promptgraph-desktop: status: {text}");
+    splash(app, "__pgSplashStatus", text);
 }
 
 /// Calls `window.__pgSplashError` or `window.__pgSplashStatus` (splash.js), only while the splash is shown.

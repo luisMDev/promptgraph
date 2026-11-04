@@ -15,7 +15,7 @@ use tauri::{AppHandle, Manager, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::dialog::{ask, plain_text};
-use crate::{splash, Shared};
+use crate::{splash, status, Shared};
 
 const SPLASH_URL: &str = "tauri://localhost/index.html";
 const FIRST_CHECK: Duration = Duration::from_secs(5);
@@ -112,8 +112,8 @@ fn offer(app: &AppHandle, update: Update, declined: &mut HashSet<String>) {
     let cli = shared.cli.lock().unwrap_or_else(|e| e.into_inner());
     shared.restarting.store(true, Ordering::SeqCst);
     show_splash(app, &shared);
-    let status = format!("Downloading promptgraph {version}…");
-    splash(app, "__pgSplashStatus", &status);
+    let downloading = format!("Downloading promptgraph {version}…");
+    status(app, &downloading);
     let (mut received, mut shown) = (0u64, u64::MAX);
     let result = tauri::async_runtime::block_on(update.download_and_install(
         |chunk, total| {
@@ -121,13 +121,14 @@ fn offer(app: &AppHandle, update: Update, declined: &mut HashSet<String>) {
             let percent = total.filter(|t| *t > 0).map_or(0, |t| (received * 100 / t).min(100));
             if percent != shown {
                 shown = percent;
-                splash(app, "__pgSplashStatus", &format!("{status} {percent}%"));
+                splash(app, "__pgSplashStatus", &format!("{downloading} {percent}%"));
             }
         },
         || {},
     ));
     match result {
         Ok(()) => {
+            status(app, &format!("promptgraph {version} is installed; restarting…"));
             if let Err(e) = relaunch(app) {
                 eprintln!("promptgraph-desktop: could not restart: {e}");
                 let text = format!("promptgraph {version} is installed, but the app could not start it: {e}.\n\nStart promptgraph again to use the new version.");
@@ -136,6 +137,7 @@ fn offer(app: &AppHandle, update: Update, declined: &mut HashSet<String>) {
             app.exit(0);
         }
         Err(e) => {
+            eprintln!("promptgraph-desktop: update to {version} failed: {e}");
             let text = format!("The update could not be installed: {e}. promptgraph {current} keeps running.");
             ask(app, "update-failed", "The update failed", &text, &[("ok", "OK".to_string())], 0);
             shared.restarting.store(false, Ordering::SeqCst);
