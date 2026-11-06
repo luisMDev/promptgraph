@@ -1,6 +1,6 @@
 import { formatCostUsd, isFinalRunStatus } from "@promptgraph/shared";
-import { Loader2Icon } from "lucide-react";
-import { useState } from "react";
+import { Loader2Icon, Redo2Icon, Undo2Icon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
@@ -16,12 +16,75 @@ import { formatDateTime } from "../../lib/format";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { cancelRun, resumeRun, startRun } from "../../store/app-actions";
 import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
+import { canRedo, canUndo, useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
 import { Icons } from "../common/icons";
 import { ConfirmDialog } from "../common/PromptDialog";
 import { Button, StatusDot } from "../common/ui";
+
+/**
+ * Undo / Redo of the editor's local edits. Always shown next to the run controls so the row never shifts; disabled
+ * while there is nothing to undo or redo, while the graph is read-only and while a run is shown.
+ */
+export function UndoRedoControls() {
+  const runMode = useRunStore((s) => s.selectedRunId !== null);
+  const undoable = useEditorStore((s) => !runMode && canUndo(s));
+  const redoable = useEditorStore((s) => !runMode && canRedo(s));
+  const hasGraph = useEditorStore((s) => s.graph !== null);
+  if (!hasGraph) return null;
+  return (
+    <div className="flex items-center rounded-lg bg-card shadow-soft ring-1 ring-border">
+      <IconAction label="Undo" shortcut="Ctrl+Z" disabled={!undoable} onClick={() => useEditorStore.getState().undo()}>
+        <Undo2Icon />
+      </IconAction>
+      <IconAction label="Redo" shortcut="Ctrl+Shift+Z" disabled={!redoable} onClick={() => useEditorStore.getState().redo()}>
+        <Redo2Icon />
+      </IconAction>
+    </div>
+  );
+}
+
+function IconAction({ label, shortcut, disabled, onClick, children }: { label: string; shortcut: string; disabled: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* A disabled button gets no pointer events: the wrapper keeps the tooltip working. */}
+        <span className="inline-flex">
+          <Button variant="ghost" size="icon" aria-label={label} disabled={disabled} onClick={onClick}>
+            {children}
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {label} <span className="text-muted-foreground">{shortcut}</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z and Ctrl+Y redo; ignored while typing in a field or a terminal. */
+export function useUndoRedoShortcuts() {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || isTextTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+      const redo = (key === "z" && e.shiftKey) || (key === "y" && !e.shiftKey);
+      if (!redo && !(key === "z" && !e.shiftKey)) return;
+      e.preventDefault();
+      const editor = useEditorStore.getState();
+      if (redo) editor.redo();
+      else editor.undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
+
+function isTextTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
+}
 
 /** Run / Cancel, validation summary, and the total cost of the shown run. Floats over the canvas, top right. */
 export function RunControls() {
@@ -85,6 +148,7 @@ export function RunControls() {
           <Icons.play /> Resume
         </Button>
       )}
+      <UndoRedoControls />
       {cancellable ? (
         <Button variant="danger" onClick={() => setConfirmCancel(true)}>
           <Icons.stop /> Cancel

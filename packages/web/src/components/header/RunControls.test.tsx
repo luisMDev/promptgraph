@@ -8,7 +8,7 @@ import { useAppStore } from "../../store/app-store";
 import { useEditorStore } from "../../store/editor-store";
 import { useRunStore } from "../../store/run-store";
 import { useUiStore } from "../../store/ui-store";
-import { PendingApprovals, RunSelector } from "./RunControls";
+import { PendingApprovals, RunSelector, UndoRedoControls } from "./RunControls";
 
 const graph = linearGraph();
 
@@ -178,5 +178,41 @@ describe("PendingApprovals menu", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+});
+
+describe("UndoRedoControls", () => {
+  beforeEach(() => {
+    useEditorStore.setState({ graph, activeRunId: null, loadError: null, externalUndo: null, saving: false, past: [], future: [] });
+    useRunStore.setState({ selectedRunId: null });
+  });
+
+  afterEach(() => {
+    useEditorStore.setState({ past: [], future: [] });
+  });
+
+  it("is always shown, disabled while there is nothing to undo or redo", () => {
+    render(<UndoRedoControls />);
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Redo" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("enables Undo after an edit and Redo after an undo", async () => {
+    const user = userEvent.setup();
+    useEditorStore.setState({ past: [graph] });
+    render(<UndoRedoControls />);
+    const undo = screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    expect(undo.disabled).toBe(false);
+    await user.click(undo);
+    expect(useEditorStore.getState().past).toHaveLength(0);
+    expect((screen.getByRole("button", { name: "Redo" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("stays disabled while a run is shown", () => {
+    useEditorStore.setState({ past: [graph], future: [graph] });
+    useRunStore.setState({ selectedRunId: "r1" });
+    render(<UndoRedoControls />);
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Redo" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

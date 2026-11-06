@@ -54,12 +54,26 @@ export interface EditorStore extends EditorState {
   externalUndo: ExternalUndo | null;
   /** Nodes added or changed by the last external change; highlighted on the canvas for HIGHLIGHT_MS. */
   highlightNodeIds: string[];
+  /**
+   * Local edit history of the open graph, oldest first (at most HISTORY_LIMIT entries). Cleared when another
+   * graph opens or the graph is (re)loaded from disk, since a stale version must not be written back silently.
+   */
+  past: Graph[];
+  /** Versions undone since the last edit, the next one to redo first. */
+  future: Graph[];
 
   setPhase(phase: 1 | 2, supportedNodeTypes?: readonly NodeType[] | null): void;
   openGraph(id: string): Promise<void>;
   closeGraph(): void;
-  /** Applies an edit (no-op while read-only); marks dirty, revalidates and schedules the autosave. */
-  edit(fn: (graph: Graph) => Graph): void;
+  /**
+   * Applies an edit (no-op while read-only); marks dirty, revalidates, records an undo step and schedules the
+   * autosave. Consecutive edits with the same `coalesceKey` less than HISTORY_COALESCE_MS apart (a drag, typing
+   * in a field) share one undo step.
+   */
+  edit(fn: (graph: Graph) => Graph, coalesceKey?: string): void;
+  /** Reverts the last local edit, or the last external change when that came after it (see undoExternalChange). */
+  undo(): void;
+  redo(): void;
   addNode(type: NodeType, position: Position): string | null;
   updateNode(id: string, fn: (node: GraphNode) => GraphNode): void;
   updateEdge(id: string, fn: (edge: GraphEdge) => GraphEdge): void;
@@ -92,6 +106,10 @@ export interface ExternalUndo {
 }
 
 export const AUTOSAVE_DELAY_MS = 500;
+/** Maximum number of undo steps kept per graph. */
+export const HISTORY_LIMIT = 100;
+/** Edits with the same coalesce key closer than this share one undo step. */
+export const HISTORY_COALESCE_MS = 1000;
 /** How long nodes changed outside the editor stay highlighted. */
 export const HIGHLIGHT_MS = 4000;
 
@@ -112,6 +130,21 @@ const EMPTY_VALIDATION: ValidationResult = { errors: [], warnings: [] };
 
 export function isReadOnly(s: Pick<EditorStore, "graph" | "activeRunId" | "loadError">): boolean {
   return !s.graph || s.activeRunId !== null || s.loadError !== null;
+}
+
+type HistoryView = Pick<EditorStore, "graph" | "activeRunId" | "loadError" | "externalUndo" | "saving" | "past" | "future">;
+
+/** The external change shown in the banner can be undone now. */
+export function canUndoExternal(s: HistoryView): boolean {
+  return !isReadOnly(s) && s.externalUndo !== null && s.externalUndo.graphId === s.graph?.id && !s.saving;
+}
+
+export function canUndo(s: HistoryView): boolean {
+  return canUndoExternal(s) || (!isReadOnly(s) && s.past.length > 0);
+}
+
+export function canRedo(s: HistoryView): boolean {
+  return !isReadOnly(s) && s.future.length > 0;
 }
 
 function validate(graph: Graph | null, s: Pick<EditorStore, "phase" | "supportedNodeTypes">): ValidationResult {
@@ -140,6 +173,9 @@ function clearSaveTimer(): void {
 
 let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Key and time of the last edit, to merge the next one with the same key into its undo step. */
+let lastEdit: { key: string; at: number } | null = null;
+
 function clearHighlightTimer(): void {
   if (highlightTimer) clearTimeout(highlightTimer);
   highlightTimer = null;
@@ -161,6 +197,8 @@ export function changedNodeIds(prev: Graph, next: Graph): string[] {
 }
 
 const NO_UNDO = { externalUndo: null, highlightNodeIds: [] };
+
+const NO_HISTORY = { past: [], future: [] };
 
 const NO_SELECTION = { selectedNodeIds: [], selectedEdgeIds: [], selectedNodeId: null, selectedEdgeId: null };
 
@@ -221,6 +259,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
 
   function applyLoaded(res: GetGraphResponse, keepSelection: boolean): void {
     overwriteOnce = false;
+    lastEdit = null;
     const selection = keepSelection ? pruneSelection(get(), res.graph) : NO_SELECTION;
     set({
       graph: res.graph,
@@ -233,6 +272,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       saveError: null,
       externalChange: false,
       validation: validate(res.graph, get()),
+      ...NO_HISTORY,
       ...selection,
     });
   }
@@ -258,6 +298,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     selectedEdgeIds: [],
     externalUndo: null,
     highlightNodeIds: [],
+    past: [],
+    future: [],
 
     setPhase(phase, supportedNodeTypes = null) {
       set({ phase, supportedNodeTypes, validation: validate(get().graph, { phase, supportedNodeTypes }) });
@@ -268,7 +310,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       clearSaveTimer();
       clearHighlightTimer();
       recheckGraphId = null;
-      set({ ...NO_UNDO, graphId: id, loading: true, loadError: null, graph: null, graphHash: null, dirty: false, validation: EMPTY_VALIDATION, ...NO_SELECTION });
+      lastEdit = null;
+      set({ ...NO_UNDO, ...NO_HISTORY, graphId: id, loading: true, loadError: null, graph: null, graphHash: null, dirty: false, validation: EMPTY_VALIDATION, ...NO_SELECTION });
       try {
         const res = await persistence.load(id);
         applyLoaded(res, false);
@@ -282,8 +325,10 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       clearHighlightTimer();
       recheckGraphId = null;
       overwriteOnce = false;
+      lastEdit = null;
       set({
         ...NO_UNDO,
+        ...NO_HISTORY,
         graphId: null,
         graph: null,
         graphHash: null,
@@ -298,13 +343,40 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       });
     },
 
-    edit(fn) {
+    edit(fn, coalesceKey) {
       const s = get();
       if (isReadOnly(s) || !s.graph) return;
       const next = fn(s.graph);
       if (next === s.graph) return;
+      const now = Date.now();
+      const merge = coalesceKey !== undefined && lastEdit?.key === coalesceKey && now - lastEdit.at < HISTORY_COALESCE_MS && s.past.length > 0;
+      lastEdit = coalesceKey === undefined ? null : { key: coalesceKey, at: now };
+      const past = merge ? s.past : [...s.past, s.graph].slice(-HISTORY_LIMIT);
       // Undoing an external change after local edits would silently discard them.
-      set({ graph: next, dirty: true, validation: validate(next, s), ...pruneSelection(s, next), externalUndo: null });
+      set({ graph: next, dirty: true, validation: validate(next, s), ...pruneSelection(s, next), externalUndo: null, past, future: [] });
+      scheduleSave();
+    },
+
+    undo() {
+      const s = get();
+      // An external change clears the local history when it is loaded, so it is always the most recent step.
+      if (canUndoExternal(s)) {
+        void s.undoExternalChange();
+        return;
+      }
+      const prev = s.past.at(-1);
+      if (isReadOnly(s) || !s.graph || !prev) return;
+      lastEdit = null;
+      set({ graph: prev, dirty: true, validation: validate(prev, s), ...pruneSelection(s, prev), past: s.past.slice(0, -1), future: [s.graph, ...s.future] });
+      scheduleSave();
+    },
+
+    redo() {
+      const s = get();
+      const [next, ...future] = s.future;
+      if (isReadOnly(s) || !s.graph || !next) return;
+      lastEdit = null;
+      set({ graph: next, dirty: true, validation: validate(next, s), ...pruneSelection(s, next), past: [...s.past, s.graph].slice(-HISTORY_LIMIT), future });
       scheduleSave();
     },
 
@@ -318,15 +390,15 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     },
 
     updateNode(id, fn) {
-      get().edit((g) => ops.updateNode(g, id, fn));
+      get().edit((g) => ops.updateNode(g, id, fn), `node:${id}`);
     },
 
     updateEdge(id, fn) {
-      get().edit((g) => ops.updateEdge(g, id, fn));
+      get().edit((g) => ops.updateEdge(g, id, fn), `edge:${id}`);
     },
 
     moveNodes(positions) {
-      get().edit((g) => ops.moveNodes(g, positions));
+      get().edit((g) => ops.moveNodes(g, positions), `move:${[...positions.keys()].sort().join(",")}`);
     },
 
     autoLayout() {
@@ -361,13 +433,13 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       get().edit((g) => {
         const settings = fn(g.settings);
         return settings === g.settings ? g : { ...g, settings };
-      });
+      }, "settings");
     },
 
     rename(name) {
       const trimmed = name.trim();
       if (!trimmed) return;
-      get().edit((g) => (g.name === trimmed ? g : { ...g, name: trimmed }));
+      get().edit((g) => (g.name === trimmed ? g : { ...g, name: trimmed }), "rename");
     },
 
     async flushSave() {
@@ -459,8 +531,10 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       try {
         const res = await persistence.save(undo.previous, s.graphHash ?? undefined);
         if (get().graph?.id !== undo.graphId) return;
+        lastEdit = null;
         set({
           ...NO_UNDO,
+          ...NO_HISTORY,
           graph: res.graph,
           graphHash: res.hash,
           dirty: false,
