@@ -13,49 +13,49 @@
       "id": "spec",
       "type": "prompt",
       "label": "Write the spec",
-      "position": { "x": 0, "y": 150 },
+      "position": { "x": 0, "y": 0 },
       "config": { "prompt": "Write docs/spec.md describing a small /health endpoint (route, response, tests)." }
     },
     {
       "id": "backend",
       "type": "prompt",
       "label": "Backend",
-      "position": { "x": 300, "y": 0 },
+      "position": { "x": -150, "y": 200 },
       "config": { "prompt": "Implement the /health endpoint described in docs/spec.md, with unit tests." }
     },
     {
       "id": "docs",
       "type": "prompt",
       "label": "Docs",
-      "position": { "x": 300, "y": 300 },
+      "position": { "x": 150, "y": 200 },
       "config": { "prompt": "Document the /health endpoint from docs/spec.md in the README." }
     },
     {
       "id": "merge",
       "type": "merge",
       "label": "Merge lanes",
-      "position": { "x": 600, "y": 150 },
+      "position": { "x": 0, "y": 400 },
       "config": { "strategy": "merge", "onConflict": "claude" }
     },
     {
       "id": "review",
       "type": "command",
       "label": "Review",
-      "position": { "x": 900, "y": 150 },
+      "position": { "x": 0, "y": 600 },
       "config": { "command": "/code-review", "completion": { "mode": "manual" } }
     },
     {
       "id": "commit",
       "type": "commit",
       "label": "Commit",
-      "position": { "x": 1200, "y": 150 },
+      "position": { "x": 0, "y": 800 },
       "config": { "generateMessage": true, "squashCheckpoints": true }
     },
     {
       "id": "pr",
       "type": "pr",
       "label": "Open PR",
-      "position": { "x": 1500, "y": 150 },
+      "position": { "x": 0, "y": 1000 },
       "config": { "draft": true, "requireApproval": true }
     }
   ],

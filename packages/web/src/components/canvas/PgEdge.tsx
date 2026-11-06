@@ -1,13 +1,16 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type Edge, type EdgeProps } from "@xyflow/react";
 import { backEdgePath } from "../../lib/edge-path";
+import type { LoopRoute } from "../../lib/loop-routing";
 import type { EdgeRunState } from "../../lib/run-view";
 
 export interface PgEdgeData extends Record<string, unknown> {
   /** Validation messages, shown as a tooltip. */
   title?: string;
   label?: string;
-  /** Loop back-edge (§15.4): routed below the nodes when it points backwards. */
+  /** Loop back-edge (§15.4): routed around the side of the nodes when it points backwards. */
   loop?: boolean;
+  /** Loop back-edges: its own track beside the nodes (`loopRoutes`), so loops do not overlap. */
+  route?: LoopRoute;
   /** Run mode, loop edges: iteration badge, e.g. "2/3". */
   badge?: string;
   /** Run mode only. */
@@ -18,10 +21,10 @@ export interface PgEdgeData extends Record<string, unknown> {
 
 export type PgFlowEdge = Edge<PgEdgeData, "pg">;
 
-/** Bezier edge (loop back-edges routed visibly underneath) with a validation tooltip, a label pill and a loop badge. */
+/** Bezier edge (loop back-edges routed visibly around the side) with a validation tooltip, a label pill and a loop badge. */
 export function PgEdge(props: EdgeProps<PgFlowEdge>) {
   const { data, style, markerEnd } = props;
-  const back = data?.loop ? backEdgePath(props) : null;
+  const back = data?.loop ? backEdgePath(props, data.route) : null;
   const [path, labelX, labelY] = back ?? getBezierPath(props);
   const text = data?.badge ?? data?.label;
   return (

@@ -21,10 +21,7 @@
     {
       "id": "n-j2kbq7u3tp",
       "label": "Prompt",
-      "position": {
-        "x": 80,
-        "y": -112
-      },
+      "position": { "x": -150, "y": 0 },
       "type": "prompt",
       "config": {
         "prompt": "cera una landing page sencilla",
@@ -34,10 +31,7 @@
     {
       "id": "n-jngyfc211a",
       "label": "Commit",
-      "position": {
-        "x": 1264,
-        "y": -96
-      },
+      "position": { "x": 0, "y": 600 },
       "type": "commit",
       "config": {
         "generateMessage": true,
@@ -47,10 +41,7 @@
     {
       "id": "n-kq64jo7kgo",
       "label": "Command",
-      "position": {
-        "x": 960,
-        "y": -96
-      },
+      "position": { "x": 0, "y": 400 },
       "type": "command",
       "config": {
         "command": "/simplify",
@@ -60,10 +51,7 @@
     {
       "id": "n-ik4dzd2a6t",
       "label": "Prompt 2",
-      "position": {
-        "x": 736,
-        "y": 80
-      },
+      "position": { "x": 0, "y": 200 },
       "type": "prompt",
       "config": {
         "prompt": "cambialaa color rosa",
@@ -73,10 +61,7 @@
     {
       "id": "n-c3celbqhis",
       "label": "Condition",
-      "position": {
-        "x": 432,
-        "y": -176
-      },
+      "position": { "x": 150, "y": 0 },
       "type": "condition",
       "config": {
         "evaluator": {

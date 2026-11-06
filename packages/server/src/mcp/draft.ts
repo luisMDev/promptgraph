@@ -1,9 +1,8 @@
-import { buildTopology, GraphSchema, topologicalOrder, type Graph } from "@promptgraph/shared";
+import { deriveEdgeId, GraphSchema, layeredLayout, type Graph } from "@promptgraph/shared";
 import { z } from "zod";
 
-/** Canvas spacing used by the auto layout (matches docs/examples). */
-export const LAYOUT_DX = 300;
-const LAYOUT_DY = 180;
+/** Re-exported for callers and tests that predate the move of the layout to @promptgraph/shared. */
+export { LAYOUT_DX, LAYOUT_DY } from "@promptgraph/shared";
 
 export class GraphDraftError extends Error {}
 
@@ -14,7 +13,7 @@ const isRecord = (v: unknown): v is RawRecord => typeof v === "object" && v !== 
 /**
  * Turns a graph written by Claude into a valid `Graph` (§19.3): edges without an `id` get one, then
  * GraphSchema fills the defaults, then nodes that had no `position` are placed by a layered
- * left-to-right layout. Structural rules (cycles, joins, configs) are left to validateGraph.
+ * top-to-bottom layout. Structural rules (cycles, joins, configs) are left to validateGraph.
  * `layout`: "missing" (default) places only nodes without a position, "all" every node, "keep" none.
  * @throws GraphDraftError with the schema issues.
  */
@@ -40,38 +39,9 @@ function assignEdgeIds(edges: unknown[]): unknown[] {
   const used = new Set(edges.filter(isRecord).map((e) => e.id).filter((id): id is string => typeof id === "string" && id.length > 0));
   return edges.map((e) => {
     if (!isRecord(e) || (typeof e.id === "string" && e.id.length > 0)) return e;
-    const port = typeof e.sourcePort === "string" && e.sourcePort !== "out" ? `-${e.sourcePort}` : "";
-    const base = `e-${String(e.source)}${port}-${String(e.target)}`;
-    let id = base;
-    for (let i = 2; used.has(id); i++) id = `${base}-${i}`;
+    const sourcePort = typeof e.sourcePort === "string" ? e.sourcePort : undefined;
+    const id = deriveEdgeId({ source: String(e.source), target: String(e.target), sourcePort }, used);
     used.add(id);
     return { ...e, id };
   });
-}
-
-/**
- * Column = longest path from a root over forward (non-loop) edges; rows are centred on y = 0 in
- * declaration order. Nodes on a cycle (an invalid graph) go to an extra last column.
- */
-function layeredLayout(graph: Graph): Map<string, { x: number; y: number }> {
-  const topo = buildTopology(graph);
-  const { order, cyclic } = topologicalOrder(topo);
-  const depth = new Map<string, number>();
-  for (const node of order) {
-    depth.set(node.id, Math.max(0, ...topo.incoming.get(node.id)!.map((e) => depth.get(e.source)! + 1)));
-  }
-  const lastColumn = Math.max(-1, ...depth.values()) + 1;
-  for (const id of cyclic) depth.set(id, lastColumn);
-
-  const columns = new Map<number, string[]>();
-  for (const node of graph.nodes) {
-    const d = depth.get(node.id)!;
-    if (!columns.has(d)) columns.set(d, []);
-    columns.get(d)!.push(node.id);
-  }
-  const positions = new Map<string, { x: number; y: number }>();
-  for (const [d, column] of columns) {
-    column.forEach((id, i) => positions.set(id, { x: d * LAYOUT_DX, y: (i - (column.length - 1) / 2) * LAYOUT_DY }));
-  }
-  return positions;
 }

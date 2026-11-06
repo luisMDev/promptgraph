@@ -12,3 +12,4 @@ export * from "./validation/types.js";
 export * from "./validation/validate.js";
 export * from "./server-info.js";
 export * from "./mcp-guide.js";
+export * from "./layout.js";

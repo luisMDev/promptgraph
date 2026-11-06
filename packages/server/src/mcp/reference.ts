@@ -27,7 +27,7 @@ parallel lanes are joined only through a \`merge\` node.
 }
 \`\`\`
 
-\`position\` ({x, y}) and edge \`id\` may be omitted: save_graph lays out nodes left to right and names edges.
+\`position\` ({x, y}) and edge \`id\` may be omitted: save_graph lays out nodes top to bottom (error handlers to the right of their source) and names edges.
 
 ## Node types and config
 

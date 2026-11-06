@@ -1,4 +1,4 @@
-import type { NodeType } from "@promptgraph/shared";
+import { LAYOUT_DY, type NodeType } from "@promptgraph/shared";
 import { NODE_TYPE_META, PALETTE_ORDER } from "../../lib/node-meta";
 import { isReadOnly, useEditorStore } from "../../store/editor-store";
 import { useUiStore } from "../../store/ui-store";
@@ -25,8 +25,9 @@ export function Palette() {
   const addByClick = (type: NodeType) => {
     const g = useEditorStore.getState().graph;
     if (!g) return;
-    const last = g.nodes.reduce((m, n) => (n.position.x > m.x ? n.position : m), { x: -320, y: 96 });
-    const id = useEditorStore.getState().addNode(type, { x: last.x + 320, y: last.y });
+    // Appended below the lowest node: graphs flow top to bottom.
+    const last = g.nodes.reduce((m, n) => (n.position.y > m.y ? n.position : m), { x: 96, y: -LAYOUT_DY });
+    const id = useEditorStore.getState().addNode(type, { x: last.x, y: last.y + LAYOUT_DY });
     if (id) useUiStore.getState().revealNode(id);
   };
 

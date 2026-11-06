@@ -168,7 +168,7 @@ function EditCanvas() {
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="var(--pg-canvas-dots)" />
-        <CanvasControls manual={manual} />
+        <CanvasControls manual={manual} editable={!readOnly} />
         <AutoFit manual={manual} fitOnInit={fitOnMount} />
         <RevealRequestedNode measured={measured} />
         <WideEnoughForMinimap>
@@ -320,8 +320,11 @@ function AutoFit({ manual, fitOnInit }: { manual: RefObject<boolean>; fitOnInit:
   return null;
 }
 
-/** Zoom buttons count as a manual viewport; our fit button replaces React Flow's (which ignores the minimum zoom). */
-function CanvasControls({ manual }: { manual: RefObject<boolean> }) {
+/**
+ * Zoom buttons count as a manual viewport; our fit button replaces React Flow's (which ignores the minimum zoom).
+ * `editable`: also an auto-layout button (re-places every node top to bottom, then fits the view).
+ */
+function CanvasControls({ manual, editable = false }: { manual: RefObject<boolean>; editable?: boolean }) {
   const fit = useReadableFit();
   const markManual = useCallback(() => {
     manual.current = true;
@@ -338,6 +341,19 @@ function CanvasControls({ manual }: { manual: RefObject<boolean> }) {
       >
         <Icons.fit />
       </ControlButton>
+      {editable && (
+        <ControlButton
+          title="Auto layout: arrange the graph top to bottom (error handlers to the right)"
+          aria-label="Auto layout"
+          onClick={() => {
+            useEditorStore.getState().autoLayout();
+            manual.current = false;
+            requestAnimationFrame(() => fit(FIT_ANIMATION_MS));
+          }}
+        >
+          <Icons.layout />
+        </ControlButton>
+      )}
     </Controls>
   );
 }

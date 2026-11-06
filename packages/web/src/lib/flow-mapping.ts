@@ -3,6 +3,7 @@ import { MarkerType } from "@xyflow/react";
 import type { PgFlowEdge } from "../components/canvas/PgEdge";
 import type { NodeIssues, PgFlowNode } from "../components/nodes/types";
 import { mergeInputLabels, nodeLanes } from "./lanes";
+import { loopRoutes } from "./loop-routing";
 import { edgeRunState, loopBadge, type EdgeRunState, type LoopView } from "./run-view";
 
 /** Maps the domain graph (+ validation or run state) to React Flow nodes and edges. Pure. */
@@ -14,6 +15,8 @@ export interface FlowInput {
   selectedNodeIds: readonly string[];
   selectedEdgeIds: readonly string[];
   measured: Readonly<Record<string, { width: number; height: number }>>;
+  /** Edit mode: nodes changed outside the editor a moment ago (briefly highlighted). */
+  highlightNodeIds?: readonly string[];
   /** Present in run mode. */
   run?: {
     currentByNode: Readonly<Record<string, NodeRun>>;
@@ -40,6 +43,7 @@ const NO_ISSUES: NodeIssues = { errors: [], warnings: [] };
 export function toFlowNodes(input: FlowInput): PgFlowNode[] {
   const issues = input.run ? new Map<string, NodeIssues>() : issuesByNode(input.validation);
   const selected = new Set(input.selectedNodeIds);
+  const highlighted = new Set(input.run ? [] : (input.highlightNodeIds ?? []));
   const lanes = input.run ? nodeLanes(input.graph, input.run.lanes, input.run.currentByNode) : null;
   return input.graph.nodes.map((node) => {
     const nodeRun = input.run?.currentByNode[node.id] ?? null;
@@ -58,6 +62,7 @@ export function toFlowNodes(input: FlowInput): PgFlowNode[] {
         runMode: !!input.run,
         issues: issues.get(node.id) ?? NO_ISSUES,
         phase: input.phase,
+        highlighted: highlighted.has(node.id),
       },
     };
   });
@@ -91,7 +96,9 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
   const selected = new Set(input.selectedEdgeIds);
   // Inline strokes override React Flow's selected colour: selection gets a wider stroke and a blue halo.
   const halo = "drop-shadow(0 0 3px rgb(96 165 250))";
+  const routes = loopRoutes(input.graph, input.measured);
   return input.graph.edges.map((edge) => {
+    const route = routes.get(edge.id);
     const failure = edgeWhen(edge) === "failure";
     let stroke = failure ? "#ef4444" : edge.loop ? "#8b5cf6" : "#a8a29e";
     let animated = false;
@@ -134,6 +141,7 @@ export function toFlowEdges(input: FlowInput): PgFlowEdge[] {
         title: issues.length ? issues.join("\n") : undefined,
         label: input.run ? undefined : edgeLabel(edge),
         loop: !!edge.loop,
+        ...(route ? { route } : {}),
         badge: input.run && edge.loop ? loopBadge(loop ?? { iteration: 0, maxIterations: edge.loop.maxIterations, exhausted: false }) : undefined,
         ...(state ? { runState: state } : {}),
         ...(looped ? { looped } : {}),

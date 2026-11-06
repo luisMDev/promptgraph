@@ -10,7 +10,7 @@ import { startServer } from "../src/cli/server.js";
 import { getPaths } from "../src/config/paths.js";
 import { readServerInfo, serverInfoPath } from "../src/config/server-info.js";
 import type { McpEnvironment } from "../src/mcp/connection.js";
-import { GraphDraftError, LAYOUT_DX, normalizeGraphDraft } from "../src/mcp/draft.js";
+import { GraphDraftError, LAYOUT_DY, normalizeGraphDraft } from "../src/mcp/draft.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { createTempRepo, fakeClaudeEnv, tempDir, waitFor } from "./helpers.js";
 
@@ -45,10 +45,10 @@ describe("normalizeGraphDraft", () => {
     expect(ids).toContain("e-a-b-2"); // collides with the explicit "e-a-b"
     const pos = Object.fromEntries(graph.nodes.map((n) => [n.id, n.position]));
     expect(pos.a).toEqual({ x: 0, y: 0 });
-    expect(pos.b!.x).toBe(LAYOUT_DX);
-    expect(pos.c!.x).toBe(LAYOUT_DX);
-    expect(pos.b!.y).not.toBe(pos.c!.y);
-    expect(pos.m!.x).toBe(2 * LAYOUT_DX);
+    expect(pos.b!.y).toBe(LAYOUT_DY);
+    expect(pos.c!.y).toBe(LAYOUT_DY);
+    expect(pos.b!.x).not.toBe(pos.c!.x);
+    expect(pos.m!.y).toBe(2 * LAYOUT_DY);
     expect(pos.fixed).toEqual({ x: 5, y: 7 });
   });
 
@@ -68,7 +68,7 @@ describe("normalizeGraphDraft", () => {
       },
       { layout: "all" },
     );
-    expect(graph.nodes.map((n) => n.position)).toEqual([{ x: 0, y: 0 }, { x: LAYOUT_DX, y: 0 }]);
+    expect(graph.nodes.map((n) => n.position)).toEqual([{ x: 0, y: 0 }, { x: 0, y: LAYOUT_DY }]);
   });
 
   it("reports schema issues with their path", () => {

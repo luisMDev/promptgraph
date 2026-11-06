@@ -550,7 +550,7 @@ A page that answers "what happened while I was away". It replaces the editor vie
 
 ### 15.1 Edge conditions
 
-Each edge gets `when: "success" | "failure" | "always"` (default `success`). In the canvas, every node gets an extra **error port** (red); dragging from it creates a `failure` edge.
+Each edge gets `when: "success" | "failure" | "always"` (default `success`). In the canvas, every node gets an extra **error port** (red, on its right edge, so error handlers sit beside the main flow); dragging from it creates a `failure` edge.
 
 - A failed node with at least one matching `failure` edge **does not** pause the run: the failure is "handled" and the engine follows those edges. `onError` only applies when no failure edge exists.
 - The failing node's output (error, exit code, stdout tail) flows into the next node's context block, so a "fix" node gets the failing test output automatically.
@@ -605,7 +605,7 @@ In the test-fix loop the `shell → condition` edge is `always` (the editor's de
 
 ### 15.6 UI additions
 
-- Condition node with labelled `true`/`false` handles; error handles on all nodes.
+- Condition node with labelled `true`/`false` handles on its bottom edge; error handles (right edge) on all nodes.
 - Loop edges drawn dashed, with an iteration badge (`2/3`) during runs.
 - Inspector iteration selector for NodeRuns inside loops.
 - Skipped nodes faded; dead edges greyed.
@@ -681,7 +681,7 @@ Once listening, the server writes `~/.promptgraph/servers/<repo-key>.json` (`Ser
 | Runs | `start_run`, `list_runs`, `get_run`, `wait_for_run`, `get_node_output`, `node_action` (done, fail, retry, skip, hold, release), `get_diff`, `get_run_report`, `cancel_run`, `resume_run`, `cleanup_run` |
 | Approvals | `list_pending`, `get_approval` (read-only) |
 
-- `save_graph` accepts a draft: edge `id`s and node `position`s may be omitted. Missing ids are derived from the endpoints. Missing positions come from a layered layout: the column is the longest path from a root over non-loop edges, and nodes are centred vertically. The draft is then parsed with `GraphSchema`, saved through `PUT /api/graphs/:id`, and validated. The validation result is returned so Claude can fix errors.
+- `save_graph` accepts a draft: edge `id`s and node `position`s may be omitted. Missing ids are derived from the endpoints. Missing positions come from a layered top-to-bottom layout: the row is the longest path from a root over non-loop edges (a failure edge does not add a row, so an error handler sits to the right of its source), and the nodes of a row are centred horizontally, nodes reached only through failure edges last. The draft is then parsed with `GraphSchema`, saved through `PUT /api/graphs/:id`, and validated. The validation result is returned so Claude can fix errors.
 - Run tools return compact views: the latest attempt of each (node, iteration), outputs truncated, a `next` hint, and `attention` (the nodeRunIds of steps that need the user). `get_node_output` returns the full output.
 - `wait_for_run` polls `GET /api/runs/:id` until the run is final or paused, or (by default) a step needs the user (`idle`, `waiting_input`, `waiting_approval`), or the timeout passes (at most 600 s; Claude calls it again).
 - **Approvals are not exposed.** Approving or rejecting an `approval` or `pr` gate stays a human action in the UI (invariant: nothing leaves the machine without approval). An agent must not approve its own pull request. `get_approval` and `get_diff` let Claude summarise what the user is asked to approve.

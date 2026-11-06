@@ -18,28 +18,28 @@
       "id": "test",
       "type": "shell",
       "label": "Run tests",
-      "position": { "x": 300, "y": 0 },
+      "position": { "x": 0, "y": 200 },
       "config": { "run": "npm test", "timeoutSec": 600 }
     },
     {
       "id": "green",
       "type": "condition",
       "label": "Tests green?",
-      "position": { "x": 600, "y": 0 },
+      "position": { "x": 0, "y": 400 },
       "config": { "evaluator": { "kind": "exitCode", "equals": 0 } }
     },
     {
       "id": "commit",
       "type": "commit",
       "label": "Commit",
-      "position": { "x": 900, "y": 0 },
+      "position": { "x": -150, "y": 600 },
       "config": { "generateMessage": true }
     },
     {
       "id": "fix",
       "type": "prompt",
       "label": "Fix failing tests",
-      "position": { "x": 900, "y": 200 },
+      "position": { "x": 150, "y": 600 },
       "config": { "prompt": "The tests above fail. Fix the code (not the tests) so they pass.", "context": "resume" }
     }
   ],

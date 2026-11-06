@@ -199,6 +199,15 @@ export const Icons = {
       <path d="M5 12h14M13 6l6 6-6 6" />
     </Svg>
   ),
+  /** Top-to-bottom tree: auto layout. */
+  layout: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="9" y="3" width="6" height="5" rx="1" />
+      <rect x="3" y="16" width="6" height="5" rx="1" />
+      <rect x="15" y="16" width="6" height="5" rx="1" />
+      <path d="M12 8v4M6 16v-4h12v4" />
+    </Svg>
+  ),
   fit: (p: IconProps) => (
     <Svg {...p}>
       <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />

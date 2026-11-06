@@ -25,8 +25,6 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
   const hasWarnings = !runMode && !hasErrors && issues.warnings.length > 0;
   const tooltip = [...issues.errors, ...issues.warnings].join("\n") || undefined;
   const mono = node.type === "shell" || node.type === "command";
-  // Room for the true/false port labels on the right edge.
-  const portPad = node.type === "condition" ? "pr-12" : "";
 
   const border = style
     ? style.card
@@ -42,9 +40,9 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
       className={`relative w-60 rounded-xl border-2 text-left shadow-soft transition-[color,background-color,border-color,box-shadow] hover:shadow-lifted ${border} ${selected ? "outline-2 outline-offset-2 outline-primary" : ""}`}
     >
       {lane && <span className="absolute top-2 bottom-2 -left-0.5 w-1 rounded-full" style={{ background: laneSwatch(lane.index).hex }} />}
-      <Handle type="target" position={Position.Left} id="in" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />
+      <Handle type="target" position={Position.Top} id="in" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />
 
-      <div className={`flex items-center gap-2 px-3 pt-2.5 ${portPad}`}>
+      <div className="flex items-center gap-2 px-3 pt-2.5">
         <span className={`flex size-6 shrink-0 items-center justify-center rounded-lg text-[13px] ${meta.accent}`}>
           <NodeTypeIcon type={node.type} />
         </span>
@@ -57,7 +55,7 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
         )}
       </div>
 
-      <div className={`truncate px-3 pt-1.5 pb-2.5 text-xs text-muted-foreground ${mono ? "font-mono" : ""} ${portPad}`}>{configPreview(node)}</div>
+      <div className={`truncate px-3 pt-1.5 pb-2.5 text-xs text-muted-foreground ${mono ? "font-mono" : ""}`}>{configPreview(node)}</div>
 
       {mergeInputs.length > 1 && <MergeOrder inputs={mergeInputs} />}
 
@@ -65,16 +63,16 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
 
       {node.type === "condition" ? (
         <>
-          <PortHandle id="true" top="28px" color="!bg-green-500" label="true" labelColor="text-green-600" runMode={runMode} taken={nodeRun?.output?.port === "true"} />
-          <PortHandle id="false" top="52px" color="!bg-stone-400" label="false" labelColor="text-stone-500" runMode={runMode} taken={nodeRun?.output?.port === "false"} />
+          <PortHandle id="true" left="30%" color="!bg-green-500" label="true" labelColor="text-green-600" runMode={runMode} taken={nodeRun?.output?.port === "true"} />
+          <PortHandle id="false" left="70%" color="!bg-stone-400" label="false" labelColor="text-stone-500" runMode={runMode} taken={nodeRun?.output?.port === "false"} />
         </>
       ) : (
-        <Handle type="source" position={Position.Right} id="out" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />
+        <Handle type="source" position={Position.Bottom} id="out" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />
       )}
       {phase === 2 && (
         <Handle
           type="source"
-          position={Position.Bottom}
+          position={Position.Right}
           id="error"
           title="Error port: drag to connect a node that runs when this one fails"
           className={`${handleBase} !bg-red-500 ${nodeRun?.status === "failed" ? "!size-3.5 ring-2 ring-red-400/60" : ""}`}
@@ -86,24 +84,24 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
 });
 
 /**
- * Condition output port with its label inside the card edge (fixed offsets beside the header, so the run
- * footer below never runs under the labels); in run mode the taken branch is highlighted.
+ * Condition output port on the bottom edge, its label just below the card beside the handle (outside the card,
+ * so the run footer never runs under it); in run mode the taken branch is highlighted.
  */
-function PortHandle({ id, top, color, label, labelColor, runMode, taken }: { id: string; top: string; color: string; label: string; labelColor: string; runMode: boolean; taken: boolean }) {
+function PortHandle({ id, left, color, label, labelColor, runMode, taken }: { id: string; left: string; color: string; label: string; labelColor: string; runMode: boolean; taken: boolean }) {
   return (
     <>
       <Handle
         type="source"
-        position={Position.Right}
+        position={Position.Bottom}
         id={id}
-        style={{ top }}
+        style={{ left }}
         title={`${label} branch: runs the target when the condition is ${label}`}
         className={`${handleBase} ${color} ${taken ? "!size-3.5 ring-2 ring-stone-900/25" : ""}`}
         isConnectable={!runMode}
       />
       <span
-        className={`pointer-events-none absolute right-2.5 -translate-y-1/2 rounded bg-card/90 px-1 text-[9px] font-semibold tracking-wide uppercase ${labelColor} ${runMode && !taken ? "opacity-50" : ""}`}
-        style={{ top }}
+        className={`pointer-events-none absolute top-full mt-1 ml-2 rounded bg-card/90 px-1 text-[9px] font-semibold tracking-wide uppercase ${labelColor} ${runMode && !taken ? "opacity-50" : ""}`}
+        style={{ left }}
       >
         {label}
       </span>

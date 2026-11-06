@@ -1,4 +1,5 @@
 import {
+  layeredLayout,
   validateGraph,
   type GetGraphResponse,
   type Graph,
@@ -55,6 +56,8 @@ export interface EditorStore extends EditorState {
   updateNode(id: string, fn: (node: GraphNode) => GraphNode): void;
   updateEdge(id: string, fn: (edge: GraphEdge) => GraphEdge): void;
   moveNodes(positions: ReadonlyMap<string, Position>): void;
+  /** Re-lays out every node with the layered top-to-bottom layout (§19.3). */
+  autoLayout(): void;
   /** Returns the refusal reason, or null when connected. */
   connect(req: ops.ConnectRequest): string | null;
   removeElements(nodeIds: readonly string[], edgeIds: readonly string[]): void;
@@ -248,6 +251,10 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
 
     moveNodes(positions) {
       get().edit((g) => ops.moveNodes(g, positions));
+    },
+
+    autoLayout() {
+      get().edit((g) => ops.moveNodes(g, layeredLayout(g)));
     },
 
     connect(req) {
