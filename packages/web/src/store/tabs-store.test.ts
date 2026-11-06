@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CLOSED_TABS, MAX_TABS, TABS_LAST_KEY, TABS_SESSION_KEY, activeTab, createTabsStore, parsePersistedTabs, runTabAction, type TabsStoreApi } from "./tabs-store";
+import { MAX_CLOSED_TABS, MAX_TAB_CHATS, MAX_TABS, TABS_LAST_KEY, TABS_SESSION_KEY, activeTab, createTabsStore, parsePersistedTabs, runTabAction, type TabsStoreApi } from "./tabs-store";
 
 /** A Storage over a Map (one per simulated window for sessionStorage, shared for localStorage). */
 class MemoryStorage implements Storage {
@@ -322,5 +322,43 @@ describe("tabs store (DESIGN §13.4)", () => {
     expect(store.getState().tabs).toBe(before);
 
     expect(paths(createTabsStore({ session: stores.session, local: null }))).toEqual([`${R}/runs/r1`, `${R}/graphs/g1`, "/"]);
+  });
+});
+
+describe("tab chats (DESIGN §21.11)", () => {
+  const REPO = "repo-0123abcd";
+
+  it("are persisted with the tab, kept while it stays in their repository and dropped when it leaves", () => {
+    const w = windowStores();
+    const store = createTabsStore({ ...w, initialPath: `${R}/graphs/g1` });
+    const id = store.getState().activeId;
+    store.getState().setChats(id, { repoId: REPO, ids: ["c1", "c2", "c1"], open: "c2" });
+    expect(activeTab(store.getState()).chats).toEqual({ repoId: REPO, ids: ["c1", "c2"], open: "c2" });
+
+    // A new window of the same session restores them.
+    const again = createTabsStore({ session: w.session, local: new MemoryStorage() });
+    expect(activeTab(again.getState()).chats).toEqual({ repoId: REPO, ids: ["c1", "c2"], open: "c2" });
+
+    store.getState().navigate(id, `${R}/runs/r1`);
+    expect(activeTab(store.getState()).chats?.ids).toEqual(["c1", "c2"]);
+    store.getState().navigate(id, `${R2}/graphs/g2`);
+    expect(activeTab(store.getState()).chats).toBeUndefined();
+  });
+
+  it("keep the newest MAX_TAB_CHATS, an open chat that is in the bar, and nothing for an empty bar", () => {
+    const store = createTabsStore({ ...windowStores(), initialPath: R });
+    const id = store.getState().activeId;
+    const ids = Array.from({ length: MAX_TAB_CHATS + 2 }, (_, i) => `c${i}`);
+    store.getState().setChats(id, { repoId: REPO, ids, open: "gone" });
+    expect(activeTab(store.getState()).chats).toEqual({ repoId: REPO, ids: ids.slice(2), open: null });
+    store.getState().setChats(id, { repoId: REPO, ids: [], open: null });
+    expect(activeTab(store.getState()).chats).toBeUndefined();
+  });
+
+  it("drops stored chats of another repository than the tab's path, and invalid ones", () => {
+    const tabs = (chats: unknown) => JSON.stringify({ version: 1, tabs: [{ id: "a", path: `${R}/graphs/g1`, chats }], activeId: "a", mru: ["a"] });
+    expect(parsePersistedTabs(tabs({ repoId: "repo-9876fedc", ids: ["c1"], open: null }))?.tabs[0]?.chats).toBeUndefined();
+    expect(parsePersistedTabs(tabs({ repoId: REPO, ids: "nope" }))?.tabs[0]).toEqual({ id: "a", path: `${R}/graphs/g1` });
+    expect(parsePersistedTabs(tabs({ repoId: REPO, ids: ["c1"], open: "c1" }))?.tabs[0]?.chats).toEqual({ repoId: REPO, ids: ["c1"], open: "c1" });
   });
 });

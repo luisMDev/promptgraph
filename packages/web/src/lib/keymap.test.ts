@@ -18,6 +18,15 @@ const alt = { altKey: true };
 const ctrl = { ctrlKey: true };
 
 describe("keymap resolver (DESIGN §13.4)", () => {
+  it("Ctrl+J and Alt+J toggle the chat (§21.11), in the browser too, but not while a terminal has focus", () => {
+    for (const ctx of [browser, desktop]) {
+      expect(resolveKey(key("KeyJ", ctrl), ctx)).toEqual({ type: "toggleChat" });
+      expect(resolveKey(key("KeyJ", alt), ctx)).toEqual({ type: "toggleChat" });
+      expect(resolveKey(key("KeyJ", { ...ctrl, shiftKey: true }), ctx)).toBeNull();
+    }
+    expect(resolveKey(key("KeyJ", ctrl), { desktop: true, terminalFocused: true })).toBeNull();
+  });
+
   it("browser: the Alt fallbacks only", () => {
     expect(resolveKey(key("KeyT", alt), browser)).toEqual({ type: "newTab" });
     expect(resolveKey(key("KeyW", alt), browser)).toEqual({ type: "closeTab" });

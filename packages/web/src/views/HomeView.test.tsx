@@ -78,7 +78,17 @@ describe("HomeView (DESIGN §13.3)", () => {
   it("refetches the graph links when its tab becomes visible again and after a reconnect, never while hidden", async () => {
     const graphOf = (id: string, name: string) => ({ graph: { version: 1, id, name, nodes: [], edges: [], settings: {} } as never, hash: "h", modifiedOutside: false, activeRunId: null });
     daemon.repos[REPO] = { info: { id: REPO, path: "/work/repo", name: "repo", currentBranch: "main", branches: [] }, graphs: { g1: graphOf("g1", "Ship it") }, runs: {} };
-    const tab = (active: boolean): TabContextValue => ({ tabId: "t", active, setTitle: () => undefined, close: () => undefined, reportEditor: () => undefined });
+    const tab = (active: boolean): TabContextValue => ({
+      tabId: "t",
+      active,
+      setTitle: () => undefined,
+      close: () => undefined,
+      reportEditor: () => undefined,
+      chats: null,
+      setChats: () => undefined,
+      bottomBar: null,
+      bottomBarStart: null,
+    });
     const ui = (active: boolean) => (
       <MemoryLocationProvider initialPath="/">
         <TabContext.Provider value={tab(active)}>

@@ -143,9 +143,9 @@ describe("chat store", () => {
   it("lists sessions most recent first and loads a session's detail once", async () => {
     await store.getState().loadSessions();
     expect(store.getState().sessions.map((s) => s.id)).toEqual(["recent", "old"]);
-    await store.getState().selectSession("old");
-    await store.getState().selectSession("recent");
-    await store.getState().selectSession("old");
+    await store.getState().openSession("old");
+    await store.getState().openSession("recent");
+    await store.getState().openSession("old");
     expect(getSession).toHaveBeenCalledTimes(2);
     expect(store.getState().views.old?.items).toHaveLength(1);
   });
@@ -153,7 +153,7 @@ describe("chat store", () => {
   it("creates a session, sends with the context and answers permissions on the socket", async () => {
     const id = await store.getState().newSession();
     expect(id).toBe("new");
-    expect(store.getState().activeSessionId).toBe("new");
+    expect(store.getState().views.new?.status).toBe("idle");
     const ctx = { graphId: "g1", selectedNodeIds: ["a"], selectedEdgeIds: [], runId: null, readOnly: false };
     expect(store.getState().send("new", "hi", ctx)).toBe(true);
     expect(store.getState().views.new?.status).toBe("thinking");
@@ -180,7 +180,7 @@ describe("chat store", () => {
 
   it("routes chat:* WS messages: deltas, status, sessions and deletion", async () => {
     await store.getState().loadSessions();
-    await store.getState().selectSession("old");
+    await store.getState().openSession("old");
     handleServerMessage({ type: "chat:delta", repoId: REPO, sessionId: "old", messageId: "m1", text: "Hi", offset: 0 });
     handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "old", status: "thinking", warning: "no skills" });
     // Messages for sessions not opened in the panel only update the list.
@@ -197,7 +197,6 @@ describe("chat store", () => {
 
     handleServerMessage({ type: "chat:deleted", repoId: REPO, sessionId: "old" });
     s = store.getState();
-    expect(s.activeSessionId).toBeNull();
     expect(s.views.old).toBeUndefined();
     expect(s.sessions.map((x) => x.id)).toEqual(["recent"]);
   });
@@ -211,18 +210,20 @@ describe("chat store", () => {
 
   it("deletes a session through the API", async () => {
     await store.getState().loadSessions();
-    await store.getState().selectSession("recent");
+    await store.getState().openSession("recent");
     await store.getState().deleteSession("recent");
     expect(deleteSession).toHaveBeenCalledWith("recent");
-    expect(store.getState().activeSessionId).toBeNull();
+    expect(store.getState().views.recent).toBeUndefined();
   });
 
-  it("resyncs the shown session after a reconnect", async () => {
+  it("resyncs every opened session after a reconnect and drops the ones deleted meanwhile", async () => {
     await store.getState().loadSessions();
-    await store.getState().selectSession("old");
-    await store.getState().selectSession("recent");
+    await store.getState().openSession("old");
+    await store.getState().openSession("recent");
+    getSession.mockClear();
+    deps.listSessions = async () => ({ sessions: [sessionOf({ id: "recent", updatedAt: 5 })] });
     await store.getState().resync();
-    expect(getSession).toHaveBeenCalledTimes(3);
+    expect(getSession.mock.calls.map((c) => c[0])).toEqual(["recent"]);
     expect(Object.keys(store.getState().views)).toEqual(["recent"]);
   });
 
@@ -247,7 +248,7 @@ describe("chat store", () => {
     await store.getState().loadSessions();
     const pending = deferred<ChatSessionDetail>();
     getSession.mockImplementationOnce(() => pending.promise);
-    const selecting = store.getState().selectSession("old");
+    const selecting = store.getState().openSession("old");
     // The server built the detail while thinking; the end of the turn arrives on the WS first.
     handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "old", item: { id: "res", ts: 3, kind: "result", subtype: "success", isError: false } });
     handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "old", status: "idle" });
@@ -260,7 +261,7 @@ describe("chat store", () => {
 
   it("keeps the shown conversation on screen during a resync and applies live messages meanwhile", async () => {
     await store.getState().loadSessions();
-    await store.getState().selectSession("old");
+    await store.getState().openSession("old");
     handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "old", item: permission });
     handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "old", status: "waiting_permission" });
     const list = deferred<{ sessions: ReturnType<typeof sessionOf>[] }>();
@@ -286,21 +287,6 @@ describe("chat store", () => {
     expect(v).toMatchObject({ loading: false, status: "waiting_permission", streaming: { m1: "Hi there" } });
     expect(v.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
   });
-
-  it("resyncs the session picked during the reconnect, not the one shown before", async () => {
-    await store.getState().loadSessions();
-    await store.getState().selectSession("old");
-    const list = deferred<{ sessions: ReturnType<typeof sessionOf>[] }>();
-    deps.listSessions = () => list.promise;
-    const resyncing = store.getState().resync();
-    void store.getState().selectSession("recent");
-    getSession.mockClear();
-    list.resolve({ sessions: [sessionOf({ id: "old", updatedAt: 1 }), sessionOf({ id: "recent", updatedAt: 5 })] });
-    await resyncing;
-    expect(store.getState().activeSessionId).toBe("recent");
-    expect(getSession.mock.calls.map((c) => c[0])).toContain("recent");
-    expect(getSession.mock.calls.map((c) => c[0])).not.toContain("old");
-  });
 });
 
 describe("chat stores per repository", () => {
@@ -318,11 +304,11 @@ describe("chat stores per repository", () => {
       send: () => true,
     });
     await store.getState().loadSessions();
-    await store.getState().selectSession("s1");
+    await store.getState().openSession("s1");
     store.getState().applyServerMessage({ type: "chat:delta", repoId: OTHER, sessionId: "s1", messageId: "m1", text: "x", offset: 0 });
     store.getState().applyServerMessage({ type: "chat:deleted", repoId: OTHER, sessionId: "s1" });
     expect(store.getState().views.s1?.streaming).toEqual({});
-    expect(store.getState().activeSessionId).toBe("s1");
+    expect(store.getState().views.s1).toBeDefined();
   });
 
   it("the dispatcher routes chat:* to the store of the message's repository", () => {

@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { repoApi } from "../api/rest";
 import { wsClient } from "../api/ws";
+import { ChatDock } from "../components/chat/ChatDock";
+import { ClaudeStatus } from "../components/claude/ClaudeStatus";
 import { useTabContext } from "../components/tabs/tab-context";
 import { useLocation } from "../lib/router/location";
 import { tabTitleFromData } from "../lib/tabs/titles";
@@ -184,5 +186,11 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
   if (route.kind === "graph" && graphNotFound) content = <NotFound what="This graph does not exist." repoId={repoId} />;
   else if (runNotFound) content = <NotFound what="This run does not exist in this repository." repoId={repoId} />;
   else if (nodeRunMissing) content = <NotFound what="This step does not exist in this run." repoId={repoId} />;
-  return <ViewProvider value={stores}>{content}</ViewProvider>;
+  return (
+    <ViewProvider value={stores}>
+      {content}
+      <ClaudeStatus />
+      <ChatDock />
+    </ViewProvider>
+  );
 }

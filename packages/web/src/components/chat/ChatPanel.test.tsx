@@ -8,7 +8,9 @@ import { clearChatStores, emptyView, getChatStore, setChatDeps } from "../../sto
 import { useDaemonStore } from "../../store/daemon-store";
 import { createDispatcher } from "../../store/dispatcher";
 import { createTestView, TEST_REPO_ID, type TestView } from "../../store/view/test-view";
-import { ChatPanel } from "./ChatPanel";
+import { emitChatShortcut } from "../../lib/chat-shortcut";
+import { ChatDock } from "./ChatDock";
+import { ChatWindow, type ChatWindowActions } from "./ChatPanel";
 
 /** The view under test (its repository's chat store is getChatStore(TEST_REPO_ID)). */
 let view: TestView;
@@ -30,7 +32,6 @@ function show(status: "idle" | "thinking" = "idle", extra: ChatItem[] = []) {
   chat().setState({
     sessions: [chatSessionOf({ id: "s1", title: "Commit step", totalCostUsd: 0.0123 }), chatSessionOf({ id: "s2", title: "Older chat" })],
     sessionsLoaded: true,
-    activeSessionId: "s1",
     views: { s1: { ...emptyView(status), items: [...items, ...extra] } },
     error: null,
   });
@@ -53,17 +54,19 @@ describe("ChatPanel", () => {
     view = createTestView({ graphId: "g1", persistence: { load: async () => ({ graph: linearGraph(), hash: "h0", modifiedOutside: false, activeRunId: null }), save } });
     await view.editor.getState().load();
     useDaemonStore.setState({ connection: "open" });
-    view.ui.getState().setChatOpen(true);
   });
   afterEach(cleanup);
+
+  const actions: ChatWindowActions = { onMinimize: vi.fn(), onClose: vi.fn(), expanded: false, onToggleExpanded: vi.fn() };
+  const Window = ({ id = "s1" }: { id?: string }) => <ChatWindow sessionId={id} actions={actions} />;
 
   it("renders messages with markdown and folds tool results into their tool row", async () => {
     show();
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     expect(screen.getByText("Add a commit after the tests")).toBeTruthy();
     expect(screen.getByText("commit").tagName).toBe("STRONG");
-    expect(screen.getByText("$0.012")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Commit step" })).toBeTruthy();
     // The result is hidden until the tool row is expanded.
     expect(screen.queryByText("added: commit")).toBeNull();
     await user.click(screen.getByRole("button", { name: /patch_graph · 1 op/ }));
@@ -72,7 +75,7 @@ describe("ChatPanel", () => {
 
   it("streams deltas and replaces them with the final text", () => {
     show("thinking");
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     act(() => {
       handleServerMessage({ type: "chat:delta", repoId: TEST_REPO_ID, sessionId: "s1", messageId: "m2", text: "Working on ", offset: 0 });
       handleServerMessage({ type: "chat:delta", repoId: TEST_REPO_ID, sessionId: "s1", messageId: "m2", text: "it", offset: 11 });
@@ -89,7 +92,7 @@ describe("ChatPanel", () => {
     view.editor.getState().setSelection(["b"], []);
     view.editor.getState().rename("Edited");
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     expect(screen.getByTestId("chat-context").textContent).toMatch(/Edited · node b/);
     const input = screen.getByRole("textbox", { name: "Message Claude" });
     await user.type(input, "first line{Shift>}{Enter}{/Shift}second");
@@ -110,7 +113,7 @@ describe("ChatPanel", () => {
   it("shows Stop while Claude works and sends an interrupt", async () => {
     show("thinking");
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(sent).toEqual([{ type: "chat:interrupt", repoId: TEST_REPO_ID, sessionId: "s1" }]);
@@ -119,7 +122,7 @@ describe("ChatPanel", () => {
   it("answers a permission request from the card", async () => {
     show("thinking");
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     act(() => {
       handleServerMessage({
         type: "chat:item",
@@ -143,7 +146,7 @@ describe("ChatPanel", () => {
   it("shows concurrent permission prompts one after the other", async () => {
     show("thinking");
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     act(() => {
       handleServerMessage({ type: "chat:item", repoId: TEST_REPO_ID, sessionId: "s1", item: { id: "p1", ts: 6, kind: "permission_request", requestId: "r1", toolName: "Write", input: { file_path: "a" } } });
       handleServerMessage({ type: "chat:item", repoId: TEST_REPO_ID, sessionId: "s1", item: { id: "p2", ts: 7, kind: "permission_request", requestId: "r2", toolName: "Edit", input: { file_path: "b" } } });
@@ -160,7 +163,7 @@ describe("ChatPanel", () => {
 
   it("shows 'Receiving reply' for a message whose beginning was streamed before it was opened", () => {
     show("thinking");
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     act(() => handleServerMessage({ type: "chat:delta", repoId: TEST_REPO_ID, sessionId: "s1", messageId: "m3", text: "the commit node after b.", offset: 120 }));
     expect(screen.queryByText(/the commit node after b/)).toBeNull();
     expect(screen.getByText("Receiving reply…")).toBeTruthy();
@@ -168,7 +171,7 @@ describe("ChatPanel", () => {
 
   it("announces new replies in a persistent live region, not the loaded history", () => {
     show("idle");
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     const announcer = screen.getByTestId("chat-announcer");
     expect(announcer.getAttribute("aria-live")).toBe("polite");
     expect(announcer.textContent).toBe("");
@@ -181,31 +184,85 @@ describe("ChatPanel", () => {
   it("does not carry the draft or the scroll state over to another session", async () => {
     show();
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
+    const { rerender } = view.render(<Window />);
     const input = screen.getByRole("textbox", { name: "Message Claude" });
     await user.type(input, "draft for s1");
-    act(() => {
-      chat().setState({ activeSessionId: "s2", views: { ...chat().getState().views, s2: emptyView() } });
-    });
+    act(() => chat().setState({ views: { ...chat().getState().views, s2: emptyView() } }));
+    rerender(<Window id="s2" />);
     expect((screen.getByRole("textbox", { name: "Message Claude" }) as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("switches sessions and starts a new chat from the picker", async () => {
+  it("shows the cost in the actions menu and minimises, grows and closes from the header or Esc", async () => {
     show();
     const user = userEvent.setup();
-    view.render(<ChatPanel />);
-    await user.click(screen.getByRole("button", { name: /Commit step/ }));
-    await user.click(await screen.findByRole("menuitemradio", { name: /Older chat/ }));
-    await waitFor(() => expect(chat().getState().activeSessionId).toBe("s2"));
-    await user.click(screen.getByRole("button", { name: "New chat" }));
-    await waitFor(() => expect(chat().getState().activeSessionId).toBe("s3"));
-    expect(screen.getByText(/Describe what you want to build/)).toBeTruthy();
+    view.render(<Window />);
+    await user.click(screen.getByRole("button", { name: "Chat actions" }));
+    expect(await screen.findByText("$0.012")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Expand" }));
+    await user.click(screen.getByRole("button", { name: "Close chat" }));
+    expect(actions.onToggleExpanded).toHaveBeenCalledTimes(1);
+    expect(actions.onClose).toHaveBeenCalledTimes(1);
+    screen.getByRole("textbox", { name: "Message Claude" }).focus();
+    await user.keyboard("{Escape}");
+    expect(actions.onMinimize).toHaveBeenCalledTimes(1);
   });
 
   it("shows warnings in the status line", () => {
     show();
-    view.render(<ChatPanel />);
+    view.render(<Window />);
     act(() => handleServerMessage({ type: "chat:status", repoId: TEST_REPO_ID, sessionId: "s1", status: "idle", warning: "promptgraph plugin not found: MCP tools only, no skills" }));
     expect(screen.getByRole("status").textContent).toMatch(/plugin not found/);
+  });
+});
+
+describe("ChatDock (DESIGN §21.11)", () => {
+  beforeEach(() => {
+    sent.length = 0;
+    setChatDeps({
+      send: () => true,
+      listSessions: async () => ({ sessions: [chatSessionOf({ id: "s2", title: "Older chat" })] }),
+      getSession: async (id) => ({ session: chatSessionOf({ id, title: id === "s2" ? "Older chat" : "" }), items: [], pendingPermissions: [], streaming: [] }),
+      createSession: async () => chatSessionOf({ id: "s3", title: "" }),
+    });
+    clearChatStores();
+    view = createTestView({ graphId: null });
+    useDaemonStore.setState({ connection: "open" });
+  });
+  afterEach(cleanup);
+
+  it("opens new chats from the bar, minimises and reopens them, picks old ones from the history and closes them", async () => {
+    const user = userEvent.setup();
+    view.render(<ChatDock />);
+    const bar = screen.getByRole("toolbar", { name: "Chats" });
+    await user.click(within(bar).getByRole("button", { name: "New chat" }));
+    expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "New chat" })).toBeTruthy();
+
+    // The bar button of the open chat minimises it; clicking it again reopens it.
+    await user.click(within(bar).getByRole("button", { name: "Minimize chat New chat" }));
+    expect(screen.queryByRole("region", { name: "Chat" })).toBeNull();
+    await user.click(within(bar).getByRole("button", { name: "Open chat New chat" }));
+    expect(screen.getByRole("region", { name: "Chat" })).toBeTruthy();
+
+    await user.click(within(bar).getByRole("button", { name: "Chat history" }));
+    await user.click(await screen.findByRole("menuitem", { name: /Older chat/ }));
+    expect(await screen.findByRole("heading", { name: "Older chat" })).toBeTruthy();
+    expect(within(bar).getAllByRole("button", { name: /^(Open|Minimize) chat/ }).map((b) => b.textContent)).toEqual(["New chat", "Older chat"]);
+
+    await user.click(within(bar).getByRole("button", { name: "Close chat Older chat" }));
+    expect(screen.queryByRole("region", { name: "Chat" })).toBeNull();
+    expect(within(bar).getAllByRole("button", { name: /^(Open|Minimize) chat/ }).map((b) => b.textContent)).toEqual(["New chat"]);
+  });
+
+  it("the shortcut opens a new chat, minimises the open one and reopens the newest", async () => {
+    view.render(<ChatDock />);
+    act(() => emitChatShortcut());
+    expect(await screen.findByRole("region", { name: "Chat" })).toBeTruthy();
+    act(() => emitChatShortcut());
+    expect(screen.queryByRole("region", { name: "Chat" })).toBeNull();
+    act(() => emitChatShortcut());
+    expect(screen.getByRole("region", { name: "Chat" })).toBeTruthy();
+    expect(chat().getState().sessions.map((x) => x.id)).toContain("s3");
   });
 });

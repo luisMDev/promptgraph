@@ -57,7 +57,7 @@ export function BillingBadge() {
           <span className="hidden lg:inline">{label}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-3 text-sm">
+      <PopoverContent side="top" align="start" className="w-80 space-y-3 text-sm">
         <div className="flex items-start gap-2">
           <ModeIcon auth={auth} />
           <div className="min-w-0 flex-1">

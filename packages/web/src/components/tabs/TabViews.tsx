@@ -48,6 +48,9 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
   const navigate = useCallback((to: string, opts?: NavigateOptions) => store.getState().navigate(id, to, opts), [store, id]);
   const openInNewTab = useCallback((to: string, opts: OpenInNewTabOptions) => void store.getState().open(to, { activate: opts.activate }), [store]);
   const location: LocationValue = useMemo(() => ({ path, navigate, openInNewTab }), [path, navigate, openInNewTab]);
+  const chats = tab.chats ?? null;
+  const [bottomBar, setBottomBar] = useState<HTMLElement | null>(null);
+  const [bottomBarStart, setBottomBarStart] = useState<HTMLElement | null>(null);
   const context: TabContextValue = useMemo(
     () => ({
       tabId: id,
@@ -55,15 +58,28 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
       setTitle: (title) => store.getState().setTitle(id, title),
       close: () => store.getState().close(id),
       reportEditor: (editor) => void editors.set(id, editor),
+      chats,
+      setChats: (next) => store.getState().setChats(id, next),
+      bottomBar,
+      bottomBarStart,
     }),
-    [id, active, store, editors],
+    [id, active, store, editors, chats, bottomBar, bottomBarStart],
   );
   useEffect(() => () => void editors.delete(id), [editors, id]);
 
+  // The view sits in an inset panel (rounded, bordered, as in Linear); below it, the tab's bottom bar (§13.4).
   return (
-    <div data-tab-view={id} hidden={!active} inert={!active} className={active ? "flex min-h-0 flex-1 flex-col" : undefined}>
+    <div data-tab-view={id} hidden={!active} inert={!active} className={active ? "flex min-h-0 flex-1 flex-col px-1.5" : undefined}>
       <LocationContext.Provider value={location}>
-        <TabContext.Provider value={context}>{children}</TabContext.Provider>
+        <TabContext.Provider value={context}>
+          <div data-pg-panel="" className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background shadow-xs">
+            {children}
+          </div>
+          <div data-pg-bottom-bar="" className="flex h-9 shrink-0 items-center gap-1 px-1 text-xs">
+            <div ref={setBottomBarStart} className="flex min-w-0 items-center gap-1" />
+            <div ref={setBottomBar} className="ml-auto flex min-w-0 items-center justify-end gap-1" />
+          </div>
+        </TabContext.Provider>
       </LocationContext.Provider>
     </div>
   );

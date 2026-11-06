@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { TabChats } from "../../store/tabs-store";
 import type { EditorStoreApi } from "../../store/view/editor-store";
 
 /**
@@ -14,6 +15,13 @@ export interface TabContextValue {
   close(): void;
   /** The editor store the view shows: a view whose editor is dirty or saving is never evicted. */
   reportEditor(editor: EditorStoreApi | null): void;
+  /** The tab's chats (§21.11), persisted with the tab. */
+  chats: TabChats | null;
+  setChats(chats: TabChats | null): void;
+  /** The bottom bar below the tab's panel: views portal their items into its end (the chat bar) and start (account and
+   * Claude Code status); null until mounted. */
+  bottomBar: HTMLElement | null;
+  bottomBarStart: HTMLElement | null;
 }
 
 export const TabContext = createContext<TabContextValue | null>(null);

@@ -62,19 +62,18 @@ describe("chat actions", () => {
     expect(currentChatContext(empty)).toEqual({ graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: null, readOnly: true });
   });
 
-  it("flushes the pending autosave, creates a session in the view's repository when needed and sends", async () => {
+  it("flushes the pending autosave, then sends on the given session of the view's repository", async () => {
     view.editor.getState().rename("Edited");
-    expect(await sendChatMessage(view, "  add a test step  ")).toBe(true);
-    expect(events).toEqual(["save", "create", "send"]);
+    expect(await sendChatMessage(view, "s1", "  add a test step  ")).toBe(true);
+    expect(events).toEqual(["save", "send"]);
     expect(sent[0]).toMatchObject({ type: "chat:send", repoId: TEST_REPO_ID, sessionId: "s1", text: "add a test step", context: { graphId: "g1", graphName: "Edited" } });
-    expect(getChatStore(TEST_REPO_ID).getState().activeSessionId).toBe("s1");
-    expect(await sendChatMessage(view, "   ")).toBe(false);
+    expect(await sendChatMessage(view, "s1", "   ")).toBe(false);
   });
 
   it("does not send when the graph on screen could not be saved", async () => {
     save.mockRejectedValueOnce(new Error("disk full"));
     view.editor.getState().rename("Edited");
-    expect(await sendChatMessage(view, "remove this node")).toBe(false);
+    expect(await sendChatMessage(view, "s1", "remove this node")).toBe(false);
     expect(events).not.toContain("send");
     expect(useToastStore.getState().toasts.at(-1)).toMatchObject({ kind: "error", message: expect.stringMatching(/not saved \(Save failed: disk full\)/) });
   });

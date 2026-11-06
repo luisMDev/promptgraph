@@ -12,7 +12,7 @@ import { useDaemonStore } from "../../store/daemon-store";
 import { createDispatcher } from "../../store/dispatcher";
 import { createTestView, TEST_REPO_ID, type TestView } from "../../store/view/test-view";
 import { resetVoiceStore, setVoiceDeps, useVoiceStore } from "../../store/voice-store";
-import { ChatPanel } from "./ChatPanel";
+import { ChatWindow } from "./ChatPanel";
 
 /** The view under test (its repository's chat store is getChatStore(TEST_REPO_ID)). */
 let view: TestView;
@@ -39,7 +39,7 @@ async function renderPanel(voice: Partial<VoiceStatus> = {}) {
   status = voiceStatusOf(voice);
   useVoiceStore.setState({ status });
   const user = userEvent.setup();
-  view.render(<ChatPanel />);
+  view.render(<ChatWindow sessionId="s1" actions={{ onMinimize: () => undefined, onClose: () => undefined, expanded: false, onToggleExpanded: () => undefined }} />);
   return user;
 }
 
@@ -92,8 +92,7 @@ describe("composer dictation", () => {
     } });
     await view.editor.getState().load();
     useDaemonStore.setState({ connection: "open" });
-    view.ui.getState().setChatOpen(true);
-    chat().setState({ sessions: [chatSessionOf({ id: "s1" })], sessionsLoaded: true, activeSessionId: "s1", views: { s1: emptyView() }, error: null });
+    chat().setState({ sessions: [chatSessionOf({ id: "s1" })], sessionsLoaded: true, views: { s1: emptyView() }, error: null });
   });
   afterEach(() => {
     cleanup();

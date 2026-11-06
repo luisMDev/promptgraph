@@ -12,7 +12,9 @@ export type KeyAction =
   | { type: "prevTab" }
   /** 1-based tab number (1–8). */
   | { type: "gotoTab"; n: number }
-  | { type: "lastTab" };
+  | { type: "lastTab" }
+  /** The chat bar of the active tab (§21.11): open its newest chat, a new one, or minimise the open window. */
+  | { type: "toggleChat" };
 
 export interface KeyContext {
   /** The desktop window (Ctrl bindings) rather than a browser tab (Alt fallbacks only). */
@@ -71,6 +73,8 @@ export function resolveKey(e: KeyEventLike, ctx: KeyContext): KeyAction | null {
   const sw = switching(e.code, m, ctx.desktop);
   if (sw) return sw;
   if (ctx.terminalFocused) return null;
+  // Ctrl+J is free in browsers (unlike Ctrl+T/W); in a terminal it is a line feed, hence after the check above.
+  if ((m === "ctrl" || m === "alt") && e.code === "KeyJ") return { type: "toggleChat" };
   return management(e.code, m, "alt") ?? (ctx.desktop ? management(e.code, m, "ctrl") : null);
 }
 

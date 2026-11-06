@@ -2,6 +2,7 @@ import { isSafeNextPath, normalizePath } from "@promptgraph/shared";
 import { z } from "zod";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { emitChatShortcut } from "../lib/chat-shortcut";
 import type { KeyAction } from "../lib/keymap";
 import { parseRoute } from "../lib/router/routes";
 
@@ -16,7 +17,19 @@ export interface Tab {
   path: string;
   /** Last title derived for this path (DESIGN §13.4 Titles); dropped when the tab navigates elsewhere. */
   title?: string;
+  /** The tab's chat windows (DESIGN §21.11); dropped when the tab leaves their repository. */
+  chats?: TabChats;
 }
+
+/** Chats opened in a tab, in bottom-bar order, and the one whose window is open (null: all minimised). */
+export interface TabChats {
+  repoId: string;
+  ids: string[];
+  open: string | null;
+}
+
+/** At most this many chats in a tab's bottom bar; opening one more drops the oldest. */
+export const MAX_TAB_CHATS = 8;
 
 /** A closed tab, for "reopen closed tab". */
 export interface ClosedTab {
@@ -72,6 +85,8 @@ export interface TabsState {
   setTitle(id: string, title: string): void;
   /** Moves a tab to a 0-based strip index (clamped); the active tab and the MRU order do not change. */
   move(id: string, index: number): void;
+  /** Replaces a tab's chats (null or no ids: none). */
+  setChats(id: string, chats: TabChats | null): void;
 }
 
 export type TabsStoreApi = StoreApi<TabsState>;
@@ -88,10 +103,17 @@ export const MAX_TAB_TITLE = 300;
  * A stored tab. Path and title limits are checked per tab (in `tabPath` and `parsePersistedTabs`), so one
  * bad entry drops that tab or its title, never the whole set.
  */
+const TabChatsSchema = z.object({
+  repoId: z.string().min(1).max(200),
+  ids: z.array(z.string().min(1).max(200)).max(MAX_TAB_CHATS),
+  open: z.string().nullable(),
+});
+
 const TabSchema = z.object({
   id: z.string().min(1).max(64),
   path: z.string(),
   title: z.string().max(MAX_TAB_TITLE).optional().catch(undefined),
+  chats: TabChatsSchema.optional().catch(undefined),
 });
 
 /** What both storages hold: `{version: 1, tabs, activeId, mru}`. */
@@ -140,13 +162,30 @@ export function parsePersistedTabs(raw: string | null): Pick<TabsState, "tabs" |
     const path = normalizePath(t.path);
     if (path.length > MAX_TAB_PATH) continue;
     seen.add(t.id);
-    tabs.push(t.title === undefined ? { id: t.id, path } : { id: t.id, path, title: t.title });
+    const tab: Tab = t.title === undefined ? { id: t.id, path } : { id: t.id, path, title: t.title };
+    const chats = t.chats && repoOf(path) === t.chats.repoId ? normalizeChats(t.chats) : null;
+    if (chats) tab.chats = chats;
+    tabs.push(tab);
   }
   if (tabs.length === 0) return null;
   const mru = [...new Set(parsed.data.mru.filter((id) => seen.has(id)))];
   for (const t of tabs) if (!mru.includes(t.id)) mru.push(t.id);
   const activeId = seen.has(parsed.data.activeId) ? parsed.data.activeId : mru[0]!;
   return { tabs, activeId, mru: [activeId, ...mru.filter((id) => id !== activeId)] };
+}
+
+/** Unique ids, at most MAX_TAB_CHATS (the newest), `open` one of them; null when there is none. */
+function normalizeChats(chats: TabChats): TabChats | null {
+  const ids = [...new Set(chats.ids)].slice(-MAX_TAB_CHATS);
+  if (ids.length === 0) return null;
+  return { repoId: chats.repoId, ids, open: chats.open !== null && ids.includes(chats.open) ? chats.open : null };
+}
+
+/** A tab moved to `path`: the title is dropped, the chats kept while it stays in their repository. */
+function retarget(tab: Tab, path: string): Tab {
+  const next: Tab = { id: tab.id, path };
+  if (tab.chats && repoOf(path) === tab.chats.repoId) next.chats = tab.chats;
+  return next;
 }
 
 function homeSet(): Pick<TabsState, "tabs" | "activeId" | "mru"> {
@@ -278,7 +317,7 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
         const tab = s.tabs.find((t) => t.id === id);
         if (!tab) return;
         const replace = !!navOpts?.replace;
-        const tabs = tab.path === path ? s.tabs : s.tabs.map((t) => (t.id === id ? { id, path } : t));
+        const tabs = tab.path === path ? s.tabs : s.tabs.map((t) => (t.id === id ? retarget(t, path) : t));
         set({ tabs, lastNavigation: { tabId: id, path, replace } });
       },
 
@@ -287,7 +326,7 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
         const s = get();
         const tab = s.tabs.find((t) => t.id === id);
         if (!tab) return;
-        const tabs = tab.path === path ? s.tabs : s.tabs.map((t) => (t.id === id ? { id, path } : t));
+        const tabs = tab.path === path ? s.tabs : s.tabs.map((t) => (t.id === id ? retarget(t, path) : t));
         set({ tabs, activeId: id, mru: touch(s.mru, id) });
       },
 
@@ -321,6 +360,21 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
         const tabs = s.tabs.filter((t) => t.id !== id);
         tabs.splice(to, 0, s.tabs[from]!);
         set({ tabs });
+      },
+
+      setChats(id, chats) {
+        const s = get();
+        const tab = s.tabs.find((t) => t.id === id);
+        if (!tab) return;
+        const next = chats ? normalizeChats(chats) : null;
+        if (JSON.stringify(tab.chats ?? null) === JSON.stringify(next)) return;
+        set({
+          tabs: s.tabs.map((t) => {
+            if (t.id !== id) return t;
+            const { chats: _old, ...rest } = t;
+            return next ? { ...rest, chats: next } : rest;
+          }),
+        });
       },
 
       setTitle(id, title) {
@@ -410,6 +464,9 @@ export function runTabAction(store: TabsStoreApi, action: KeyAction): void {
       return;
     case "lastTab":
       s.goto("last");
+      return;
+    case "toggleChat":
+      emitChatShortcut();
       return;
   }
 }

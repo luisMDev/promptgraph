@@ -1,15 +1,7 @@
 import type { ChatStatus } from "@promptgraph/shared";
-import { MessageSquarePlusIcon, PanelRightCloseIcon, SendIcon, SquareIcon } from "lucide-react";
+import { Maximize2Icon, Minimize2Icon, MinusIcon, MoreHorizontalIcon, SendIcon, SquareIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -20,6 +12,7 @@ import { useDaemonStore } from "../../store/daemon-store";
 import { useRepoCache } from "../../store/repo-cache";
 import { useEditor, useRun, useView } from "../../store/view/context";
 import { useDictation } from "../../lib/voice/use-dictation";
+import { isDictationActive, useVoiceStore } from "../../store/voice-store";
 import { ConfirmDialog } from "../common/PromptDialog";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
@@ -28,47 +21,78 @@ import { DictationPreview, DictationStatus, MicButton } from "./Dictation";
 
 const EMPTY_VIEW = emptyView();
 
-/**
- * Chat with a background Claude Code session in the repository (DESIGN §21): session picker, messages with streamed
- * text and folded tool calls, the permission card, a status line and the composer with the context chip.
- */
 /** The chat state of the view's repository (each repository has its own sessions, §21). */
 function useChat<T>(selector: (s: ChatStore) => T): T {
   return useRepoChat(useView().repoId, selector);
 }
 
-export function ChatPanel() {
+/** What a chat window does besides the conversation: minimise it, close it (out of the bar), grow or shrink it. */
+export interface ChatWindowActions {
+  onMinimize(): void;
+  onClose(): void;
+  expanded: boolean;
+  onToggleExpanded(): void;
+}
+
+/**
+ * A floating chat window (DESIGN §21.11): one Claude Code session of the repository, above the tab's panel, opened from
+ * the bottom bar. Header with the title, cost and the window actions; then the conversation.
+ */
+export function ChatWindow({ sessionId, actions }: { sessionId: string; actions: ChatWindowActions }) {
+  return (
+    <section
+      aria-label="Chat"
+      // nokey: Backspace/Delete typed in the composer must not delete canvas items.
+      className={cn(
+        "nokey pointer-events-auto absolute right-3 bottom-3 z-30 flex flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-2xl shadow-black/30",
+        actions.expanded ? "top-3 w-[min(760px,calc(100%-1.5rem))]" : "h-[min(600px,calc(100%-1.5rem))] w-[min(420px,calc(100%-1.5rem))]",
+      )}
+      onKeyDown={(e) => {
+        // Esc minimises, unless something inside (a menu, the permission card) used it or a dictation is on: its own
+        // Esc handler (on window, so after this one) cancels the dictation.
+        if (e.key === "Escape" && !e.defaultPrevented && !isDictationActive(useVoiceStore.getState().state)) {
+          e.preventDefault();
+          actions.onMinimize();
+        }
+      }}
+    >
+      <ChatHeader sessionId={sessionId} actions={actions} />
+      <ChatConversation sessionId={sessionId} />
+    </section>
+  );
+}
+
+/** One session's conversation: messages with streamed text and folded tool calls, the permission card, a status line and the composer. */
+export function ChatConversation({ sessionId }: { sessionId: string }) {
   const chatApi = getChatStore(useView().repoId);
-  const activeId = useChat((s) => s.activeSessionId);
-  const view = useChat((s) => (activeId ? s.views[activeId] : undefined)) ?? EMPTY_VIEW;
+  const view = useChat((s) => s.views[sessionId]) ?? EMPTY_VIEW;
   const error = useChat((s) => s.error);
   // Parallel tool calls may open several prompts: they are answered one at a time, oldest first.
   const pending = view.pendingPermissions[0];
 
   return (
-    <section aria-label="Chat" className="flex h-full min-h-0 flex-col">
-      <ChatHeader />
+    <>
       {error && (
         <p role="alert" className="border-b bg-red-500/10 px-3 py-1.5 text-xs text-red-700">
           {error}
         </p>
       )}
       {/* Keyed by session: the scroll position, stick-to-bottom flag and draft belong to one chat. */}
-      <MessageList key={`list-${activeId ?? "none"}`} view={view} hasSession={activeId !== null} />
-      {activeId && pending && (
+      <MessageList key={`list-${sessionId}`} view={view} />
+      {pending && (
         <div className="border-t p-2">
           <PermissionCard
             key={pending.requestId}
             request={pending}
             queued={view.pendingPermissions.length - 1}
-            onAnswer={(allow) => chatApi.getState().answerPermission(activeId, pending.requestId, allow, allow ? undefined : "Denied by the user")}
+            onAnswer={(allow) => chatApi.getState().answerPermission(sessionId, pending.requestId, allow, allow ? undefined : "Denied by the user")}
           />
         </div>
       )}
       <StatusLine status={view.status} warning={view.warning} />
-      <ReplyAnnouncer key={`announce-${activeId ?? "none"}`} view={view} />
-      <Composer key={`composer-${activeId ?? "none"}`} sessionId={activeId} status={view.status} />
-    </section>
+      <ReplyAnnouncer key={`announce-${sessionId}`} view={view} />
+      <Composer key={`composer-${sessionId}`} sessionId={sessionId} status={view.status} />
+    </>
   );
 }
 
@@ -98,80 +122,68 @@ function ReplyAnnouncer({ view }: { view: ChatSessionView }) {
   );
 }
 
-function ChatHeader() {
+function ChatHeader({ sessionId, actions }: { sessionId: string; actions: ChatWindowActions }) {
   const view = useView();
   const chatApi = getChatStore(view.repoId);
-  const sessions = useChat((s) => s.sessions);
-  const activeId = useChat((s) => s.activeSessionId);
-  const active = sessions.find((s) => s.id === activeId);
+  const session = useChat((s) => s.sessions.find((x) => x.id === sessionId));
   const [confirmDelete, setConfirmDelete] = useState(false);
   // §23.2: on a subscription the chat's cost is an API-price equivalent, not money spent.
   const subscription = useRepoCache(view.repoId, (s) => s.claudeAuth?.billingMode === "subscription");
   const cost = (usd: number) => (subscription ? `≈${formatCost(usd)}` : formatCost(usd));
+  const title = chatTitle(session);
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
+    <div className="flex h-10 shrink-0 items-center gap-0.5 border-b pr-1.5 pl-3">
+      <h2 className="min-w-0 truncate text-sm font-medium" title={title}>
+        {title}
+      </h2>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start gap-1.5 px-2 font-medium">
-            <span className="truncate">{active ? active.title || "New chat" : "Chat"}</span>
-            <Icons.chevronDown className="shrink-0 text-muted-foreground" />
+          <Button variant="ghost" size="icon-sm" aria-label="Chat actions" className="shrink-0 text-muted-foreground">
+            <MoreHorizontalIcon />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-80 p-0">
-          <div className="max-h-80 overflow-y-auto p-1">
-            {sessions.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">No chats yet.</p>}
-            <DropdownMenuRadioGroup value={activeId ?? ""} onValueChange={(id) => void chatApi.getState().selectSession(id)}>
-              {sessions.map((s) => (
-                <DropdownMenuRadioItem key={s.id} value={s.id} className="gap-2 py-1.5 pr-8 pl-3">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-foreground">{s.title || "New chat"}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {formatDateTime(s.updatedAt)} · {cost(s.totalCostUsd)}
-                    </span>
-                  </span>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </div>
-          <DropdownMenuSeparator className="mx-0 my-0" />
-          <div className="p-1">
-            <DropdownMenuItem className="justify-center text-xs font-medium" onSelect={() => void chatApi.getState().newSession()}>
-              <Icons.plus /> New chat
-            </DropdownMenuItem>
-          </div>
+        <DropdownMenuContent align="start">
+          {session && (
+            <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+              {formatDateTime(session.createdAt)} ·{" "}
+              <span title={subscription ? "Cost of this chat at API prices; included in your Claude subscription" : "Total cost of this chat (estimated at API prices)"}>
+                {cost(session.totalCostUsd)}
+              </span>
+            </div>
+          )}
+          <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDelete(true)}>
+            <Icons.trash /> Delete chat
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {active && (
-        <span
-          className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums"
-          title={subscription ? "Cost of this chat at API prices; included in your Claude subscription" : "Total cost of this chat (estimated at API prices)"}
-        >
-          {cost(active.totalCostUsd)}
-        </span>
-      )}
-      <IconAction label="New chat" onClick={() => void chatApi.getState().newSession()}>
-        <MessageSquarePlusIcon />
-      </IconAction>
-      {active && (
-        <IconAction label="Delete chat" onClick={() => setConfirmDelete(true)}>
-          <Icons.trash />
+      <div className="ml-auto flex shrink-0 items-center">
+        <IconAction label="Minimize (Esc)" onClick={actions.onMinimize}>
+          <MinusIcon />
         </IconAction>
-      )}
-      <IconAction label="Close chat" onClick={() => view.ui.getState().setChatOpen(false)}>
-        <PanelRightCloseIcon />
-      </IconAction>
-      {confirmDelete && active && (
+        <IconAction label={actions.expanded ? "Shrink" : "Expand"} onClick={actions.onToggleExpanded}>
+          {actions.expanded ? <Minimize2Icon /> : <Maximize2Icon />}
+        </IconAction>
+        <IconAction label="Close chat" onClick={actions.onClose}>
+          <XIcon />
+        </IconAction>
+      </div>
+      {confirmDelete && (
         <ConfirmDialog
           title="Delete chat"
-          message={`Delete "${active.title || "this chat"}"? Its Claude Code process is stopped; the transcript stays in ~/.claude.`}
+          message={`Delete "${title}"? Its Claude Code process is stopped; the transcript stays in ~/.claude.`}
           confirmLabel="Delete"
-          onConfirm={() => void chatApi.getState().deleteSession(active.id)}
+          onConfirm={() => void chatApi.getState().deleteSession(sessionId)}
           onClose={() => setConfirmDelete(false)}
         />
       )}
     </div>
   );
+}
+
+/** A session's title as shown in the bar and the window ("New chat" until its first message). */
+export function chatTitle(session: { title: string } | undefined): string {
+  return session?.title || "New chat";
 }
 
 function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
@@ -187,7 +199,7 @@ function IconAction({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
-function MessageList({ view, hasSession }: { view: ChatSessionView; hasSession: boolean }) {
+function MessageList({ view }: { view: ChatSessionView }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const streamedChars = Object.values(view.streaming).reduce((n, t) => n + t.length, 0);
@@ -209,16 +221,16 @@ function MessageList({ view, hasSession }: { view: ChatSessionView; hasSession: 
     >
       {view.loading && view.items.length === 0 && <p className="text-xs text-muted-foreground">Loading chat…</p>}
       {view.loadError && <p role="alert" className="text-xs text-red-700">Could not load this chat: {view.loadError}</p>}
-      {!view.loading && !view.loadError && view.items.length === 0 && view.streamingOrder.length === 0 && <EmptyState hasSession={hasSession} />}
+      {!view.loading && !view.loadError && view.items.length === 0 && view.streamingOrder.length === 0 && <EmptyState />}
       <ChatItems view={view} />
     </div>
   );
 }
 
-function EmptyState({ hasSession }: { hasSession: boolean }) {
+function EmptyState() {
   return (
     <div className="space-y-2 py-6 text-center text-xs text-muted-foreground">
-      <p className="text-sm font-medium text-foreground">{hasSession ? "New chat" : "Design graphs with Claude"}</p>
+      <p className="text-sm font-medium text-foreground">Design graphs with Claude</p>
       <p>Describe what you want to build and Claude drafts a graph, or ask it to change the graph on screen.</p>
       <ul className="space-y-1 text-left italic">
         <li>“I want to build a landing page with a hero, pricing and a signup form.”</li>
@@ -257,7 +269,7 @@ function StatusLine({ status, warning }: { status: ChatStatus; warning: string |
   );
 }
 
-function Composer({ sessionId, status }: { sessionId: string | null; status: ChatStatus }) {
+function Composer({ sessionId, status }: { sessionId: string; status: ChatStatus }) {
   const view = useView();
   const chatApi = getChatStore(view.repoId);
   const [text, setText] = useState("");
@@ -275,7 +287,7 @@ function Composer({ sessionId, status }: { sessionId: string | null; status: Cha
     if (!canSendText(value)) return;
     setSending(true);
     try {
-      if (await sendChatMessage(view, value)) setText("");
+      if (await sendChatMessage(view, sessionId, value)) setText("");
     } finally {
       setSending(false);
     }
@@ -340,7 +352,7 @@ function Composer({ sessionId, status }: { sessionId: string | null; status: Cha
           {preview && <DictationPreview value={text} insertion={preview} partial={dictation.partial} textarea={inputRef.current} />}
         </div>
         <MicButton dictation={dictation} disabled={!connected} />
-        {busy && sessionId ? (
+        {busy ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="secondary" size="icon" aria-label="Stop" onClick={() => chatApi.getState().interrupt(sessionId)}>

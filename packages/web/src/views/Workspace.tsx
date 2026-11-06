@@ -2,7 +2,6 @@ import { webRoutes } from "@promptgraph/shared";
 import { PanelLeftIcon, PanelRightIcon } from "lucide-react";
 import { Suspense, lazy, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas } from "../components/canvas/Canvas";
-import { ChatPanel } from "../components/chat/ChatPanel";
 import { Banners } from "../components/common/Banners";
 import { PromptDialog } from "../components/common/PromptDialog";
 import { Icons } from "../components/common/icons";
@@ -36,8 +35,6 @@ export function Workspace({ route }: { route: RepoRoute }) {
   const sidebarWidth = useViewUi((s) => s.sidebarWidth);
   const inspectorOpen = useViewUi((s) => s.inspectorOpen);
   const inspectorWidth = useViewUi((s) => s.inspectorWidth);
-  const chatOpen = useViewUi((s) => s.chatOpen);
-  const chatWidth = useViewUi((s) => s.chatWidth);
   const reportRunId = route.kind === "report" ? route.runId : null;
   useAutoOpenReport(route);
 
@@ -58,14 +55,7 @@ export function Workspace({ route }: { route: RepoRoute }) {
           always sits below the header and any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
-        {/* A third provider for the chat panel (§21), docked at the far right: canvas and inspector stay visible. */}
         <SidebarProvider
-          open={chatOpen}
-          onOpenChange={(open) => ui.getState().setChatOpen(open)}
-          className="relative min-h-0 min-w-0 flex-1"
-          style={{ "--sidebar-width": `${chatWidth}px` } as CSSProperties}
-        >
-          <SidebarProvider
             open={inspectorOpen}
             onOpenChange={(open) => ui.getState().setInspectorOpen(open)}
             className="relative min-h-0 min-w-0 flex-1"
@@ -79,8 +69,6 @@ export function Workspace({ route }: { route: RepoRoute }) {
               <TerminalDrawer />
             </main>
             <RightSidebar />
-          </SidebarProvider>
-          <ChatSidebar />
         </SidebarProvider>
       </div>
       <ApprovalGate />
@@ -167,19 +155,6 @@ function RightSidebar() {
         <Inspector />
       </div>
       <SidebarRail aria-label="Collapse or resize inspector" title="Click to collapse, drag to resize" onResize={(px) => ui.getState().setInspectorWidth(px)} />
-    </Sidebar>
-  );
-}
-
-function ChatSidebar() {
-  const ui = useView().ui;
-  const open = useViewUi((s) => s.chatOpen);
-  return (
-    // nokey: Backspace/Delete typed in the composer must not delete canvas items.
-    <Sidebar side="right" collapsible="offcanvas" className="nokey absolute h-full">
-      {/* Mounted only while open: a collapsed chat costs nothing and the composer gets focus when it opens. */}
-      <div className="min-h-0 flex-1">{open && <ChatPanel />}</div>
-      <SidebarRail aria-label="Collapse or resize chat" title="Click to collapse, drag to resize" onResize={(px) => ui.getState().setChatWidth(px)} />
     </Sidebar>
   );
 }

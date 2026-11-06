@@ -1,21 +1,17 @@
 import { webRoutes } from "@promptgraph/shared";
-import { MessageSquareIcon } from "lucide-react";
-import { toggleChatPanel } from "../../store/chat-actions";
 import { useEditor, useRun, useView, useViewUi } from "../../store/view/context";
 import type { LeftPanel } from "../../store/view/ui-store";
 import { Button } from "../common/ui";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Separator } from "../ui/separator";
-import { BillingBadge } from "../claude/BillingBadge";
-import { ClaudeSetupButton } from "../claude/ClaudeSetupWizard";
 import { SettingsMenu } from "../settings/SettingsMenu";
 import { GraphSelector } from "./GraphSelector";
 import { PendingApprovals, RunSelector } from "./RunControls";
 
 /**
  * Top bar (§13): the left sidebar's Nodes / Runs switch, graph selector, run selector, pending approvals,
- * settings. The app logo sits in the tab strip (§13.4); Run/Cancel and the save state float over the canvas.
+ * settings. Claude's billing and setup sit at the start of the tab's bottom bar (ClaudeStatus). The app logo sits in the tab strip (§13.4); Run/Cancel and the save state float over the canvas.
  */
 export function Header() {
   return (
@@ -26,9 +22,6 @@ export function Header() {
       <RunSelector />
       <div className="ml-auto flex items-center gap-2">
         <PendingApprovals />
-        <ChatToggle />
-        <BillingBadge />
-        <ClaudeSetupButton />
         <SettingsMenu />
       </div>
     </header>
@@ -64,22 +57,5 @@ export function LeftPanelSwitch() {
         {`Runs${runs ? ` (${runs})` : ""}`}
       </ToggleGroupItem>
     </ToggleGroup>
-  );
-}
-
-/** Opens / closes the view's chat panel (§21). */
-export function ChatToggle() {
-  const view = useView();
-  const open = useViewUi((s) => s.chatOpen);
-  const label = open ? "Close chat" : "Chat with Claude";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant={open ? "secondary" : "ghost"} size="sm" aria-label={label} aria-pressed={open} className="gap-1.5" onClick={() => toggleChatPanel(view)}>
-          <MessageSquareIcon /> <span className="hidden lg:inline">Chat</span>
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
   );
 }

@@ -1,5 +1,5 @@
 import type { ChatContext } from "@promptgraph/shared";
-import { getChatStore, lastChatSessionId } from "./chat-store";
+import { getChatStore } from "./chat-store";
 import { toast } from "./toast-store";
 import type { View } from "./view/context";
 import { isReadOnly } from "./view/editor-store";
@@ -26,30 +26,11 @@ export function currentChatContext(view: ChatView): ChatContext {
   };
 }
 
-/** Opens the view's panel; the first time it loads the repository's sessions and shows the last used chat. */
-export async function openChatPanel(view: ChatView): Promise<void> {
-  view.ui.getState().setChatOpen(true);
-  const store = getChatStore(view.repoId);
-  const chat = store.getState();
-  if (chat.sessionsLoaded) return;
-  await chat.loadSessions();
-  const { sessions, activeSessionId } = store.getState();
-  if (activeSessionId) return;
-  const last = lastChatSessionId(view.repoId);
-  const id = sessions.find((s) => s.id === last)?.id ?? sessions[0]?.id ?? null;
-  if (id) await store.getState().selectSession(id);
-}
-
-export function toggleChatPanel(view: ChatView): void {
-  if (view.ui.getState().chatOpen) view.ui.getState().setChatOpen(false);
-  else void openChatPanel(view);
-}
-
 /**
- * Sends a user message on the shown chat of the view's repository (creating one when none is shown). The pending
- * autosave is written first, so Claude reads the graph the user sees. Returns false when nothing was sent.
+ * Sends a user message on a chat of the view's repository. The pending autosave is written first, so Claude reads
+ * the graph the user sees. Returns false when nothing was sent.
  */
-export async function sendChatMessage(view: ChatView, text: string): Promise<boolean> {
+export async function sendChatMessage(view: ChatView, sessionId: string, text: string): Promise<boolean> {
   const trimmed = text.trim();
   if (!trimmed) return false;
   await view.editor.getState().flushSave();
@@ -63,9 +44,6 @@ export async function sendChatMessage(view: ChatView, text: string): Promise<boo
     return false;
   }
   const store = getChatStore(view.repoId);
-  let sessionId = store.getState().activeSessionId;
-  if (!sessionId) sessionId = await store.getState().newSession();
-  if (!sessionId) return false;
   const sent = store.getState().send(sessionId, trimmed, currentChatContext(view));
   if (!sent) toast("error", "Not connected to the promptgraph daemon: the message was not sent.");
   return sent;

@@ -16,11 +16,12 @@ import { wsClient } from "../api/ws";
 
 /**
  * In-app Claude Code chat (DESIGN §21), one store per repository (each repository has its own sessions): session
- * list, the items of the sessions opened in the panel, streamed text and the pending permission prompts. Items come
- * from GET /api/repos/:repoId/chat/sessions/:id and then from chat:* WS messages of that repository.
+ * list, the items of the sessions opened in chat windows, streamed text and the pending permission prompts. Items
+ * come from GET /api/repos/:repoId/chat/sessions/:id and then from chat:* WS messages of that repository. Which
+ * chats a tab shows is the tab's (`Tab.chats`, §21.11), not the store's.
  */
 
-/** One session as shown in the panel. */
+/** One session as shown in a chat window. */
 export interface ChatSessionView {
   items: ChatItem[];
   /** messageId → text streamed so far (chat:delta); dropped when the final assistant item arrives. */
@@ -46,7 +47,7 @@ export interface ChatSessionView {
 export interface ChatState {
   sessions: ChatSessionSummary[];
   sessionsLoaded: boolean;
-  activeSessionId: string | null;
+  /** Sessions opened in some window of this page (fetched once, then live). */
   views: Record<string, ChatSessionView>;
   /** Error of the last session-level action (list, create, delete). */
   error: string | null;
@@ -55,9 +56,9 @@ export interface ChatState {
 export interface ChatStore extends ChatState {
   repoId: string;
   loadSessions(): Promise<void>;
-  /** Shows a session (fetching its detail once), or none. */
-  selectSession(id: string | null): Promise<void>;
-  /** Creates a session and shows it. Returns its id, or null on failure. */
+  /** A window shows this session: its detail is fetched once (again after a failed load). */
+  openSession(id: string): Promise<void>;
+  /** Creates a session (with an empty view). Returns its id, or null on failure. */
   newSession(req?: CreateChatSessionRequest): Promise<string | null>;
   deleteSession(id: string): Promise<void>;
   /** Sends a user turn on the WS. Returns false when it could not be sent (socket down). */
@@ -65,8 +66,8 @@ export interface ChatStore extends ChatState {
   interrupt(sessionId: string): void;
   answerPermission(sessionId: string, requestId: string, allow: boolean, message?: string): void;
   /**
-   * After a WS reconnect: reloads the list and the shown session (items may have been missed); drops other views.
-   * The shown view stays on screen meanwhile, so the conversation, its permission card and Stop do not disappear.
+   * After a WS reconnect: reloads the list and every opened session (items may have been missed). The views stay on
+   * screen meanwhile, so a conversation, its permission card and Stop do not disappear.
    */
   resync(): Promise<void>;
   /** Routes a chat:* server message of this repository; other messages are ignored. */
@@ -103,28 +104,6 @@ let depsOverride: Partial<ChatDeps> = {};
 /** Test seam: overrides the deps of the stores created from now on. */
 export function setChatDeps(d: Partial<ChatDeps>): void {
   depsOverride = { ...depsOverride, ...d };
-}
-
-function lastSessionKey(repoId: string): string {
-  return `pg_last_chat:${repoId}`;
-}
-
-function rememberSession(repoId: string, id: string | null): void {
-  try {
-    if (id) localStorage.setItem(lastSessionKey(repoId), id);
-    else localStorage.removeItem(lastSessionKey(repoId));
-  } catch {
-    // Per-browser convenience only.
-  }
-}
-
-/** The session last shown in this repository's chat panel (per browser). */
-export function lastChatSessionId(repoId: string): string | null {
-  try {
-    return localStorage.getItem(lastSessionKey(repoId));
-  } catch {
-    return null;
-  }
 }
 
 export function emptyView(status: ChatStatus = "idle"): ChatSessionView {
@@ -271,7 +250,6 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
     repoId,
     sessions: [],
     sessionsLoaded: false,
-    activeSessionId: null,
     views: {},
     error: null,
 
@@ -284,10 +262,7 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
       }
     },
 
-    async selectSession(id) {
-      set({ activeSessionId: id });
-      rememberSession(repoId, id);
-      if (!id) return;
+    async openSession(id) {
       const view = get().views[id];
       if (!view || view.loadError) await fetchDetail(id);
     },
@@ -298,10 +273,8 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
         set({
           sessions: upsertSession(get().sessions, session),
           views: { ...get().views, [session.id]: emptyView(session.status) },
-          activeSessionId: session.id,
           error: null,
         });
-        rememberSession(repoId, session.id);
         return session.id;
       } catch (err) {
         set({ error: `Could not start a chat: ${errorMessage(err)}` });
@@ -344,16 +317,13 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
 
     async resync() {
       if (!get().sessionsLoaded) return;
-      // Keep the shown view (marked loading) so live messages still apply and the panel does not blank out.
-      const shown = get().activeSessionId;
-      const kept = shown ? get().views[shown] : undefined;
-      set({ views: shown && kept ? { [shown]: { ...kept, loading: true, loadError: null, liveStatus: false } } : {} });
+      // Keep the views (marked loading) so live messages still apply and the windows do not blank out.
+      const views = Object.fromEntries(Object.entries(get().views).map(([id, v]) => [id, { ...v, loading: true, loadError: null, liveStatus: false }]));
+      set({ views });
       await get().loadSessions();
-      // The user may have picked another session meanwhile.
-      const active = get().activeSessionId;
-      if (!active) return;
-      if (get().sessions.some((x) => x.id === active)) await fetchDetail(active);
-      else removeLocal(active);
+      await Promise.all(
+        Object.keys(views).map((id) => (get().sessions.some((x) => x.id === id) ? fetchDetail(id) : Promise.resolve(removeLocal(id)))),
+      );
     },
 
     applyServerMessage(msg) {
@@ -385,9 +355,7 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
     const s = get();
     const { [id]: _gone, ...views } = s.views;
     const sessions = s.sessions.filter((x) => x.id !== id);
-    const activeSessionId = s.activeSessionId === id ? null : s.activeSessionId;
-    set({ sessions, views, activeSessionId });
-    if (s.activeSessionId === id) rememberSession(repoId, null);
+    set({ sessions, views });
   }
   });
 }
