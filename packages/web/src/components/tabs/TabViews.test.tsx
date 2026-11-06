@@ -342,12 +342,26 @@ describe("tab strip (DESIGN §13.4)", () => {
 
     fireEvent.pointerDown(home!, { button: 0, isPrimary: true, pointerId: 1, clientX: 50 });
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 52 });
+    expect(home!.hasAttribute("data-dragging")).toBe(false);
     expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
+
+    // While dragging the order is unchanged: the tab follows the pointer (clamped to the strip) and the
+    // tabs it passed slide aside.
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 260 });
     expect(home!.getAttribute("data-dragging")).toBe("true");
+    expect(document.documentElement.hasAttribute("data-pg-tab-dragging")).toBe(true);
+    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
+    expect(home!.style.transform).toBe("translateX(200px)");
+    expect(a!.style.transform).toBe("translateX(-100px)");
+    expect(tabs[2]!.style.transform).toBe("translateX(-100px)");
+
     fireEvent.pointerUp(window, { pointerId: 1, clientX: 260 });
     expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
     expect(home!.hasAttribute("data-dragging")).toBe(false);
+    expect(document.documentElement.hasAttribute("data-pg-tab-dragging")).toBe(false);
+    // Dropped exactly on its new slot: nothing left to slide.
+    expect(home!.style.transform).toBe("");
+    expect(a!.style.transform).toBe("");
 
     // Moves after the release do nothing.
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 0 });
@@ -358,6 +372,31 @@ describe("tab strip (DESIGN §13.4)", () => {
     fireEvent.pointerMove(window, { pointerId: 2, clientX: 400 });
     fireEvent.pointerUp(window, { pointerId: 2, clientX: 400 });
     expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
+  });
+
+  it("dragging activates the tab; Escape slides it back without reordering", async () => {
+    s().open("/a", { activate: false });
+    s().open("/b", { activate: false });
+    renderTabs();
+    const tabs = await strip().findAllByRole("tab");
+    tabs.forEach((tab, i) => (tab.getBoundingClientRect = () => ({ left: i * 100, width: 100 }) as DOMRect));
+    const [home, a, b] = tabs;
+
+    fireEvent.pointerDown(b!, { button: 0, isPrimary: true, pointerId: 1, clientX: 250 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 120 });
+    expect(activeTab(s()).path).toBe("/b");
+    expect(b!.style.transform).toBe("translateX(-130px)");
+    expect(a!.style.transform).toBe("translateX(100px)");
+    expect(home!.style.transform).toBe("");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
+    expect(b!.hasAttribute("data-dragging")).toBe(false);
+    expect(b!.style.transform).toBe("");
+    expect(a!.style.transform).toBe("");
+    // The release after a cancel does nothing.
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 120 });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
   });
 
   it("Ctrl+Shift+Left/Right move the focused tab", async () => {

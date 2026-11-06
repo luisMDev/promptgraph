@@ -68,8 +68,15 @@ export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBrid
         <span className="text-[13px] font-semibold tracking-tight">promptgraph</span>
       </button>
       <div ref={listRef} role="tablist" aria-label="Tabs" className="pg-tab-list flex min-w-0 items-stretch overflow-x-auto" onKeyDown={onKeyDown}>
-        {tabs.map((tab) => (
-          <TabItem key={tab.id} tab={tab} active={tab.id === activeId} dragging={drag.draggingId === tab.id} onPointerDown={drag.onPointerDown} />
+        {tabs.map((tab, i) => (
+          <TabItem
+            key={tab.id}
+            tab={tab}
+            active={tab.id === activeId}
+            dragging={drag.draggingId === tab.id}
+            dragStyle={drag.styleOf(tab.id, i)}
+            onPointerDown={drag.onPointerDown}
+          />
         ))}
       </div>
       <button
@@ -90,67 +97,197 @@ export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBrid
 
 /** Pointer movement (px) after which a pressed tab is dragged rather than clicked. */
 export const TAB_DRAG_THRESHOLD = 5;
+/** Length of the slide animations (ms); keep in sync with the `duration-150` class. */
+export const TAB_SLIDE_MS = 150;
 
-/**
- * Index the dragged tab takes when the pointer is at `x`: the number of other tabs whose middle lies left of
- * it. Pure; `rects` are the other tabs' boxes in strip order.
- */
-export function tabDropIndex(rects: readonly Pick<DOMRect, "left" | "width">[], x: number): number {
-  return rects.filter((r) => r.left + r.width / 2 < x).length;
+/** A tab's horizontal box when the drag started. */
+export interface TabSlot {
+  left: number;
+  width: number;
 }
 
 /**
+ * Where the dragged tab is shown and which slot it takes (pure). `dx` is clamped so the tab stays inside the
+ * strip; the tab takes a neighbour's slot once its leading edge passes that neighbour's middle, as in a
+ * browser's tab strip.
+ */
+export function tabDragTarget(slots: readonly TabSlot[], from: number, rawDx: number): { dx: number; to: number } {
+  const self = slots[from]!;
+  const first = slots[0]!;
+  const last = slots[slots.length - 1]!;
+  const dx = Math.min(Math.max(rawDx, first.left - self.left), last.left + last.width - (self.left + self.width));
+  const middle = (slot: TabSlot) => slot.left + slot.width / 2;
+  if (dx >= 0) {
+    const edge = self.left + self.width + dx;
+    return { dx, to: from + slots.slice(from + 1).filter((slot) => middle(slot) < edge).length };
+  }
+  const edge = self.left + dx;
+  return { dx, to: from - slots.slice(0, from).filter((slot) => middle(slot) > edge).length };
+}
+
+/** How far the tab at strip index `i` moves aside while the tab at `from` (`width` wide) hovers over `to` (pure). */
+export function tabShift(i: number, from: number, to: number, width: number): number {
+  if (from < to && i > from && i <= to) return -width;
+  if (to < from && i >= to && i < from) return width;
+  return 0;
+}
+
+/** Drag state the strip renders: `drag` follows the pointer, `return` slides back (cancelled), `settle` slides into the new slot. */
+interface TabDragView {
+  id: string;
+  from: number;
+  to: number;
+  /** Dragged tab's offset from its slot (drag, return) or from its new slot (settle). */
+  dx: number;
+  width: number;
+  phase: "drag" | "return" | "settle";
+  /** The dragged tab's offset transitions (return, and settle once its start offset is painted). */
+  animate: boolean;
+}
+
+/** Per-tab presentation during a drag. */
+export interface TabDragStyle {
+  lifted: boolean;
+  /** The transform transitions (neighbours sliding aside, the dragged tab sliding into place). */
+  animate: boolean;
+  offset: number;
+}
+
+const REST: TabDragStyle = { lifted: false, animate: false, offset: 0 };
+
+/**
  * Drag to reorder (pointer events, so it works the same in a browser and in the desktop window, where the
- * strip is the title bar but the tabs are not drag regions). Past TAB_DRAG_THRESHOLD the strip reorders live
- * under the pointer; the click that ends the press activates the tab as usual.
+ * strip is the title bar but the tabs are not drag regions). Past TAB_DRAG_THRESHOLD the pressed tab is
+ * activated and lifted: it follows the pointer while the others slide aside to show where it will land. The
+ * strip order changes once, on release, and the tab then slides into its slot. Escape (or a cancelled
+ * pointer) slides it back. Nothing moves in the DOM until the drop, so focus and scroll are not disturbed.
  */
 function useTabDrag(listRef: RefObject<HTMLDivElement | null>) {
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [view, setView] = useState<TabDragView | null>(null);
   const stop = useRef<(() => void) | null>(null);
-  useEffect(() => () => stop.current?.(), []);
+  const timeouts = useRef<number[]>([]);
+  const frames = useRef<number[]>([]);
+
+  const clearTimers = () => {
+    for (const t of timeouts.current) clearTimeout(t);
+    for (const f of frames.current) cancelAnimationFrame(f);
+    timeouts.current = [];
+    frames.current = [];
+  };
+
+  useEffect(
+    () => () => {
+      stop.current?.();
+      clearTimers();
+    },
+    [],
+  );
+
+  /** Ends a return or settle animation. */
+  const finishLater = () => {
+    timeouts.current.push(window.setTimeout(() => setView(null), TAB_SLIDE_MS + 30));
+  };
 
   const onPointerDown = (id: string, e: ReactPointerEvent<HTMLElement>) => {
     if (e.button !== 0 || e.isPrimary === false || (e.target as HTMLElement).closest("button")) return;
     stop.current?.();
+    clearTimers();
+    setView(null);
     const { pointerId, clientX: startX } = e;
-    let dragging = false;
+    let slots: TabSlot[] | null = null;
+    let from = -1;
+    let current: { dx: number; to: number } = { dx: 0, to: -1 };
+
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
-      if (!dragging) {
+      if (!slots) {
         if (Math.abs(ev.clientX - startX) < TAB_DRAG_THRESHOLD) return;
-        dragging = true;
-        setDraggingId(id);
+        const items = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? [])];
+        from = items.findIndex((el) => el.dataset.tabId === id);
+        if (from === -1) return finish("cancel");
+        slots = items.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, width: r.width };
+        });
+        tabsStore().getState().activate(id);
+        document.documentElement.dataset.pgTabDragging = "";
       }
-      const others = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? [])].filter((el) => el.dataset.tabId !== id);
-      tabsStore().getState().move(id, tabDropIndex(others.map((el) => el.getBoundingClientRect()), ev.clientX));
+      current = tabDragTarget(slots, from, ev.clientX - startX);
+      setView({ id, from, to: current.to, dx: current.dx, width: slots[from]!.width, phase: "drag", animate: false });
     };
+
+    const finish = (how: "drop" | "cancel") => {
+      const dragged = slots;
+      stop.current?.();
+      if (!dragged) return;
+      const width = dragged[from]!.width;
+      if (how === "cancel" || current.to === from) {
+        // Slide back to the original slot.
+        setView({ id, from, to: from, dx: 0, width, phase: "return", animate: true });
+        finishLater();
+        return;
+      }
+      // Reorder now; the tab is first drawn where it was dropped, then slides into its new slot.
+      const between = current.to > from ? dragged.slice(from + 1, current.to + 1) : dragged.slice(current.to, from);
+      const travel = between.reduce((sum, slot) => sum + slot.width, 0) * (current.to > from ? 1 : -1);
+      tabsStore().getState().move(id, current.to);
+      setView({ id, from: current.to, to: current.to, dx: current.dx - travel, width, phase: "settle", animate: false });
+      // Two frames: the start offset must be painted before the transition is switched on.
+      frames.current.push(
+        requestAnimationFrame(() => {
+          frames.current.push(requestAnimationFrame(() => setView((v) => (v?.phase === "settle" ? { ...v, dx: 0, animate: true } : v))));
+        }),
+      );
+      finishLater();
+    };
+
     const end = (ev: PointerEvent) => {
-      if (ev.pointerId === pointerId) stop.current?.();
+      if (ev.pointerId === pointerId) finish(ev.type === "pointercancel" ? "cancel" : "drop");
     };
+    const onKey = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key !== "Escape" || !slots) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish("cancel");
+    };
+
     stop.current = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
       window.removeEventListener("pointercancel", end);
+      window.removeEventListener("keydown", onKey, true);
+      delete document.documentElement.dataset.pgTabDragging;
       stop.current = null;
-      setDraggingId(null);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", end);
+    window.addEventListener("keydown", onKey, true);
   };
 
-  return { draggingId, onPointerDown };
+  /** Presentation of the tab with `id`, at strip index `index`. */
+  const styleOf = (id: string, index: number): TabDragStyle => {
+    if (!view) return REST;
+    if (id === view.id) return { lifted: view.phase === "drag", animate: view.animate, offset: view.dx };
+    // After the drop the strip order already matches the slots: the others rest where they are.
+    if (view.phase === "settle") return REST;
+    return { lifted: false, animate: true, offset: tabShift(index, view.from, view.to, view.width) };
+  };
+
+  return { draggingId: view?.phase === "drag" ? view.id : null, styleOf, onPointerDown };
 }
 
 function TabItem({
   tab,
   active,
   dragging,
+  dragStyle,
   onPointerDown,
 }: {
   tab: Tab;
   active: boolean;
   dragging: boolean;
+  dragStyle: TabDragStyle;
   onPointerDown: (id: string, e: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const title = useTabTitle(tab);
@@ -181,8 +318,12 @@ function TabItem({
       className={cn(
         "group relative flex w-44 min-w-24 shrink items-center gap-1.5 border-r pr-1 pl-3 outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active ? "bg-background text-foreground" : "cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-        dragging && "z-10 cursor-grabbing shadow-soft",
+        dragStyle.animate && "transition-transform duration-150 ease-out motion-reduce:transition-none",
+        dragStyle.offset !== 0 && "z-[1]",
+        // Lifted: above its neighbours, opaque, with a shadow and the grabbing cursor while it follows the pointer.
+        dragging && "z-20 cursor-grabbing rounded-t-md border-l bg-background text-foreground shadow-xl shadow-black/25 ring-1 ring-foreground/20 will-change-transform",
       )}
+      style={dragStyle.offset !== 0 ? { transform: `translateX(${dragStyle.offset}px)` } : undefined}
       onPointerDown={(e) => onPointerDown(tab.id, e)}
       // A middle press would start autoscroll; the release (auxclick) closes the tab.
       onMouseDown={(e) => {

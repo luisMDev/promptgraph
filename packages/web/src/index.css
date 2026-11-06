@@ -446,6 +446,13 @@ body {
   html {
     @apply font-sans;
   }
+  /* Tailwind v4's preflight gives buttons the default cursor: every enabled button gets the pointer back.
+     Utilities still win (cursor-grab on palette items, cursor-default on menu items, cursor-not-allowed). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary {
+    cursor: pointer;
+  }
 }
 
 /* Dragging a sidebar rail (SidebarRail onResize): follow the pointer without the collapse animation, and keep the
@@ -457,4 +464,11 @@ body {
 [data-sidebar-resizing] [data-slot="sidebar-gap"],
 [data-sidebar-resizing] [data-slot="sidebar-container"] {
   transition: none;
+}
+
+/* A tab is being dragged along the tab strip (TabStrip): the grabbing cursor everywhere until the drop. */
+[data-pg-tab-dragging],
+[data-pg-tab-dragging] * {
+  cursor: grabbing !important;
+  user-select: none;
 }
