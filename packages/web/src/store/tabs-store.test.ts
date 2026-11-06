@@ -301,4 +301,26 @@ describe("tabs store (DESIGN §13.4)", () => {
     // The last writer seeds the next new window.
     expect(paths(createTabsStore(windowStores(local)))).toEqual(["/", `${R}/graphs/g1`, `${R}/runs/r1`]);
   });
+
+  it("moves a tab to another strip position, keeping the active tab, and persists the order", () => {
+    const stores = windowStores();
+    const store = createTabsStore(stores);
+    store.getState().open(`${R}/graphs/g1`, { activate: true });
+    store.getState().open(`${R}/runs/r1`, { activate: false });
+    const [home, graphTab, runTab] = store.getState().tabs;
+
+    store.getState().move(runTab!.id, 0);
+    expect(paths(store)).toEqual([`${R}/runs/r1`, "/", `${R}/graphs/g1`]);
+    expect(activePath(store)).toBe(`${R}/graphs/g1`);
+
+    // Clamped; unknown ids and no-op moves change nothing.
+    store.getState().move(home!.id, 99);
+    expect(paths(store)).toEqual([`${R}/runs/r1`, `${R}/graphs/g1`, "/"]);
+    const before = store.getState().tabs;
+    store.getState().move(graphTab!.id, 1);
+    store.getState().move("nope", 0);
+    expect(store.getState().tabs).toBe(before);
+
+    expect(paths(createTabsStore({ session: stores.session, local: null }))).toEqual([`${R}/runs/r1`, `${R}/graphs/g1`, "/"]);
+  });
 });

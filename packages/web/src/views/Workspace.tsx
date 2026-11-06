@@ -16,7 +16,6 @@ import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
 import { TerminalDrawer } from "../components/terminal/TerminalDrawer";
 import { Button as IconButton } from "../components/ui/button";
 import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider, SidebarRail } from "../components/ui/sidebar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import type { RepoRoute } from "../lib/router/routes";
 import { createGraph } from "../store/view/actions";
@@ -185,46 +184,24 @@ function ChatSidebar() {
   );
 }
 
+/** The left sidebar: the palette or the run history, as chosen with the header's Nodes / Runs switch. */
 function LeftSidebar() {
   const view = useView();
   const panel = useViewUi((s) => s.leftPanel);
   const runMode = useRun((s) => s.selectedRunId !== null);
-  const runs = useRun((s) => s.runs.length);
-  const graphId = useEditor((s) => s.graphId);
   const shown: LeftPanel = runMode ? "history" : panel;
-  const choose = (id: LeftPanel) => {
-    view.ui.getState().setLeftPanel(id);
-    // Leaving run mode navigates back to the graph (DESIGN §13.2).
-    if (id === "palette" && runMode && graphId) view.navigate(webRoutes.graph(view.repoId, graphId));
-  };
+  const title = shown === "palette" ? "Nodes" : "Runs";
   return (
     // shadcn's desktop sidebar container is `fixed inset-y-0 h-svh`; it is re-anchored to the (relative) layout row
     // with `absolute h-full` because the header + banners above it have no fixed height.
     <Sidebar collapsible="offcanvas" className="nokey absolute h-full">
-      {/* Manual activation: arrowing across the tabs must not leave run mode; Enter/Space/click select. */}
-      <Tabs value={shown} activationMode="manual" onValueChange={(v) => choose(v as LeftPanel)} className="min-h-0 flex-1 gap-0">
-        <SidebarHeader className="flex-row items-center gap-1 border-b">
-          <TabsList className="min-w-0 flex-1">
-            <TabsTrigger value="palette" className="text-xs">
-              Nodes
-            </TabsTrigger>
-            {/* Radix only fires onValueChange on change; in run mode "Runs" is already shown even when leftPanel is
-                "palette", so a click must still record the choice (as the hand-rolled tab did). */}
-            <TabsTrigger value="history" className="text-xs" onClick={() => view.ui.getState().setLeftPanel("history")}>
-              {`Runs${runs ? ` (${runs})` : ""}`}
-            </TabsTrigger>
-          </TabsList>
+      <section aria-label={title} className="flex min-h-0 flex-1 flex-col">
+        <SidebarHeader className="flex-row items-center gap-1 border-b py-1.5">
+          <h2 className="min-w-0 flex-1 truncate px-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h2>
           <SidebarToggle side="left" label="Collapse sidebar" />
         </SidebarHeader>
-        <SidebarContent>
-          <TabsContent value="palette" className="min-h-0">
-            <Palette />
-          </TabsContent>
-          <TabsContent value="history" className="min-h-0">
-            <RunHistory />
-          </TabsContent>
-        </SidebarContent>
-      </Tabs>
+        <SidebarContent className="min-h-0">{shown === "palette" ? <Palette /> : <RunHistory />}</SidebarContent>
+      </section>
       <SidebarRail aria-label="Collapse or resize sidebar" title="Click to collapse, drag to resize" onResize={(px) => view.ui.getState().setSidebarWidth(px)} />
     </Sidebar>
   );

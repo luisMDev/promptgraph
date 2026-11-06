@@ -161,14 +161,6 @@ describe("App routing (DESIGN §13.2)", () => {
     renderAt(R);
     expect(await screen.findByText("No graphs in this repository yet.")).toBeTruthy();
   });
-
-  it("the header's repository name links Home", async () => {
-    const { where } = renderAt(`${R}/graphs/g1`);
-    await screen.findByText("Implement");
-    fireEvent.click(screen.getByRole("link", { name: "repo" }));
-    expect(where()).toBe("/");
-    expect(await screen.findByRole("heading", { name: "Repositories" })).toBeTruthy();
-  });
 });
 
 describe("session, connection and version (DESIGN §13.5)", () => {

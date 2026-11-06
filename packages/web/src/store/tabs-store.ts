@@ -70,6 +70,8 @@ export interface TabsState {
   goto(index: number | "last"): void;
   reopenClosed(): void;
   setTitle(id: string, title: string): void;
+  /** Moves a tab to a 0-based strip index (clamped); the active tab and the MRU order do not change. */
+  move(id: string, index: number): void;
 }
 
 export type TabsStoreApi = StoreApi<TabsState>;
@@ -308,6 +310,17 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
         if (!last) return;
         set({ closed: s.closed.slice(0, -1) });
         add(last.path, true, last.index, last.title);
+      },
+
+      move(id, index) {
+        const s = get();
+        const from = s.tabs.findIndex((t) => t.id === id);
+        if (from === -1) return;
+        const to = Math.min(Math.max(Math.trunc(index), 0), s.tabs.length - 1);
+        if (to === from) return;
+        const tabs = s.tabs.filter((t) => t.id !== id);
+        tabs.splice(to, 0, s.tabs[from]!);
+        set({ tabs });
       },
 
       setTitle(id, title) {

@@ -1,9 +1,10 @@
 import { webRoutes } from "@promptgraph/shared";
 import { MessageSquareIcon } from "lucide-react";
-import { Link } from "../../lib/router/Link";
 import { toggleChatPanel } from "../../store/chat-actions";
-import { useRepoInfo, useView, useViewUi } from "../../store/view/context";
+import { useEditor, useRun, useView, useViewUi } from "../../store/view/context";
+import type { LeftPanel } from "../../store/view/ui-store";
 import { Button } from "../common/ui";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Separator } from "../ui/separator";
 import { ClaudeSetupButton } from "../claude/ClaudeSetupWizard";
@@ -12,24 +13,13 @@ import { GraphSelector } from "./GraphSelector";
 import { PendingApprovals, RunSelector } from "./RunControls";
 
 /**
- * Top bar (§13): logo and repository name (both link to Home), graph selector, run selector, pending approvals,
- * settings. Run/Cancel and the save state float over the canvas.
+ * Top bar (§13): the left sidebar's Nodes / Runs switch, graph selector, run selector, pending approvals,
+ * settings. The app logo sits in the tab strip (§13.4); Run/Cancel and the save state float over the canvas.
  */
 export function Header() {
-  const repo = useRepoInfo();
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card/80 px-3 backdrop-blur">
-      <div className="flex items-center gap-2 pr-1">
-        <Link to={webRoutes.home()} className="flex items-center gap-2" aria-label="promptgraph Home">
-          <Logo />
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">promptgraph</span>
-        </Link>
-        {repo && (
-          <Link to={webRoutes.home()} className="hidden max-w-40 truncate text-xs text-muted-foreground hover:text-foreground hover:underline lg:inline" title={`${repo.path} — all repositories`}>
-            {repo.name}
-          </Link>
-        )}
-      </div>
+      <LeftPanelSwitch />
       <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
       <GraphSelector />
       <RunSelector />
@@ -40,6 +30,38 @@ export function Header() {
         <SettingsMenu />
       </div>
     </header>
+  );
+}
+
+const SEGMENT_ITEM =
+  "h-full min-w-16 rounded-md px-3 text-xs text-foreground/60 hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-input/30";
+
+/**
+ * Nodes / Runs: which panel the left sidebar shows. A run shown on the canvas always shows Runs, and choosing
+ * Nodes there goes back to the graph (§13.2). Choosing a panel expands a collapsed sidebar.
+ */
+export function LeftPanelSwitch() {
+  const view = useView();
+  const panel = useViewUi((s) => s.leftPanel);
+  const runMode = useRun((s) => s.selectedRunId !== null);
+  const runs = useRun((s) => s.runs.length);
+  const graphId = useEditor((s) => s.graphId);
+  const shown: LeftPanel = runMode ? "history" : panel;
+  // A click always records the choice, also on the item already shown (it may only look selected because of run
+  // mode, or the sidebar may be collapsed).
+  const choose = (id: LeftPanel) => {
+    view.ui.getState().setLeftPanel(id);
+    if (id === "palette" && runMode && graphId) view.navigate(webRoutes.graph(view.repoId, graphId));
+  };
+  return (
+    <ToggleGroup type="single" value={shown} spacing={0} aria-label="Left panel" className="h-8 shrink-0 rounded-lg bg-muted p-[3px]">
+      <ToggleGroupItem value="palette" className={SEGMENT_ITEM} onClick={() => choose("palette")}>
+        Nodes
+      </ToggleGroupItem>
+      <ToggleGroupItem value="history" className={SEGMENT_ITEM} onClick={() => choose("history")}>
+        {`Runs${runs ? ` (${runs})` : ""}`}
+      </ToggleGroupItem>
+    </ToggleGroup>
   );
 }
 
@@ -57,15 +79,5 @@ export function ChatToggle() {
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
-  );
-}
-
-/** App logo: a staircase of three joined nodes on a white tile (source artwork in docs/assets/logo.png). */
-export function Logo() {
-  return (
-    <svg viewBox="0 0 100 100" width="24" height="24" aria-hidden="true" className="rounded-[5px] shadow-soft ring-1 ring-border">
-      <rect width="100" height="100" rx="20" fill="#fff" />
-      <path fill="#0a0a0a" d="M14 73V64A6 6 0 0 1 20 58H31A5 5 0 0 0 36 53V46A6 6 0 0 1 42 40H53A5 5 0 0 0 58 35V26A6 6 0 0 1 64 20H76A6 6 0 0 1 82 26V36A6 6 0 0 1 76 42H64A5 5 0 0 0 59 47V55A6 6 0 0 1 53 61H42A5 5 0 0 0 37 66V73A6 6 0 0 1 31 79H20A6 6 0 0 1 14 73Z" />
-    </svg>
   );
 }

@@ -312,6 +312,65 @@ describe("tab strip (DESIGN §13.4)", () => {
     expect(screen.getByLabelText("Needs attention")).toBeTruthy();
   });
 
+  it("the logo comes first in the strip and activates the Home tab, opening one when there is none", async () => {
+    s().navigate(s().activeId, `${R}/graphs/g1`);
+    s().open("/", { activate: false, dedupe: false });
+    renderTabs();
+    await screen.findByText("Implement");
+    const logo = screen.getByRole("button", { name: "promptgraph Home" });
+    expect(logo.parentElement?.firstElementChild).toBe(logo);
+
+    fireEvent.click(logo);
+    expect(activeTab(s()).path).toBe("/");
+    expect(s().tabs).toHaveLength(2);
+
+    act(() => s().close(s().activeId));
+    expect(s().tabs.map((t) => t.path)).toEqual([`${R}/graphs/g1`]);
+    fireEvent.click(logo);
+    expect(s().tabs.map((t) => t.path)).toEqual([`${R}/graphs/g1`, "/"]);
+    expect(activeTab(s()).path).toBe("/");
+  });
+
+  it("dragging a tab past the others reorders the strip; a short press only activates", async () => {
+    s().open("/a", { activate: false });
+    s().open("/b", { activate: false });
+    renderTabs();
+    const tabs = await strip().findAllByRole("tab");
+    // jsdom has no layout: 100px-wide tabs side by side.
+    tabs.forEach((tab, i) => (tab.getBoundingClientRect = () => ({ left: i * 100, width: 100 }) as DOMRect));
+    const [home, a] = tabs;
+
+    fireEvent.pointerDown(home!, { button: 0, isPrimary: true, pointerId: 1, clientX: 50 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 52 });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 260 });
+    expect(home!.getAttribute("data-dragging")).toBe("true");
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 260 });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
+    expect(home!.hasAttribute("data-dragging")).toBe(false);
+
+    // Moves after the release do nothing.
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 0 });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
+
+    // The close button never starts a drag.
+    fireEvent.pointerDown(within(a!).getByRole("button"), { button: 0, isPrimary: true, pointerId: 2, clientX: 150 });
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 400 });
+    fireEvent.pointerUp(window, { pointerId: 2, clientX: 400 });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
+  });
+
+  it("Ctrl+Shift+Left/Right move the focused tab", async () => {
+    s().open("/a", { activate: false });
+    renderTabs();
+    const [home] = await strip().findAllByRole("tab");
+    home!.focus();
+    fireEvent.keyDown(home!, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/"]);
+    fireEvent.keyDown(home!, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a"]);
+  });
+
   it("arrow keys move the focus between tabs (roving tabindex); Enter activates", async () => {
     s().open("/nope", { activate: false });
     renderTabs();

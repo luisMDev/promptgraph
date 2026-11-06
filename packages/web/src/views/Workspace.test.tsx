@@ -22,17 +22,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("workspace layout", () => {
-  it("switches the left panel with the tabs and collapses it from inside the sidebar", async () => {
+  it("switches the left panel from the header's Nodes / Runs switch and collapses it from inside the sidebar", async () => {
     const user = userEvent.setup();
     const { container } = renderWorkspace();
     await screen.findByText("Implement");
 
-    const runsTab = screen.getByRole("tab", { name: /^Runs/ });
-    expect(screen.getByRole("tab", { name: "Nodes" }).getAttribute("aria-selected")).toBe("true");
-    await user.click(runsTab);
-    expect(runsTab.getAttribute("aria-selected")).toBe("true");
+    const header = container.querySelector("header")!;
+    const runsItem = screen.getByRole("radio", { name: /^Runs/ });
+    expect(header.contains(runsItem)).toBe(true);
+    expect(screen.getByRole("radio", { name: "Nodes" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("region", { name: "Nodes" }).textContent).toContain("Prompt");
+    await user.click(runsItem);
+    expect(runsItem.getAttribute("aria-checked")).toBe("true");
     expect(view.ui.getState().leftPanel).toBe("history");
-    expect(screen.getByRole("tabpanel").textContent).toContain("No runs yet.");
+    expect(screen.getByRole("region", { name: "Runs" }).textContent).toContain("No runs yet.");
 
     const sidebar = container.querySelector('[data-slot="sidebar"]');
     const panel = container.querySelector('[data-slot="sidebar-container"]');
@@ -60,6 +63,11 @@ describe("workspace layout", () => {
     act(() => view.ui.getState().setLeftPanel("history"));
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");
     expect(panel?.hasAttribute("inert")).toBe(false);
+
+    // So does clicking the switch, also on the panel already shown.
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    await user.click(screen.getByRole("radio", { name: /^Runs/ }));
+    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
   });
 
   it("collapses the inspector from its edge rail and brings it back from the canvas", async () => {
@@ -107,11 +115,12 @@ describe("workspace layout", () => {
     expect(container.querySelector('[data-slot="sidebar"][data-side="left"]')?.getAttribute("data-state")).toBe("expanded");
   });
 
-  it("leaving run mode with the Nodes tab navigates back to the graph", async () => {
+  it("leaving run mode with the Nodes switch navigates back to the graph", async () => {
     const user = userEvent.setup();
     view.run.setState({ selectedRunId: "r1" });
     renderWorkspace();
-    await user.click(screen.getByRole("tab", { name: "Nodes" }));
+    expect(screen.getByRole("radio", { name: /^Runs/ }).getAttribute("aria-checked")).toBe("true");
+    await user.click(screen.getByRole("radio", { name: "Nodes" }));
     expect(view.location.navigations.at(-1)?.path).toBe(`/r/${TEST_REPO_ID}/graphs/g1`);
   });
 });

@@ -6,7 +6,6 @@ import { ApiRequestError, errorMessage, repoApi } from "../api/rest";
 import { Icons } from "../components/common/icons";
 import { FolderBrowser, PathInput, splitTypedPath } from "../components/home/FolderPicker";
 import { Modal, Button } from "../components/common/ui";
-import { Logo } from "../components/header/Header";
 import { useTabContext } from "../components/tabs/tab-context";
 import { formatDateTime } from "../lib/format";
 import { RUN_STATUS_STYLE } from "../lib/status-style";
@@ -29,8 +28,8 @@ export function HomeView() {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-card/80 px-3">
-        <Logo />
-        <h1 className="text-[15px] font-semibold tracking-tight text-foreground">promptgraph</h1>
+        {/* The logo sits at the start of the tab strip (§13.4). */}
+        <h1 className="text-[15px] font-semibold tracking-tight text-foreground">Home</h1>
         {info && <span className="ml-auto font-mono text-xs text-muted-foreground">v{info.version}</span>}
       </header>
       <div className="mx-auto w-full max-w-4xl space-y-6 px-6 py-6">
