@@ -1067,7 +1067,7 @@ components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End
 components/tabs/TabViews.tsx     one `[data-tab-view=<id>]` per mounted tab (planMounted; starts with the active one only), inactive
                                  ones `hidden` + `inert`; each provides LocationContext over its tab (navigate → tabs.navigate,
                                  openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving; the view
-                                 renders in `[data-pg-panel]` (inset panel) above `[data-pg-bottom-bar]` (the tab's bottom bar:
+                                 renders (except Home) in `[data-pg-panel]` (inset panel) above `[data-pg-bottom-bar]` (the tab's bottom bar:
                                  a start slot, ClaudeStatus = BillingBadge + ClaudeSetupButton, and an end slot, ChatDock)
 components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, reportEditor, chats, setChats, bottomBar, bottomBarStart};
                                  useTabContext()
