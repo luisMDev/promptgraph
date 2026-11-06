@@ -7,6 +7,7 @@ import { Button } from "../common/ui";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Separator } from "../ui/separator";
+import { BillingBadge } from "../claude/BillingBadge";
 import { ClaudeSetupButton } from "../claude/ClaudeSetupWizard";
 import { SettingsMenu } from "../settings/SettingsMenu";
 import { GraphSelector } from "./GraphSelector";
@@ -26,6 +27,7 @@ export function Header() {
       <div className="ml-auto flex items-center gap-2">
         <PendingApprovals />
         <ChatToggle />
+        <BillingBadge />
         <ClaudeSetupButton />
         <SettingsMenu />
       </div>

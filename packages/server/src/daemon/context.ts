@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { AppSettingsStore } from "../config/app-settings.js";
+import { ClaudeAuthProbe, type AuthStatusRunner } from "../config/claude-auth.js";
 import { LegacyRepoLocks } from "../config/instance-lock.js";
 import { getPaths, ptyLogPath, type PgPaths } from "../config/paths.js";
 import { EventBus } from "../events/bus.js";
@@ -17,6 +18,7 @@ import { createRepoContext } from "./repo-context.js";
 import { RepoRegistry } from "./registry.js";
 import { VoiceService } from "../voice/voice-service.js";
 import { Sessions } from "./sessions.js";
+import { UsageLimitsTracker } from "./usage-limits.js";
 
 /**
  * Everything daemon-wide (DESIGN §4.1): one DB, bus, PTY manager, hook router and notifier shared by
@@ -54,6 +56,10 @@ export interface DaemonContext {
   voice: VoiceService;
   /** Chat process spawner of every repository's ChatManager (tests); defaults to child_process. */
   chatSpawner?: ChatSpawner;
+  /** `claude auth status` per repository, cached (§23.1). */
+  claudeAuth: ClaudeAuthProbe;
+  /** Last observed subscription usage limits (§23.3). */
+  usageLimits: UsageLimitsTracker;
 }
 
 export interface CreateDaemonContextOptions {
@@ -63,6 +69,8 @@ export interface CreateDaemonContextOptions {
   env?: NodeJS.ProcessEnv;
   /** Chat process spawner (tests). */
   chatSpawner?: ChatSpawner;
+  /** `claude auth status` runner (tests); defaults to the claude CLI. */
+  authStatusRunner?: AuthStatusRunner;
 }
 
 /**
@@ -106,6 +114,8 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
     port: 0,
     startedAt: Date.now(),
     hookSecret: randomBytes(32).toString("base64url"),
+    claudeAuth: new ClaudeAuthProbe(env, { run: opts.authStatusRunner }),
+    usageLimits: new UsageLimitsTracker(store, bus),
     getToken: () => token,
     setToken: (t) => {
       token = t;

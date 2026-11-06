@@ -11,7 +11,9 @@ import {
   CanUseToolRequestSchema,
   ControlRequestLineSchema,
   ControlResponseLineSchema,
+  RateLimitEventLineSchema,
   ResultLineSchema,
+  type RateLimitInfo,
   StreamEventLineSchema,
   SystemInitLineSchema,
   TextBlockSchema,
@@ -29,7 +31,9 @@ export type ChatEvent =
   | { kind: "result"; item: ChatItemOf<"result">; totalCostUsd?: number }
   /** A control_request the chat cannot answer: the manager replies with an error. */
   | { kind: "unsupported_control"; requestId: string; subtype: string }
-  | { kind: "control_response"; requestId?: string };
+  | { kind: "control_response"; requestId?: string }
+  /** Subscription usage limits (§23.3); not shown in the transcript. */
+  | { kind: "rate_limit"; info: RateLimitInfo };
 
 export interface NormalizerOptions {
   /** Unique item ids within the session. */
@@ -80,6 +84,10 @@ export class ChatNormalizer {
         return this.result(line);
       case "control_request":
         return this.controlRequest(line);
+      case "rate_limit_event": {
+        const parsed = RateLimitEventLineSchema.safeParse(line);
+        return parsed.success ? [{ kind: "rate_limit", info: parsed.data.rate_limit_info }] : [];
+      }
       case "control_response": {
         const parsed = ControlResponseLineSchema.safeParse(line);
         return parsed.success ? [{ kind: "control_response", requestId: parsed.data.response.request_id }] : [];

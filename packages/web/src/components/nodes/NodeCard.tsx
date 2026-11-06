@@ -1,4 +1,5 @@
-import { formatCostUsd, isActiveNodeStatus, type GraphNode, type NodeRun, nodeDisplayLabel } from "@promptgraph/shared";
+import { costLabel, isActiveNodeStatus, type GraphNode, type NodeRun, nodeDisplayLabel } from "@promptgraph/shared";
+import { useRun } from "../../store/view/context";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo, type ComponentProps } from "react";
 import { elapsed, formatTokens, prLabel } from "../../lib/format";
@@ -139,6 +140,7 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
   const style = nodeRunStyle(nodeRun);
   const live = isActiveNodeStatus(status);
   const now = useNow(live);
+  const billingMode = useRun((s) => s.detail?.run.billingMode);
   const time = nodeRun ? elapsed(nodeRun.startedAt, nodeRun.finishedAt, now) : null;
   const usage = nodeRun?.output?.usage;
   const tokens = usage ? usage.inputTokens + usage.outputTokens + usage.cacheCreationTokens + usage.cacheReadTokens : 0;
@@ -190,8 +192,11 @@ function RunFooter({ node, nodeRun, lane }: { node: GraphNode; nodeRun: NodeRun 
           </Pill>
         )}
         {usage && tokens > 0 && (
-          <span className="ml-auto font-mono text-muted-foreground" title={`${usage.inputTokens} in · ${usage.outputTokens} out · ${usage.cacheCreationTokens} cache write · ${usage.cacheReadTokens} cache read`}>
-            {formatTokens(tokens)} tok · {formatCostUsd(usage.costUsd)}
+          <span
+            className="ml-auto font-mono text-muted-foreground"
+            title={`${usage.inputTokens} in · ${usage.outputTokens} out · ${usage.cacheCreationTokens} cache write · ${usage.cacheReadTokens} cache read\n${costLabel(usage.costUsd, billingMode).title}`}
+          >
+            {formatTokens(tokens)} tok · {costLabel(usage.costUsd, billingMode).text}
           </span>
         )}
       </div>

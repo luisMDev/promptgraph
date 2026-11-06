@@ -17,6 +17,7 @@ import { formatDateTime } from "../../lib/format";
 import { currentChatContext, sendChatMessage } from "../../store/chat-actions";
 import { emptyView, formatCost, getChatStore, isBusy, useRepoChat, type ChatSessionView, type ChatStore } from "../../store/chat-store";
 import { useDaemonStore } from "../../store/daemon-store";
+import { useRepoCache } from "../../store/repo-cache";
 import { useEditor, useRun, useView } from "../../store/view/context";
 import { useDictation } from "../../lib/voice/use-dictation";
 import { ConfirmDialog } from "../common/PromptDialog";
@@ -104,6 +105,9 @@ function ChatHeader() {
   const activeId = useChat((s) => s.activeSessionId);
   const active = sessions.find((s) => s.id === activeId);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // §23.2: on a subscription the chat's cost is an API-price equivalent, not money spent.
+  const subscription = useRepoCache(view.repoId, (s) => s.claudeAuth?.billingMode === "subscription");
+  const cost = (usd: number) => (subscription ? `≈${formatCost(usd)}` : formatCost(usd));
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
@@ -123,7 +127,7 @@ function ChatHeader() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-foreground">{s.title || "New chat"}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">
-                      {formatDateTime(s.updatedAt)} · {formatCost(s.totalCostUsd)}
+                      {formatDateTime(s.updatedAt)} · {cost(s.totalCostUsd)}
                     </span>
                   </span>
                 </DropdownMenuRadioItem>
@@ -139,8 +143,11 @@ function ChatHeader() {
         </DropdownMenuContent>
       </DropdownMenu>
       {active && (
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums" title="Total cost of this chat">
-          {formatCost(active.totalCostUsd)}
+        <span
+          className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums"
+          title={subscription ? "Cost of this chat at API prices; included in your Claude subscription" : "Total cost of this chat (estimated at API prices)"}
+        >
+          {cost(active.totalCostUsd)}
         </span>
       )}
       <IconAction label="New chat" onClick={() => void chatApi.getState().newSession()}>

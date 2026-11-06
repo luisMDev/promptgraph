@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import {
+  BillingModeSchema,
   emptyUsage,
   sumUsage,
+  type BillingMode,
   type Graph,
   type Lane,
   type LaneStatus,
@@ -47,6 +49,8 @@ export interface NewRun {
   graphHash: string;
   shortId: string;
   startedAt: number;
+  /** §23.2; null when unknown. */
+  billingMode?: BillingMode | null;
 }
 
 export type RunPatch = Partial<Pick<Run, "status" | "error" | "finishedAt" | "cleanedUp">> & {
@@ -173,6 +177,7 @@ interface RunRow {
   error: string | null;
   cleaned_up: number;
   loops: string | null;
+  billing_mode: string | null;
   started_at: number;
   finished_at: number | null;
 }
@@ -230,6 +235,8 @@ function assignments(pairs: ReadonlyArray<readonly [string, unknown]>): { sql: s
 
 const json = (v: unknown): string | null => (v === null || v === undefined ? null : JSON.stringify(v));
 const parseJson = <T>(s: string | null): T | null => (s === null ? null : (JSON.parse(s) as T));
+/** A stored billing mode; a value a newer version wrote reads as unknown (null). */
+const billingModeOrNull = (s: string | null): BillingMode | null => BillingModeSchema.safeParse(s).data ?? null;
 
 function laneFromRow(r: LaneRow): Lane {
   return {
@@ -305,10 +312,10 @@ export class Store {
   insertRun(run: NewRun): Run {
     this.db
       .prepare(
-        `INSERT INTO runs (id, repo_path, graph_id, graph_name, graph_snapshot, graph_hash, short_id, status, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)`,
+        `INSERT INTO runs (id, repo_path, graph_id, graph_name, graph_snapshot, graph_hash, short_id, status, started_at, billing_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
       )
-      .run(run.id, run.repoPath, run.graph.id, run.graph.name, JSON.stringify(run.graph), run.graphHash, run.shortId, run.startedAt);
+      .run(run.id, run.repoPath, run.graph.id, run.graph.name, JSON.stringify(run.graph), run.graphHash, run.shortId, run.startedAt, run.billingMode ?? null);
     return this.getRun(run.id)!;
   }
 
@@ -407,6 +414,7 @@ export class Store {
       pendingApprovals,
       waitingInput,
       usage: usages.length > 0 ? sumUsage(usages) : emptyUsage(),
+      billingMode: billingModeOrNull(r.billing_mode),
       cleanedUp: r.cleaned_up === 1,
     };
   }

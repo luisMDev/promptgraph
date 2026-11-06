@@ -1,4 +1,10 @@
-import { UpdateAppSettingsRequestSchema, type AppSettings, type ListCommandsResponse, type UpdateAppSettingsRequest } from "@promptgraph/shared";
+import {
+  UpdateAppSettingsRequestSchema,
+  type AppSettings,
+  type ClaudeAuthInfo,
+  type ListCommandsResponse,
+  type UpdateAppSettingsRequest,
+} from "@promptgraph/shared";
 import { listSlashCommands } from "../../commands/discover.js";
 import type { DaemonContext } from "../../daemon/context.js";
 import { buildClaudeSetup, checkClaudeSetup, cliCommandFor, currentCliEntry, pluginMarketplace } from "../../mcp/setup.js";
@@ -18,7 +24,7 @@ export function registerSettingsRoutes(app: App, daemon: DaemonContext): void {
   });
 }
 
-/** Under /api/repos/:repoId: GET …/commands · GET …/claude-setup · POST …/claude-setup/check */
+/** Under /api/repos/:repoId: GET …/commands · GET …/claude-setup · POST …/claude-setup/check · GET …/claude-auth */
 export function registerRepoMiscRoutes(app: App, daemon: DaemonContext): void {
   app.get(`${P}/commands`, async (c) =>
     c.json<ListCommandsResponse>({ commands: await listSlashCommands(repoOf(c).repo.path, daemon.env) }),
@@ -36,4 +42,14 @@ export function registerRepoMiscRoutes(app: App, daemon: DaemonContext): void {
   );
   /** Runs `claude mcp get` in the repository: local and project scopes depend on the directory. */
   app.post(`${P}/claude-setup/check`, async (c) => c.json(await checkClaudeSetup({ env: daemon.env, cwd: repoOf(c).repo.path })));
+  /**
+   * How Claude is billed here (§23.1): `claude auth status` in the repository, read-only, cached unless `?refresh=1`.
+   * A check spawns claude, so `refresh` is honoured only for requests the browser marks same-origin (or none), as
+   * for GET /api/voice.
+   */
+  app.get(`${P}/claude-auth`, async (c) => {
+    const site = c.req.header("sec-fetch-site");
+    const refresh = c.req.query("refresh") === "1" && (site === undefined || site === "same-origin" || site === "none");
+    return c.json<ClaudeAuthInfo>(await daemon.claudeAuth.get(repoOf(c).repo.path, { refresh }));
+  });
 }

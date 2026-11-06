@@ -17,7 +17,7 @@ import { buildChatArgs, type ChatMcpLaunch } from "./launch.js";
 import { NdjsonParser } from "./ndjson.js";
 import { ChatNormalizer, type ChatEvent } from "./normalize.js";
 import { spawnChatProcess, type ChatChild, type ChatChildExit, type ChatSpawner } from "./process.js";
-import { controlErrorLine, interruptLine, permissionResponseLine, userTurnLine } from "./protocol.js";
+import { controlErrorLine, interruptLine, permissionResponseLine, userTurnLine, type RateLimitInfo } from "./protocol.js";
 import { chatItemsFromTranscript, findChatTranscript } from "./transcript.js";
 
 export const CHAT_IDLE_TIMEOUT_MS = 15 * 60_000;
@@ -57,6 +57,8 @@ export interface ChatManagerOptions {
   shutdownGraceMs?: number;
   now?: () => number;
   newSessionId?: () => string;
+  /** Subscription usage limits reported by a chat process (§23.3; account-wide, so handed to the daemon). */
+  onRateLimit?: (info: RateLimitInfo) => void;
 }
 
 /** A chat:* message before publish() stamps the repository on it. */
@@ -319,6 +321,8 @@ export class ChatManager {
   }
 
   private apply(session: ChatSessionState, proc: ChatProcess, event: ChatEvent): void {
+    // Account-wide and true whoever reported it, also from a process being replaced.
+    if (event.kind === "rate_limit") return this.opts.onRateLimit?.(event.info);
     if (session.deleted || session.proc !== proc) return;
     const id = session.record.id;
     switch (event.kind) {

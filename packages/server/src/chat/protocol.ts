@@ -51,6 +51,32 @@ export const ResultLineSchema = z.looseObject({
   session_id: z.string().optional(),
 });
 
+/**
+ * Subscription usage limits (`rate_limit_event`, DESIGN §23.3), consumed by UsageLimitsTracker.
+ * Verified against Claude Code 2.1.319:
+ * `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1794398400,"rateLimitType":"seven_day",
+ *   "overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":…,"status":"allowed"}}}}`.
+ * Times are epoch seconds, utilization a fraction. Every field is optional: Claude Code sends what changed.
+ */
+const RawWindowSchema = z.looseObject({
+  utilization: z.number().optional(),
+  resetsAt: z.number().optional(),
+  status: z.string().optional(),
+});
+
+export const RateLimitInfoSchema = z.looseObject({
+  status: z.string().optional(),
+  resetsAt: z.number().optional(),
+  rateLimitType: z.string().optional(),
+  utilization: z.number().optional(),
+  overageStatus: z.string().optional(),
+  isUsingOverage: z.boolean().optional(),
+  unifiedWindows: z.record(z.string(), RawWindowSchema).optional(),
+});
+export type RateLimitInfo = z.infer<typeof RateLimitInfoSchema>;
+
+export const RateLimitEventLineSchema = z.looseObject({ type: z.literal("rate_limit_event"), rate_limit_info: RateLimitInfoSchema });
+
 export const ControlRequestLineSchema = z.looseObject({
   type: z.literal("control_request"),
   request_id: z.string(),

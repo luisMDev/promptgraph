@@ -11,7 +11,7 @@ import {
   type Run,
 } from "@promptgraph/shared";
 import { getPaths } from "../../src/config/paths.js";
-import { Engine } from "../../src/engine/engine.js";
+import { Engine, type EngineDeps } from "../../src/engine/engine.js";
 import { EventBus, type BusEvents } from "../../src/events/bus.js";
 import { GraphStore } from "../../src/graphs/graph-store.js";
 import type { OwnedPtys } from "../../src/pty/pty-manager.js";
@@ -149,7 +149,7 @@ export interface Setup {
   makeEngine: (runners: RunnerRegistry) => Engine;
 }
 
-export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2 } = {}): Setup {
+export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMode?: EngineDeps["billingMode"] } = {}): Setup {
   const t = tempDir();
   onTestFinished(t.cleanup);
   const bus = new EventBus();
@@ -177,6 +177,7 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2 } = {}): Se
       phase: opts.phase ?? 1,
       env: {},
       stopTimeoutMs: 500,
+      billingMode: opts.billingMode,
     });
   return { engine: makeEngine(runners), store, graphs, bus, lanes, ptys, claude, events, attention, makeEngine };
 }

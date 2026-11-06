@@ -53,7 +53,20 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
   // The port is read when a node starts, i.e. once the daemon listens.
   const claude = new ClaudeRunner({ ptys, hooks, paths, pgHookPath: daemon.pgHookPath, endpoint: () => ({ port: daemon.port, hookSecret: daemon.hookSecret }), env });
   const runners = createRunnerRegistry({ claude, ptys, lanes, paths, env });
-  const engine = new Engine({ store, graphs, lanes, ptys, runners, claude, bus, paths, repo, phase: SUPPORTED_PHASE, env });
+  const engine = new Engine({
+    store,
+    graphs,
+    lanes,
+    ptys,
+    runners,
+    claude,
+    bus,
+    paths,
+    repo,
+    phase: SUPPORTED_PHASE,
+    env,
+    billingMode: async () => (await daemon.claudeAuth.get(repo.path)).billingMode,
+  });
   const offUserInput = daemon.ptys.onUserInput((ptyId) => engine.handleUserInput(ptyId));
   const chat = new ChatManager({
     store,
@@ -62,6 +75,7 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     repoPath: repo.path,
     env,
     spawner: daemon.chatSpawner,
+    onRateLimit: (info) => daemon.usageLimits.observe(info),
     mcp: () =>
       resolveChatMcp({
         repoPath: repo.path,

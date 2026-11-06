@@ -1,6 +1,6 @@
 import {
   edgeWhen,
-  formatCostUsd,
+  costLabel,
   isFinalRunStatus,
   type EdgeWhen,
   type GraphEdge,
@@ -300,7 +300,7 @@ function RunOverview() {
         <p className="text-xs text-muted-foreground">Click a node to see its details and open its terminal.</p>
       </Section>
       <LaneLegend />
-      <UsageSection usage={run.usage} title={`Usage · ${formatCostUsd(run.usage.costUsd)}`} />
+      <UsageSection usage={run.usage} billingMode={run.billingMode} title={`Usage · ${costLabel(run.usage.costUsd, run.billingMode).text}`} />
     </>
   );
 }

@@ -26,6 +26,7 @@ export function makeRun(graph: Partial<GraphInput> & { nodes: GraphInput["nodes"
     pendingApprovals: 0,
     waitingInput: 0,
     usage: emptyUsage(),
+    billingMode: null,
     cleanedUp: false,
     graphSnapshot: snapshot,
   };

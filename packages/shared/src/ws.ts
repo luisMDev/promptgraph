@@ -9,6 +9,7 @@ import {
   ChatSessionMessageSchema,
   ChatStatusMessageSchema,
 } from "./chat.js";
+import { UsageLimitsSchema } from "./billing.js";
 import { RepoIdSchema, RepoSummarySchema } from "./repos.js";
 import { LaneSchema, NodeRunSchema, RunSummarySchema } from "./run.js";
 import {
@@ -26,7 +27,7 @@ import {
  * session.
  *
  * Delivery rules:
- * - `repo:status` and `repo:removed` go to every client.
+ * - `repo:status`, `repo:removed` and `usage:limits` go to every client.
  * - `run:update`, `graphs:changed` and `chat:*` (§21) go to clients subscribed to their repository (`repo:subscribe`).
  * - `node:update` / `lane:update` go to clients subscribed to that run.
  * - `pty:*` go to clients attached to that pty.
@@ -43,6 +44,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   /** A repository's counters or state changed (debounced per repository). */
   z.object({ type: z.literal("repo:status"), repo: RepoSummarySchema }),
   z.object({ type: z.literal("repo:removed"), repoId: RepoIdSchema }),
+  /** New subscription usage limits were observed (§23.3; account-wide, not per repository). */
+  z.object({ type: z.literal("usage:limits"), limits: UsageLimitsSchema }),
   z.object({ type: z.literal("run:update"), repoId: RepoIdSchema, run: RunSummarySchema }),
   z.object({ type: z.literal("node:update"), nodeRun: NodeRunSchema }),
   z.object({ type: z.literal("lane:update"), lane: LaneSchema }),

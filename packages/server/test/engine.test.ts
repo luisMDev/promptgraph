@@ -16,6 +16,21 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("Engine.startRun", () => {
+  it("records the repository's billing mode on the run; a failing check records null (§23.2)", async () => {
+    const s = setup(allTypes(new FakeRunner()), { billingMode: async () => "subscription" });
+    s.graphs.save(makeGraph([{ id: "a" }], []));
+    const detail = await s.engine.startRun("flow");
+    expect(detail.run.billingMode).toBe("subscription");
+    await waitRun(s, detail.run.id, "succeeded");
+    expect(s.store.getRun(detail.run.id)?.billingMode).toBe("subscription");
+
+    const failing = setup(allTypes(new FakeRunner()), { billingMode: async () => Promise.reject(new Error("boom")) });
+    failing.graphs.save(makeGraph([{ id: "a" }], []));
+    const other = await failing.engine.startRun("flow");
+    expect(other.run.billingMode).toBeNull();
+    await waitRun(failing, other.run.id, "succeeded");
+  });
+
   it("runs a linear graph to success, passing predecessor outputs and emitting updates", async () => {
     const runner = new FakeRunner();
     const s = setup(allTypes(runner));

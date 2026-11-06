@@ -1,4 +1,4 @@
-import { formatCostUsd, isFinalRunStatus, webRoutes, type RunSummary } from "@promptgraph/shared";
+import { costLabel, isFinalRunStatus, webRoutes, type RunSummary } from "@promptgraph/shared";
 import { useState } from "react";
 import { formatDateTime, formatDuration, prLabel } from "../../lib/format";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
@@ -111,7 +111,9 @@ function RunRow({ run, selected }: { run: RunSummary; selected: boolean }) {
         <span className="whitespace-nowrap">{formatDateTime(run.startedAt)}</span>
         <span className="text-muted-foreground/60">·</span>
         <span className="whitespace-nowrap tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
-        <span className="ml-auto font-mono">{formatCostUsd(run.usage.costUsd)}</span>
+        <span className="ml-auto font-mono" title={costLabel(run.usage.costUsd, run.billingMode).title}>
+          {costLabel(run.usage.costUsd, run.billingMode).text}
+        </span>
       </div>
       {run.error && <div className={`mt-1 line-clamp-2 ${run.status === "paused" ? "text-amber-700/90" : "text-red-700/90"}`}>{run.error}</div>}
       <CollapsibleContent>

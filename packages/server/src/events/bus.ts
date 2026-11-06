@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Lane, NodeRun, RunSummary, ServerMessageOf } from "@promptgraph/shared";
+import type { Lane, NodeRun, RunSummary, ServerMessageOf, UsageLimits } from "@promptgraph/shared";
 
 /** Chat panel messages (§21.6), broadcast as-is by the WsHub. */
 export type ChatServerMessage = ServerMessageOf<"chat:item" | "chat:delta" | "chat:status" | "chat:session" | "chat:deleted">;
@@ -45,6 +45,8 @@ export interface BusEvents {
   "session:revoked": { idHashes: string[] };
   /** The token was rotated: every socket is closed (Bearer ones included), DESIGN §14. */
   "token:rotated": Record<string, never>;
+  /** New subscription usage limits were observed (§23.3). */
+  "usage:limits": { limits: UsageLimits };
 }
 
 export type BusEventName = keyof BusEvents;

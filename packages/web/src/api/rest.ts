@@ -1,4 +1,5 @@
 import {
+  type ClaudeAuthInfo,
   type ClaudeCheckResponse,
   type ClaudeSetupResponse,
   type ChatSessionSummary,
@@ -31,6 +32,7 @@ import {
   type SaveGraphResponse,
   type StartRunResponse,
   type UpdateAppSettingsRequest,
+  type UsageLimitsResponse,
   type ValidationResult,
   type VoiceStatus,
   VOICE_API_PATH,
@@ -147,6 +149,10 @@ export const daemonApi = {
   updateSettings(patch: UpdateAppSettingsRequest): Promise<AppSettings> {
     return request("PUT", API.settings, patch);
   },
+  /** Last observed subscription usage limits (§23.3). */
+  usageLimits(): Promise<UsageLimitsResponse> {
+    return request("GET", API.usageLimits);
+  },
   /** Voice dictation status (§22): whisper binary, model and the resolved preferences. `refresh` skips the server's probe cache. */
   voiceStatus(refresh = false): Promise<VoiceStatus> {
     return request("GET", refresh ? `${VOICE_API_PATH}?refresh=1` : VOICE_API_PATH);
@@ -244,6 +250,10 @@ export function repoApi(repoId: string) {
     },
     claudeCheck(): Promise<ClaudeCheckResponse> {
       return request("POST", p.claudeCheck, {});
+    },
+    /** How Claude is billed in this repository (§23.1); `refresh` skips the daemon's cache. */
+    claudeAuth(refresh = false): Promise<ClaudeAuthInfo> {
+      return request("GET", p.claudeAuth(refresh));
     },
     listChatSessions(): Promise<ListChatSessionsResponse> {
       return request("GET", p.chatSessions);

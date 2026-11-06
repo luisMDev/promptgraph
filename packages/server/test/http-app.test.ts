@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createEmptyGraph, type GraphInput, type RunDetail } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ClaudeAuthProbe, type RawAuthStatus } from "../src/config/claude-auth.js";
 import { repoIdFor } from "../src/config/repo-id.js";
 import { helloProof } from "../src/config/token.js";
 import { EngineError } from "../src/engine/engine.js";
@@ -293,6 +294,37 @@ describe("misc routes", () => {
     expect(JSON.parse(fs.readFileSync(setup.ctx.paths.settingsFile, "utf8"))).toEqual({ notifications: false });
     const bad = await app.request("/api/settings", { method: "PUT", headers: JSON_AUTH, body: JSON.stringify({ notifications: "yes" }) });
     expect(bad.status).toBe(400);
+  });
+
+  it("reports how Claude is billed (cached unless refresh=1) and the last usage limits (§23)", async () => {
+    let calls = 0;
+    let now = 1_000_000;
+    setup.ctx.claudeAuth = new ClaudeAuthProbe({}, {
+      now: () => now,
+      run: async (_env, cwd) => {
+        calls++;
+        expect(cwd).toBe(repo);
+        return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro", email: "x@y.z" } as RawAuthStatus;
+      },
+    });
+    const auth = await (await app.request(`${R}/claude-auth`, { headers: AUTH })).json();
+    expect(auth).toMatchObject({ billingMode: "subscription", plan: "pro", apiKeyOverridesLogin: false });
+    expect(JSON.stringify(auth)).not.toContain("x@y.z");
+    await app.request(`${R}/claude-auth`, { headers: AUTH });
+    expect(calls).toBe(1);
+    await app.request(`${R}/claude-auth?refresh=1`, { headers: AUTH });
+    expect(calls).toBe(1); // a refresh right after a check reuses it
+    now += 2000;
+    await app.request(`${R}/claude-auth?refresh=1`, { headers: { ...AUTH, "sec-fetch-site": "same-site" } });
+    expect(calls).toBe(1); // not marked same-origin: served from the cache
+    await app.request(`${R}/claude-auth?refresh=1`, { headers: AUTH });
+    expect(calls).toBe(2);
+    expect((await app.request(`${R}/claude-auth`, { headers: HOST })).status).toBe(401);
+
+    expect(await (await app.request("/api/daemon/usage-limits", { headers: AUTH })).json()).toEqual({ limits: null });
+    setup.ctx.usageLimits.observe({ status: "allowed", unifiedWindows: { seven_day: { utilization: 0.25 } } });
+    const { limits } = (await (await app.request("/api/daemon/usage-limits", { headers: AUTH })).json()) as { limits: { windows: object } };
+    expect(limits.windows).toEqual({ seven_day: { utilization: 0.25, resetsAt: null, status: null } });
   });
 
   it("lists slash commands", async () => {

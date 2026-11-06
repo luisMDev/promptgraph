@@ -101,6 +101,7 @@ export class WsHub {
         this.signOut((c) => c.sessionHash !== null && revoked.has(c.sessionHash));
       }),
       bus.on("token:rotated", () => this.signOut(() => true)),
+      bus.on("usage:limits", ({ limits }) => this.broadcast({ type: "usage:limits", limits }, () => true)),
     );
     this.heartbeat = setInterval(() => this.checkAlive(), HEARTBEAT_MS);
     this.heartbeat.unref();

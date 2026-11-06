@@ -365,6 +365,8 @@ function repoApi(repoId: string) {
     commands: `${base}/commands`,
     claudeSetup: `${base}/claude-setup`,
     claudeCheck: `${base}/claude-setup/check`,
+    /** GET → ClaudeAuthInfo (§23.1), cached for minutes; `refresh` runs a new check. */
+    claudeAuth: (refresh = false) => `${base}/claude-auth${refresh ? "?refresh=1" : ""}`,
     /** GET list · POST create (§21). */
     chatSessions: `${base}/chat/sessions`,
     /** GET detail · DELETE. */
@@ -393,6 +395,8 @@ export const API = {
   },
   loginCodes: "/api/daemon/login-codes",
   rotateToken: "/api/daemon/token/rotate",
+  /** GET → UsageLimitsResponse (§23.3). */
+  usageLimits: "/api/daemon/usage-limits",
   sessions: "/api/daemon/sessions",
   session: (idOrAll: string) => `/api/daemon/sessions/${enc(idOrAll)}`,
   login: "/login",

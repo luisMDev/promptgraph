@@ -1,4 +1,4 @@
-import { nodeDisplayLabel, type GraphListItem, type NodeRun, type RepoInfoResponse, type RepoSummary, type RunDetail, type SlashCommand } from "@promptgraph/shared";
+import { nodeDisplayLabel, type ClaudeAuthInfo, type GraphListItem, type NodeRun, type RepoInfoResponse, type RepoSummary, type RunDetail, type SlashCommand } from "@promptgraph/shared";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { ApiRequestError, errorMessage, repoApi, type RepoApi } from "../api/rest";
@@ -54,12 +54,16 @@ export interface RepoCacheState {
   /** Run info of every run in `pending` (best effort: missing while loading or when the fetch failed). */
   pendingRuns: Record<string, PendingRunInfo>;
   summary: RepoSummary | null;
+  /** How Claude is billed in this repository (§23.1); null until loaded or when the request failed. */
+  claudeAuth: ClaudeAuthInfo | null;
 
   /** Info + graph list, once (a failed load is retried on the next call). */
   load(): Promise<void>;
   refreshGraphs(): Promise<void>;
   refreshPending(): Promise<void>;
   loadCommands(): Promise<void>;
+  /** GET …/claude-auth (best effort: a failure keeps the last value). */
+  loadClaudeAuth(refresh?: boolean): Promise<void>;
   setSummary(summary: RepoSummary): void;
 }
 
@@ -77,6 +81,7 @@ export function createRepoCache(repoId: string, api: RepoApi = repoApi(repoId)):
     pending: [],
     pendingRuns: {},
     summary: null,
+    claudeAuth: null,
 
     load() {
       if (get().info && get().graphs) return Promise.resolve();
@@ -134,6 +139,14 @@ export function createRepoCache(repoId: string, api: RepoApi = repoApi(repoId)):
         set({ commands });
       } catch {
         set({ commands: null });
+      }
+    },
+
+    async loadClaudeAuth(refresh = false) {
+      try {
+        set({ claudeAuth: await api.claudeAuth(refresh) });
+      } catch {
+        // The badge stays as it was; the next open retries.
       }
     },
 

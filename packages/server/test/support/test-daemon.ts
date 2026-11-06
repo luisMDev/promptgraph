@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { vi, type Mock } from "vitest";
 import type { ChatSpawner } from "../../src/chat/process.js";
+import type { AuthStatusRunner } from "../../src/config/claude-auth.js";
 import { createDaemonContext, type DaemonContext } from "../../src/daemon/context.js";
 import { createRepoContext, type RepoContext } from "../../src/daemon/repo-context.js";
 import { RepoRegistry } from "../../src/daemon/registry.js";
@@ -77,7 +78,12 @@ export interface TestDaemonOptions {
   warnings?: string[];
   /** Chat process spawner of every repository's ChatManager; default: none (tests never start the real claude). */
   chatSpawner?: ChatSpawner;
+  /** `claude auth status` of every repository (§23.1); default: NO_CLAUDE_AUTH. */
+  authStatusRunner?: AuthStatusRunner;
 }
+
+/** Default auth status of test daemons: a claude.ai Pro login, without running claude. */
+export const NO_CLAUDE_AUTH: AuthStatusRunner = async () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" });
 
 /** Default chat spawner of test daemons: tests never start the real claude. */
 export const NO_CLAUDE: ChatSpawner = () => {
@@ -87,7 +93,7 @@ export const NO_CLAUDE: ChatSpawner = () => {
 /**
  * A DaemonContext without HTTP server (tests call createHttpApp(ctx) / new WsHub(ctx) themselves): real
  * store, bus, settings, PTY manager, hook router and registry over a temp PG_HOME, token TEST_TOKEN,
- * hook secret TEST_HOOK_SECRET, chat spawner NO_CLAUDE unless given, voice service rooted at `root`.
+ * hook secret TEST_HOOK_SECRET, chat spawner NO_CLAUDE and auth status NO_CLAUDE_AUTH unless given, voice service rooted at `root`.
  * With `mockEngines`, each repository's engine is an EngineMock.
  */
 export async function createTestDaemon(opts: TestDaemonOptions): Promise<TestDaemon> {
@@ -98,6 +104,7 @@ export async function createTestDaemon(opts: TestDaemonOptions): Promise<TestDae
     warnings: opts.warnings ?? ["gh not found: PR nodes will fail"],
     env,
     chatSpawner: opts.chatSpawner ?? NO_CLAUDE,
+    authStatusRunner: opts.authStatusRunner ?? NO_CLAUDE_AUTH,
   });
   ctx.hookSecret = TEST_HOOK_SECRET;
   // Never the user's ~/whisper.cpp or ~/.claude: home is the test root; PATH comes only from `env`.

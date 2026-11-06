@@ -58,6 +58,7 @@ export function runDetailOf(graph: Graph, nodeRuns: NodeRun[], id = "r1"): RunDe
       pendingApprovals: 0,
       waitingInput: 0,
       usage: emptyUsage(),
+      billingMode: null,
       cleanedUp: false,
       graphSnapshot: graph,
     },

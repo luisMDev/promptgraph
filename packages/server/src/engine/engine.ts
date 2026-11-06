@@ -18,6 +18,7 @@ import {
   type GraphNodeOf,
   type Lane,
   type LanePlan,
+  type BillingMode,
   type LoopState,
   type NodeOutcome,
   type NodeRun,
@@ -70,6 +71,8 @@ export interface EngineDeps {
   env?: NodeJS.ProcessEnv;
   /** Max wait for graceful stops on cancel/shutdown before PTYs are killed. Default 5000 ms (§4.5). */
   stopTimeoutMs?: number;
+  /** How Claude is billed in this repository (§23.2), recorded on each new run; absent or failing → null. */
+  billingMode?: () => Promise<BillingMode | null>;
 }
 
 /** Error with an HTTP-mappable code; routes translate it into ApiError. */
@@ -195,6 +198,15 @@ export class Engine {
     });
   }
 
+  /** The repository's billing mode for a new run (§23.2); null when unknown or the check fails. */
+  private async currentBillingMode(): Promise<BillingMode | null> {
+    try {
+      return (await this.deps.billingMode?.()) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Loads + validates (phase) the graph (422 validation_failed with ValidationResult details), records
    * the graph hash as known, snapshots it, computes the LanePlan, persists the run + a pending node run
@@ -221,11 +233,12 @@ export class Engine {
     const plan = computeLanePlan(graph);
     const runId = newId();
     const shortId = await this.uniqueShortId(graph);
+    const billingMode = await this.currentBillingMode();
     const tracker = new ActivationTracker(graph);
     const loops = tracker.loopStates();
     const run = store.transaction(() => {
       store.setKnownGraphHash(repo.path, graphId, loaded.hash);
-      store.insertRun({ id: runId, repoPath: repo.path, graph, graphHash: loaded.hash, shortId, startedAt: this.now() });
+      store.insertRun({ id: runId, repoPath: repo.path, graph, graphHash: loaded.hash, shortId, startedAt: this.now(), billingMode });
       const r = loops.length > 0 ? store.updateRun(runId, { loops }) : store.getRun(runId)!;
       for (const node of graph.nodes) {
         store.insertNodeRun({ id: newId(), runId, nodeId: node.id, iteration: 0, attempt: 0, laneId: plan.laneOf.get(node.id) ?? null, status: "pending" });

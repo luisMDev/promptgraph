@@ -1,5 +1,5 @@
 import {
-  formatCostUsd,
+  costLabel,
   isActiveNodeStatus,
   isClaudeNode,
   isFinalRunStatus,
@@ -7,6 +7,7 @@ import {
   type GraphNodeOf,
   type Lane,
   type NodeRun,
+  type BillingMode,
   type RunStatus,
   nodeDisplayLabel,
 } from "@promptgraph/shared";
@@ -45,6 +46,7 @@ export function NodeRunDetails({
 }) {
   const label = nodeDisplayLabel(node);
   const attempts = iterations.find((e) => e.nodeRun.id === nodeRun?.id)?.attempts ?? 1;
+  const billingMode = useRun((s) => s.detail?.run.billingMode);
   return (
     <div>
       <div className="flex items-center gap-2 border-b px-4 py-3">
@@ -66,7 +68,7 @@ export function NodeRunDetails({
           {node.type === "condition" && <ConditionResult node={node} nodeRun={nodeRun} />}
           {nodeRun.snapshotStart && <ChangesSection nodeRun={nodeRun} label={label} />}
           <OutputSection nodeRun={nodeRun} reasonShown={node.type === "condition"} />
-          {nodeRun.output?.usage && <UsageSection usage={nodeRun.output.usage} />}
+          {nodeRun.output?.usage && <UsageSection usage={nodeRun.output.usage} billingMode={billingMode} />}
         </>
       )}
     </div>
@@ -245,7 +247,17 @@ function OutputSection({ nodeRun, reasonShown }: { nodeRun: NodeRun; reasonShown
   );
 }
 
-export function UsageSection({ usage, title = "Usage" }: { usage: NonNullable<NonNullable<NodeRun["output"]>["usage"]>; title?: string }) {
+export function UsageSection({
+  usage,
+  billingMode,
+  title = "Usage",
+}: {
+  usage: NonNullable<NonNullable<NodeRun["output"]>["usage"]>;
+  /** How the run was billed (§23.2): a subscription shows the cost as an API-price equivalent. */
+  billingMode: BillingMode | null | undefined;
+  title?: string;
+}) {
+  const cost = costLabel(usage.costUsd, billingMode);
   return (
     <Section title={title}>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
@@ -257,8 +269,10 @@ export function UsageSection({ usage, title = "Usage" }: { usage: NonNullable<No
         <span className="text-right font-mono">{formatTokens(usage.cacheCreationTokens)}</span>
         <span className="text-muted-foreground">Cache read</span>
         <span className="text-right font-mono">{formatTokens(usage.cacheReadTokens)}</span>
-        <span className="font-medium text-foreground/85">Estimated cost</span>
-        <span className="text-right font-mono font-medium text-foreground">{formatCostUsd(usage.costUsd)}</span>
+        <span className="font-medium text-foreground/85">{billingMode === "subscription" ? "API-equivalent cost" : "Estimated cost"}</span>
+        <span className="text-right font-mono font-medium text-foreground" title={cost.title}>
+          {cost.text}
+        </span>
       </div>
       {usage.model && <p className="text-[11px] text-muted-foreground">Model: {usage.model}</p>}
     </Section>

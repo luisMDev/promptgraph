@@ -33,7 +33,7 @@ const BRANCH_DAEMON_MIGRATION = `
 const DAEMON_TABLES = ["repos", "sessions", "meta", "chat_sessions", "runs"];
 
 describe("migrations 3 and 4 (DESIGN §11.2)", () => {
-  it("upgrades a version-3 database to 5 with chat sessions, repos, sessions and meta, keeping its runs", () => {
+  it("upgrades a version-3 database to 6 with chat sessions, repos, sessions and meta, keeping its runs", () => {
     const t = tempDir();
     cleanups.push(t.cleanup);
     const file = path.join(t.dir, "state.db");
@@ -51,10 +51,11 @@ describe("migrations 3 and 4 (DESIGN §11.2)", () => {
 
     const db = openDatabase(file);
     cleanups.push(() => db.close());
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
-    expect(MIGRATIONS).toHaveLength(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(MIGRATIONS).toHaveLength(6);
     expect(tables(db)).toEqual(expect.arrayContaining(DAEMON_TABLES));
-    expect(new Store(db).getRun("r1")?.status).toBe("paused");
+    // §23.2: runs recorded before billing was tracked read as unknown.
+    expect(new Store(db).getRun("r1")).toMatchObject({ status: "paused", billingMode: null });
   });
 
   it.each([
@@ -72,7 +73,7 @@ describe("migrations 3 and 4 (DESIGN §11.2)", () => {
 
     const db = openDatabase(file);
     cleanups.push(() => db.close());
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
     expect(tables(db)).toEqual(expect.arrayContaining(DAEMON_TABLES));
     const store = new Store(db);
     expect(store.insertChatSession({ id: "c1", repoPath: "/repo" }).repoPath).toBe("/repo");

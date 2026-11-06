@@ -1,4 +1,4 @@
-import type { AppSettings, DaemonInfoResponse, RepoSummary } from "@promptgraph/shared";
+import type { AppSettings, DaemonInfoResponse, RepoSummary, UsageLimits } from "@promptgraph/shared";
 import { create } from "zustand";
 import { daemonApi, errorMessage } from "../api/rest";
 import type { ConnectionState, WsStatus } from "../api/ws";
@@ -28,10 +28,16 @@ export interface DaemonState {
   versionMismatch: boolean;
   /** Repositories removed while this page was open ("Add again" posts the remembered path). */
   removed: Record<string, RemovedRepo>;
+  /** Last observed subscription usage limits (§23.3), live from `usage:limits`; null when none was seen. */
+  usageLimits: UsageLimits | null;
 
   loadInfo(): Promise<void>;
   loadRepos(): Promise<void>;
   loadSettings(): Promise<void>;
+  /** GET /api/daemon/usage-limits (best effort). */
+  loadUsageLimits(): Promise<void>;
+  /** `usage:limits`. */
+  applyUsageLimits(limits: UsageLimits): void;
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
   /** `repo:status`, or the result of POST /api/repos. */
   applyRepoStatus(repo: RepoSummary): void;
@@ -57,6 +63,7 @@ export const useDaemonStore = create<DaemonState>()((set, get) => ({
   signedOut: false,
   versionMismatch: false,
   removed: {},
+  usageLimits: null,
 
   async loadInfo() {
     try {
@@ -64,6 +71,20 @@ export const useDaemonStore = create<DaemonState>()((set, get) => ({
     } catch (err) {
       set({ infoError: errorMessage(err) });
     }
+  },
+
+  async loadUsageLimits() {
+    try {
+      const { limits } = await daemonApi.usageLimits();
+      // A `usage:limits` that arrived meanwhile is newer.
+      if (limits && (get().usageLimits?.observedAt ?? 0) <= limits.observedAt) set({ usageLimits: limits });
+    } catch {
+      // Best effort: shown when the next observation arrives.
+    }
+  },
+
+  applyUsageLimits(limits) {
+    set({ usageLimits: limits });
   },
 
   async loadRepos() {

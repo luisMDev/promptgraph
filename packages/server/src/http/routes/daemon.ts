@@ -7,6 +7,7 @@ import {
   type LoginCodeResponse,
   type OkResponse,
   type RevokeSessionsResponse,
+  type UsageLimitsResponse,
 } from "@promptgraph/shared";
 import { helloProof } from "../../config/token.js";
 import { SUPPORTED_PHASE, VERSION } from "../../config/version.js";
@@ -21,7 +22,7 @@ import type { App } from "../repo-scope.js";
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 /**
- * GET /api/daemon/hello?nonce= (public, DESIGN §4.1 item 3) · GET /api/daemon · and the Bearer-only
+ * GET /api/daemon/hello?nonce= (public, DESIGN §4.1 item 3) · GET /api/daemon · GET /api/daemon/usage-limits (§23.3) · and the Bearer-only
  * routes of DESIGN §14 (tokenAuth refuses cookies there): POST /api/daemon/login-codes, POST
  * /api/daemon/token/rotate, GET /api/daemon/sessions, DELETE /api/daemon/sessions/:id.
  */
@@ -45,6 +46,8 @@ export function registerDaemonRoutes(app: App, daemon: DaemonContext): void {
       notificationsAvailable: platform !== "none",
     });
   });
+
+  app.get("/api/daemon/usage-limits", (c) => c.json<UsageLimitsResponse>({ limits: daemon.usageLimits.current() }));
 
   app.post("/api/daemon/login-codes", async (c) => {
     const body = await readBody(c, LoginCodeRequestSchema);

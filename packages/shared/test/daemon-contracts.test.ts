@@ -50,6 +50,7 @@ const run: RunSummary = {
   pendingApprovals: 0,
   waitingInput: 0,
   usage: emptyUsage(),
+  billingMode: null,
   cleanedUp: false,
 };
 

@@ -56,6 +56,7 @@ export function createDispatcher(): Dispatcher {
   function refreshAll(): void {
     const daemon = useDaemonStore.getState();
     void daemon.loadInfo();
+    void daemon.loadUsageLimits();
     const listedBefore = new Set((daemon.repos ?? []).map((r) => r.id));
     void daemon.loadRepos().then(() => dropReposGoneWhileDisconnected(listedBefore));
     for (const cache of liveRepoCaches()) {
@@ -120,6 +121,9 @@ export function createDispatcher(): Dispatcher {
       case "repo:status":
         useDaemonStore.getState().applyRepoStatus(msg.repo);
         peekRepoCache(msg.repo.id)?.getState().setSummary(msg.repo);
+        return;
+      case "usage:limits":
+        useDaemonStore.getState().applyUsageLimits(msg.limits);
         return;
       case "repo:removed":
         repoRemoved(msg.repoId);

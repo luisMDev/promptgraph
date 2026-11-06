@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BillingModeSchema } from "./billing.js";
 import { GraphSchema } from "./graph.js";
 import { LaneStatusSchema, NodeStatusSchema, RunStatusSchema } from "./status.js";
 
@@ -137,6 +138,8 @@ export const RunSummarySchema = z.object({
   pendingApprovals: z.number().int(),
   waitingInput: z.number().int(),
   usage: TokenUsageSchema,
+  /** How Claude was billed when the run started (§23); null for runs recorded before it was tracked or when unknown. */
+  billingMode: BillingModeSchema.nullable(),
   /** Worktrees were removed (cleanup done). */
   cleanedUp: z.boolean(),
 });

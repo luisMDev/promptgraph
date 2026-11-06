@@ -128,4 +128,6 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX IF NOT EXISTS chat_sessions_repo ON chat_sessions (repo_path, updated_at DESC);
   `,
+  // §23.2: how Claude was billed when the run started (BillingMode); NULL for older runs or when unknown.
+  `ALTER TABLE runs ADD COLUMN billing_mode TEXT;`,
 ];

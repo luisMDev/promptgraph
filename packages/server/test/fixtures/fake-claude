@@ -47,6 +47,14 @@ if (args.version) {
   process.exit(0);
 }
 
+// `claude auth status --json` (DESIGN §23.1): a claude.ai Max login, or FAKE_CLAUDE_AUTH_STATUS (raw JSON). Not logged:
+// the daemon checks it in the background, and the call logs count Claude sessions.
+if (process.argv[2] === "auth" && process.argv[3] === "status") {
+  const status = process.env.FAKE_CLAUDE_AUTH_STATUS ?? JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max", planTier: "max_20x" });
+  process.stdout.write(status + "\n");
+  process.exit(0);
+}
+
 const cwd = process.cwd();
 const model = ALIASES[args.model] ?? args.model ?? DEFAULT_MODEL;
 const sessionId = args.resume ?? args["session-id"] ?? randomUUID();

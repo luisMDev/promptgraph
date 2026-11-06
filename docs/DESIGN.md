@@ -505,7 +505,8 @@ git update-ref refs/promptgraph/<run-id>/<node-run-id>/<start|end> <sha>
 CREATE TABLE runs (
   id TEXT PRIMARY KEY, repo_path TEXT, graph_id TEXT,
   graph_snapshot TEXT NOT NULL,          -- JSON
-  status TEXT, started_at INTEGER, finished_at INTEGER
+  status TEXT, started_at INTEGER, finished_at INTEGER,
+  billing_mode TEXT                      -- how Claude was billed at run start, §23.2; NULL = unknown
 );
 CREATE TABLE lanes (
   id TEXT, run_id TEXT, branch TEXT, worktree_path TEXT,
@@ -547,7 +548,7 @@ CREATE TABLE sessions (                  -- signed-in browsers and desktop windo
   label TEXT NOT NULL,                   -- short user-agent summary ("Firefox", "promptgraph desktop")
   created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
 );
-CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- one-time steps (repos_backfilled), token_fingerprint (§14)
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- one-time steps (repos_backfilled), token_fingerprint (§14), usage_limits (§23.3)
 ```
 
 `runs` keep `repo_path` (no `repo_id` column): a repository's id is a function of its path, so the join is `repos.path = runs.repo_path` and removing then re-adding a repository finds its runs again.
@@ -585,6 +586,7 @@ Daemon-level routes:
 | DELETE | `/api/repos/:repoId?force=1` | Forget a repository (§4.2); 409 `repo_active` while it has a running run and `force` is not set |
 | GET | `/api/fs/dirs?path=&hidden=1` | `ListDirsResponse`: the subdirectories of `path` (absolute or `~`-prefixed; default the daemon user's home), each flagged `isGitRepo` when it holds a `.git`, plus `parent`, `home` and the directory's own `isGitRepo`; dot-directories only with `hidden=1`. Names only, no file contents. 422 `path_not_absolute`, 404 `not_a_directory`, 403 `permission_denied`. For Home's folder picker (§13.3) |
 | GET/PUT | `/api/settings` | App settings (global) |
+| GET | `/api/daemon/usage-limits` | `UsageLimitsResponse`: the last subscription usage limits Claude Code reported (§23.3), or `null` |
 | POST | `/api/daemon/login-codes` | One-time login code `{ code, expiresAt }` (**Bearer only**, §14); optional body `{ desktop: true }` labels the session it creates "promptgraph desktop" |
 | POST | `/api/daemon/token/rotate` | Replace the token, drop every session (**Bearer only**, §14) |
 | GET | `/api/daemon/sessions` | `ListSessionsResponse` (**Bearer only**) |
@@ -615,6 +617,7 @@ Repository routes, all under `/api/repos/:repoId` (404 `unknown_repo` for an unr
 | GET | `/commands` | Available slash commands/skills (for the `command` picker) |
 | GET | `/claude-setup` | Setup guide for this repository (§19.5) |
 | POST | `/claude-setup/check` | Runs `claude mcp get promptgraph` **in the repository** (`cwd` = its path), because MCP servers registered at local or project scope depend on the directory (§19.5) |
+| GET | `/claude-auth?refresh=1` | `ClaudeAuthInfo` (§23.1): `claude auth status` run **in the repository** with the daemon's environment, cached 5 min; `refresh` re-checks (honoured as for `/api/voice`, at most once per second) |
 | GET/POST | `/chat/sessions` | This repository's chat sessions / create one (`{ model? }`), §21 |
 | GET/DELETE | `/chat/sessions/:id` | Session + item history + open permission prompts + partial streamed text / delete (kills the process; the Claude transcript stays) |
 
@@ -631,6 +634,7 @@ One socket per page, whatever the number of tabs and repositories. Run and PTY t
 { type: "hello", version }
 { type: "repo:status", repo }                 // RepoSummary; to every client (Home, tab badges), debounced 250 ms per repo
 { type: "repo:removed", repoId }              // to every client
+{ type: "usage:limits", limits }              // UsageLimits (§23.3); to every client
 { type: "run:update", repoId, run }           // to clients subscribed to the repo
 { type: "graphs:changed", repoId, graphId }   // to clients subscribed to the repo
 { type: "node:update", nodeRun }              // to clients subscribed to the run
@@ -1328,3 +1332,53 @@ Audio stays on the machine: browser → `127.0.0.1` WebSocket (token-protected, 
 - whisper.cpp's CLI flags and output are not a stable API; the `--help` smoke test catches a broken binary, and tests use a fake `whisper-cli`.
 - Measured with a real whisper.cpp build (`ggml-base`, CPU, the 11 s `jfk.wav` sample streamed in real time over the WS): partials every ~2 s, and 1.5–2 s from `voice:stop` to `voice:final`. The final transcript matched the reference sentence; cancelling mid-pass left no temp WAV and no whisper process.
 - A language that does not match the speech degrades the result (with `language: "es"` inherited from Claude Code, English audio came back with a stray leading word). Users who dictate in several languages should set `auto`.
+
+## 23. Billing mode and subscription usage
+
+promptgraph shows an estimated cost for every Claude node, run and chat, at list API prices (`pricing.ts`). That number means different things depending on how Claude Code is authenticated: with a claude.ai subscription (Pro, Max, Team, Enterprise) nothing is billed per token and what matters is the plan's usage limits; with an Anthropic API key every token is paid. So promptgraph shows which one is in use, labels costs accordingly and, on a subscription, shows the last usage limits Claude Code reported.
+
+Every signal comes from an interface Claude Code supports (invariant 1): the `claude auth status` command and the stream-json output of the chat process. promptgraph never reads Claude Code's credentials (`~/.claude/.credentials.json`, the keychain) and never calls Anthropic endpoints with the user's OAuth token: the undocumented usage endpoint some tools poll would need both (the same reasoning as §22.1).
+
+### 23.1 Billing mode
+
+`GET /api/repos/:repoId/claude-auth` → `ClaudeAuthInfo`. The daemon runs `claude auth status --json` (documented; JSON by default, exit code 1 when signed out) with its own environment (what every Claude child inherits, §4.1 item 5) and `cwd` = the repository's main checkout, because project settings can set `apiKeyHelper` or `env`. The result is cached per repository for 5 minutes (`ClaudeAuthProbe`); the header badge re-checks when it is opened. Mapping of `authMethod` (verified against Claude Code 2.1.319 with each method):
+
+| `authMethod` | `BillingMode` | |
+|---|---|---|
+| `claude.ai` | `subscription` | `subscriptionType` (`max`) and `planTier` (`max_20x`) give the plan, "Max 20x" |
+| `api_key`, `api_key_helper` | `api` | `apiKeySource`: `ANTHROPIC_API_KEY` or `apiKeyHelper` |
+| `third_party` | `cloud` | `apiProvider`: `bedrock`, `vertex`, `foundry` |
+| `oauth_token` | `subscription` with `CLAUDE_CODE_OAUTH_TOKEN` (a `claude setup-token` token); `unknown` with `ANTHROPIC_AUTH_TOKEN`, which takes precedence and is usually an LLM gateway | |
+| `none` / not logged in | `none` | |
+
+Email, organization id and name are dropped: they never leave the daemon. A failed check (claude not on `PATH`, timeout, no JSON) gives `unknown` with `error`.
+
+**An API key that hides the subscription.** Claude Code prefers `ANTHROPIC_API_KEY` over a claude.ai login. In `-p` mode (the chat, §21, and the headless helpers: commit/PR messages, judges) the key is always used; interactive node terminals ask once whether to use it. A key exported in the login shell profile therefore bills chat and helpers to the API although the user has a subscription. When `apiKeySource` is `ANTHROPIC_API_KEY`, the probe runs `claude auth status` a second time without that variable; if that reports `claude.ai`, `apiKeyOverridesLogin` is set and the badge warns. promptgraph only warns: it does not remove the key from the children's environment, which the user chose (§4.1 item 5).
+
+### 23.2 Costs per billing mode
+
+`Engine.startRun` records the repository's billing mode on the run (`runs.billing_mode`, `RunSummary.billingMode`, from the probe's cache; a failed check records `null`). Recording it keeps the history right after the user switches accounts. `costLabel(usd, mode)` formats every cost the UI shows (node cards, run controls, history, report, inspector):
+
+- `subscription`: `≈$0.42`, titled "at API prices, included in your Claude subscription"; the report and inspector say "API-equivalent cost";
+- `api`: `$0.42`, what the API bills;
+- `cloud`: `$0.42`, an estimate at Anthropic prices (the provider bills its own);
+- `null` (older runs, unknown): the plain estimate, as before.
+
+The chat panel uses the repository's current billing mode for its session costs.
+
+### 23.3 Subscription usage limits
+
+The chat's stream-json output carries `rate_limit_event` lines (verified against Claude Code 2.1.319):
+
+```json
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1794398400,"rateLimitType":"seven_day",
+ "overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":1794398400,"status":"allowed"}}}}
+```
+
+`status` is `allowed`, `allowed_warning` or `rejected`; `utilization` is a fraction; times are epoch seconds. Claude Code sends what it learned from the last API response, not always every window, so `mergeUsageLimits` keeps windows it did not report until their reset time passes. The `ChatNormalizer` turns each line into a `rate_limit` event, the `ChatManager` hands it to the daemon-wide `UsageLimitsTracker` (`onRateLimit`; account-wide, so not per repository), which stores the merged `UsageLimits` in `meta.usage_limits` (it survives a restart) and broadcasts `usage:limits` to every client. `GET /api/daemon/usage-limits` returns the last value.
+
+These are observations: they are as old as the last chat reply (`observedAt`, shown as "Last reported … ago"). Node terminals are interactive sessions without stream-json, so runs alone do not update them. Claude Code's status line receives `rate_limits.five_hour` / `seven_day` for subscribers after each response; a `statusLine` command added to the generated `--settings` (§7.2) could forward it like `pg-hook`, but it would replace the user's own status line in node terminals and whether `--settings` may set it is not documented. It is left for later.
+
+### 23.4 UI
+
+The header shows a badge next to Chat: the plan ("Max 20x"), "API key", the cloud provider, "Custom auth" or "Signed out". It turns amber, with a warning icon, when an API key overrides a claude.ai login, when signed out, or on a subscription when the limits' status is not `allowed` or a window is at 80% or more. Its popover explains the mode, shows the API-key warning with how to fix it (remove the key from the shell profile, `promptgraph stop`, start again), and on a subscription one bar per window (5-hour, weekly, weekly per model, extra usage) with its reset time and the observation's age. Opening it re-checks the billing mode.

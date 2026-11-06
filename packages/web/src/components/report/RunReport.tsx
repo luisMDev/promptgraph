@@ -1,6 +1,7 @@
 import {
-  formatCostUsd,
+  costLabel,
   isFinalRunStatus,
+  type BillingMode,
   type ChangeStats,
   type ReportLane,
   type ReportNode,
@@ -114,7 +115,7 @@ export function RunReport({ runId }: { runId: string }) {
                 </ul>
               </ReportSection>
             )}
-            <Nodes nodes={report.nodes} nodeRunPath={nodeRunPath} />
+            <Nodes nodes={report.nodes} nodeRunPath={nodeRunPath} billingMode={report.run.billingMode} />
             <Lanes runId={runId} lanes={report.lanes} />
           </>
         )}
@@ -151,8 +152,11 @@ function Summary({ report }: { report: RunReportResponse }) {
       <Stat label="Waiting for you" hint="Time steps spent idle, waiting for input or for approval">
         {waited > 0 ? formatDuration(waited) : "None"}
       </Stat>
-      <Stat label="Estimated cost" hint={`${formatTokens(tokens)} tokens`}>
-        {formatCostUsd(run.usage.costUsd)}
+      <Stat
+        label={run.billingMode === "subscription" ? "API-equivalent cost" : "Estimated cost"}
+        hint={`${formatTokens(tokens)} tokens. ${costLabel(run.usage.costUsd, run.billingMode).title}`}
+      >
+        {costLabel(run.usage.costUsd, run.billingMode).text}
       </Stat>
       <Stat label="Steps">
         <span className="text-sm">
@@ -216,7 +220,7 @@ function Stalls({ stalls, status, nodes, nodeRunPath }: { stalls: ReportStall[];
   );
 }
 
-function Nodes({ nodes, nodeRunPath }: { nodes: ReportNode[]; nodeRunPath: (nodeRunId: string) => string }) {
+function Nodes({ nodes, nodeRunPath, billingMode }: { nodes: ReportNode[]; nodeRunPath: (nodeRunId: string) => string; billingMode: BillingMode | null }) {
   return (
     <ReportSection title="Steps">
       <div className="overflow-x-auto rounded-lg border">
@@ -234,7 +238,7 @@ function Nodes({ nodes, nodeRunPath }: { nodes: ReportNode[]; nodeRunPath: (node
           </thead>
           <tbody className="divide-y bg-card/60">
             {nodes.map((n) => (
-              <NodeRow key={n.nodeRun.id} node={n} nodeRunPath={nodeRunPath} />
+              <NodeRow key={n.nodeRun.id} node={n} nodeRunPath={nodeRunPath} billingMode={billingMode} />
             ))}
           </tbody>
         </table>
@@ -243,7 +247,7 @@ function Nodes({ nodes, nodeRunPath }: { nodes: ReportNode[]; nodeRunPath: (node
   );
 }
 
-function NodeRow({ node, nodeRunPath }: { node: ReportNode; nodeRunPath: (nodeRunId: string) => string }) {
+function NodeRow({ node, nodeRunPath, billingMode }: { node: ReportNode; nodeRunPath: (nodeRunId: string) => string; billingMode: BillingMode | null }) {
   const view = useView();
   const nr = node.nodeRun;
   const style = nodeRunStyle(nr);
@@ -288,7 +292,7 @@ function NodeRow({ node, nodeRunPath }: { node: ReportNode; nodeRunPath: (nodeRu
           <span className="text-muted-foreground/60">—</span>
         )}
       </td>
-      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-foreground/85">{o?.usage ? formatCostUsd(o.usage.costUsd) : "—"}</td>
+      <td className="px-3 py-2 text-right font-mono whitespace-nowrap text-foreground/85">{o?.usage ? costLabel(o.usage.costUsd, billingMode).text : "—"}</td>
       <td className="max-w-80 px-3 py-2 text-foreground/85">
         {o?.prUrl && (
           <a href={o.prUrl} target="_blank" rel="noreferrer" className="block text-blue-600 hover:underline">

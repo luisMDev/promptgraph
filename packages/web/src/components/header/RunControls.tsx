@@ -1,4 +1,4 @@
-import { formatCostUsd, isFinalRunStatus, webRoutes } from "@promptgraph/shared";
+import { costLabel, isFinalRunStatus, webRoutes } from "@promptgraph/shared";
 import { Loader2Icon, Redo2Icon, Undo2Icon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -122,8 +122,8 @@ export function RunControls() {
         </Button>
       )}
       {shownRun && (
-        <span className="rounded-md bg-card px-2 py-1 font-mono text-xs text-muted-foreground shadow-soft ring-1 ring-border" title={`${shownRun.usage.inputTokens + shownRun.usage.outputTokens} input+output tokens (estimated cost)`}>
-          {formatCostUsd(shownRun.usage.costUsd)}
+        <span className="rounded-md bg-card px-2 py-1 font-mono text-xs text-muted-foreground shadow-soft ring-1 ring-border" title={`${shownRun.usage.inputTokens + shownRun.usage.outputTokens} input+output tokens. ${costLabel(shownRun.usage.costUsd, shownRun.billingMode).title}`}>
+          {costLabel(shownRun.usage.costUsd, shownRun.billingMode).text}
         </span>
       )}
       {shownRun && (
@@ -245,7 +245,9 @@ export function RunSelector() {
                   <span className="font-mono text-xs">#{r.shortId}</span>
                   <span className="text-xs text-muted-foreground">{formatDateTime(r.startedAt)}</span>
                   <span className={`text-xs ${RUN_STATUS_STYLE[r.status].text}`}>{isFinalRunStatus(r.status) ? RUN_STATUS_STYLE[r.status].label : "live"}</span>
-                  <span className="ml-auto font-mono text-xs text-muted-foreground">{formatCostUsd(r.usage.costUsd)}</span>
+                  <span className="ml-auto font-mono text-xs text-muted-foreground" title={costLabel(r.usage.costUsd, r.billingMode).title}>
+                    {costLabel(r.usage.costUsd, r.billingMode).text}
+                  </span>
                 </Link>
               </DropdownMenuRadioItem>
             ))}

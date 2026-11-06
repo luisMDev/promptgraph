@@ -180,6 +180,13 @@ describe("ChatNormalizer", () => {
     ]);
   });
 
+  it("turns rate_limit_event lines into rate_limit events and ignores malformed ones (§23.3)", () => {
+    const info = { status: "allowed", rateLimitType: "seven_day", unifiedWindows: { seven_day: { utilization: 0.1, resetsAt: 1794398400 } } };
+    expect(make().handle({ type: "rate_limit_event", rate_limit_info: info, uuid: "u", session_id: "s" })).toEqual([{ kind: "rate_limit", info }]);
+    expect(make().handle({ type: "rate_limit_event" })).toEqual([]);
+    expect(make().handle({ type: "rate_limit_event", rate_limit_info: { utilization: "high" } })).toEqual([]);
+  });
+
   it("numbers text blocks only, so a text after a tool use gets #1 in both streams", () => {
     const norm = make();
     const events = all(norm, [
@@ -328,6 +335,17 @@ describe("ChatManager", () => {
     expect(store.getChatSession("sess-1")).toMatchObject({ repoPath, model: "opus", title: null, started: false });
     expect(manager.get("nope")).toBeUndefined();
     expect(() => manager.send("nope", "x", CONTEXT)).toThrow(ChatError);
+  });
+
+  it("hands rate_limit_event lines to onRateLimit without adding chat items (§23.3)", () => {
+    const seen: unknown[] = [];
+    manager = makeManager({ onRateLimit: (info) => seen.push(info) });
+    manager.create();
+    manager.send("sess-1", "hi", CONTEXT);
+    const info = { status: "allowed_warning", rateLimitType: "five_hour", utilization: 0.85, resetsAt: 1794398400 };
+    fake.last().emit(initLine("sess-1"), { type: "rate_limit_event", rate_limit_info: info });
+    expect(seen).toEqual([info]);
+    expect(kinds()).toEqual(["user"]);
   });
 
   it("runs several turns on one process, streaming deltas, with the context block prepended", () => {
