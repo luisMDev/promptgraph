@@ -968,7 +968,7 @@ lib/router/Link.tsx              <Link to replace?>: real <a href>; plain click 
                                  Ctrl/Cmd+Shift → foreground tab, Shift/Alt alone → browser default; onClick runs first
                                  (preventDefault cancels). linkClickAction(event) is the pure decision
 lib/keymap.ts                    resolveKey(event, {desktop, terminalFocused}) → KeyAction | null (pure; DESIGN §13.4 table; event.code;
-                                 AltGraph → null; with a terminal focused only next/prev), terminalHasFocus (focus inside `.xterm`),
+                                 AltGraph → null; with a terminal focused only next/prev; Ctrl+J / Alt+J → toggleChat, §21.11), terminalHasFocus (focus inside `.xterm`),
                                  installKeymap(window, {desktop, onAction}) (keydown, capture phase; a handled key is prevented and
                                  stopped; auto-repeat only for Tab/PageUp/PageDown)
 lib/desktop.ts                   DesktopBridge {isDesktop, customTitleBar, minimize, toggleMaximize, isMaximized, close,
@@ -1009,9 +1009,21 @@ api/ws.ts                        WsClient({url?, checkSession?, buildVersion?, u
 store/tabs-store.ts              createTabsStore({session, local, initialPath?}) (zustand vanilla), tabsStore() (the page's, from
                                  window storages + URL), setTabsStore (tests), useTabs, activeTab, runTabAction(store, KeyAction),
                                  parsePersistedTabs, tabPath (isSafeNextPath + normalizePath, else "/"). State {tabs: Tab {id, path,
-                                 title?}[], activeId, mru, closed: {path, title?, index}[] (≤ 10), lastNavigation {tabId, path,
+                                 title?, chats?: TabChats {repoId, ids (≤ MAX_TAB_CHATS = 8), open}}[], activeId, mru, closed: {path, title?, index}[] (≤ 10), lastNavigation {tabId, path,
                                  replace} | null}; actions open(path, {activate, dedupe = true}) → id, close, activate, navigate(id,
-                                 path, {replace?}), applyHistory(id, path), next(±1), goto(index | "last"), reopenClosed, setTitle
+                                 path, {replace?}), applyHistory(id, path), next(±1), goto(index | "last"), reopenClosed, setTitle,
+                                 move, setChats(id, chats | null) (chats survive navigation within their repository only;
+                                 DESIGN §21.11); runTabAction("toggleChat") → emitChatShortcut()
+store/chat-dock.ts               pure TabChats transitions (DESIGN §21.11): openChat(chats, repoId, id), toggleChat, minimizeChats,
+                                 closeChat (null when empty), dropDeleted(chats, exists), shortcutTarget → minimize | open | new
+store/chat-store.ts              createChatStore / getChatStore per repository: sessions, views (one per opened session),
+                                 openSession(id) (detail once), newSession, deleteSession, send, interrupt, answerPermission,
+                                 resync (every opened view), applyServerMessage; no shown-session state (tabs own that)
+lib/chat-shortcut.ts             onChatShortcut(listener) / emitChatShortcut(): the active tab's ChatDock listens
+components/chat/ChatDock.tsx     ChatDock (in RepoView, inside the view): bar items portalled into TabContext.bottomBar (inline
+                                 without a tab), the open ChatWindow, Ctrl+J while its tab is active, drops deleted sessions
+components/chat/ChatPanel.tsx    ChatWindow({sessionId, actions {onMinimize, onClose, expanded, onToggleExpanded}}) (floating;
+                                 Esc minimises unless used or dictating), ChatConversation({sessionId}), chatTitle, ContextChip
 store/toast-store.ts             useToastStore {toasts, toast, dismiss} (the sequence counter lives in the store), toast()
 store/daemon-store.ts            useDaemonStore: info, repos (sorted by last opened; live from repo:status / repo:removed), settings,
                                  connection, signedOut, versionMismatch, removed {id, path, name}, usageLimits (live from usage:limits);
@@ -1054,8 +1066,12 @@ components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End
                                  isDesktop && customTitleBar
 components/tabs/TabViews.tsx     one `[data-tab-view=<id>]` per mounted tab (planMounted; starts with the active one only), inactive
                                  ones `hidden` + `inert`; each provides LocationContext over its tab (navigate → tabs.navigate,
-                                 openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving
-components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, reportEditor}; useTabContext() (null outside tabs)
+                                 openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving; the view
+                                 renders in `[data-pg-panel]` (inset panel) above `[data-pg-bottom-bar]` (the tab's bottom bar:
+                                 a start slot, ClaudeStatus = BillingBadge + ClaudeSetupButton, and an end slot, ChatDock)
+components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, reportEditor, chats, setChats, bottomBar, bottomBarStart};
+                                 useTabContext()
+                                 (null outside tabs)
 components/tabs/use-tab-title.ts useTabTitle(tab) (daemon summary name or cache info name, cache graphs, persisted title),
                                  useTabAttention(tab) (repo summary waiting.approval + waiting.input > 0), useLoadTabRepos(tabs)
                                  (repo cache load() for every repository with a tab, removed ones skipped)

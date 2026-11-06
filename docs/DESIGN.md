@@ -525,7 +525,7 @@ CREATE TABLE events (                    -- append-only log; drives UI replay an
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, node_run_id TEXT,
   type TEXT, payload TEXT, at INTEGER
 );
-CREATE TABLE chat_sessions (             -- chat panel, §21.8; history comes from the Claude transcript
+CREATE TABLE chat_sessions (             -- chats, §21.8; history comes from the Claude transcript
   id TEXT PRIMARY KEY,                   -- = Claude session id
   repo_path TEXT, title TEXT, model TEXT,
   total_cost_usd REAL,
@@ -725,7 +725,7 @@ Lists every registered repository with: name and path, availability, active runs
 
 ### 13.4 Tabs
 
-A Linear/Notion-like tab strip at the top of the page, implemented in React (it works in a browser tab as well as in the desktop window, where it is the window's title bar, §20). Its first element is the app logo, which activates the Home tab (opening one when there is none).
+A Linear/Notion-like tab strip at the top of the page, implemented in React (it works in a browser tab as well as in the desktop window, where it is the window's title bar, §20). Its first element is the app logo, which activates the Home tab (opening one when there is none). Tabs are separate rounded pills on the window frame, without borders; the active one is lit (a lighter fill). Each tab's view sits below in an inset, rounded, bordered panel, and under the panel is the tab's bottom bar: in a repository tab, Claude's billing badge (§23.4) and the **Claude Code** setup button (§19.5) on the left, its chats on the right (§21.11).
 
 - **Tab** = `{ id, path, title? }`, held by a global tab store (zustand). A tab may show any view of any repository.
 - **Persistence is per window.** Several windows can be open on the same origin at once (each `promptgraph open` opens a browser tab, a link can be opened in a browser tab, a second desktop launch opens a second window) and they share `localStorage`, so the live tab set (tabs, active id, MRU order, at most 30 tabs) is kept in **`sessionStorage`** (`pg.tabs.v1`), which survives a reload but belongs to one window. Every change is also mirrored to `localStorage` (`pg.tabs.last.v1`), used only to seed a window that starts without a session tab set (a new browser window, the desktop app after a restart); last writer wins there, and no window reads it after its start. Both are validated with zod on load; corrupt data gives one Home tab. Browser storage is per origin, which is why the daemon's port is sticky (§4.1 item 2).
@@ -960,7 +960,7 @@ The MCP server finds the daemon through `daemon.json` (§11.3) and the token fil
 
 ### 19.5 Setup guide in the UI
 
-The header has a **Claude Code** button that opens a wizard with five steps: connect (plugin or MCP only, with copy buttons for the commands, and `PROMPTGRAPH_BIN` for a plugin that cannot find `promptgraph`), check (`POST /api/repos/:repoId/claude-setup/check` runs `claude mcp get promptgraph` in the repository and reports whether it is configured), skills (what each skill does and example requests), tools (grouped by purpose), and prompts to try.
+The bottom bar of a repository tab (§13.4) has a **Claude Code** button that opens a wizard with five steps: connect (plugin or MCP only, with copy buttons for the commands, and `PROMPTGRAPH_BIN` for a plugin that cannot find `promptgraph`), check (`POST /api/repos/:repoId/claude-setup/check` runs `claude mcp get promptgraph` in the repository and reports whether it is configured), skills (what each skill does and example requests), tools (grouped by purpose), and prompts to try.
 
 - `GET /api/repos/:repoId/claude-setup` derives the commands from the running daemon: the CLI entry (`process.argv[1]`), the Node binary, the tab's repository, and where the plugin comes from: the checkout, when it bundles the plugin (`.claude-plugin/marketplace.json` two levels above the server package: `/plugin marketplace add <checkout>`); for a daemon that runs from a desktop runtime (`SERVER_PACKAGE_DIR/..` has a valid `manifest.json`), which ships no plugin files (§20.6), the same marketplace on GitHub (`/plugin marketplace add luisMDev/promptgraph`; its `.mcp.json` runs `${PROMPTGRAPH_BIN:-promptgraph} mcp`, which the `~/.local/bin` command provides, §20.8); otherwise the plugin option is unavailable ("Not bundled here"). No state is stored. The check runs with `cwd` = the repository, because `claude mcp add` registers at local scope by default and local and project scopes depend on the directory. When the daemon runs from an installed desktop runtime (§20.7) **and** `<data>/runtime/current` resolves to that same runtime directory, the commands use the stable launcher `<data>/runtime/current/bin/promptgraph` instead (`claude mcp add promptgraph -- <that path> mcp`, `PROMPTGRAPH_BIN=<that path>`): the Node binary and entry of a bundled runtime live in a versioned directory that is deleted after an update, while `current` follows updates. The path is **derived from the daemon's own location** (`SERVER_PACKAGE_DIR/..`, its parent and the realpath of `current`), never read from the environment, so neither a repository's executable nor another installation's path can end up in `claude mcp add`; in any other case the commands use the Node binary and the CLI entry as before.
 - The skill and tool lists are the catalog in `packages/shared/src/mcp-guide.ts`. A test checks that the catalog names are exactly the registered MCP tools and that every skill has a `SKILL.md`, so the wizard cannot describe a tool that does not exist.
@@ -1128,11 +1128,11 @@ The app updates itself with `tauri-plugin-updater` (`~2.14`), driven **only from
 
 ## 21. Chat panel
 
-A panel next to the canvas where the user talks to Claude Code about the graph on screen: "I want to build a landing page with X, Y, Z" produces a graph; "remove this node", "simplify this", "add a lint step after this one" edit it, and the canvas updates live. The chat is a background Claude Code session in the repository's main checkout with the promptgraph plugin (MCP server + skills, §19) connected, so it changes graphs through the same REST API as every other client.
+Chat windows over the canvas (§21.11) where the user talks to Claude Code about the graph on screen: "I want to build a landing page with X, Y, Z" produces a graph; "remove this node", "simplify this", "add a lint step after this one" edit it, and the canvas updates live. The chat is a background Claude Code session in the repository's main checkout with the promptgraph plugin (MCP server + skills, §19) connected, so it changes graphs through the same REST API as every other client.
 
 ```
 Browser                                   promptgraph daemon                          claude -p (stream-json)
- Chat panel ──WS chat:send{text,context}──► ChatManager ──stdin: user turn (JSON)──────► one process per session
+ Chat window ─WS chat:send{text,context}──► ChatManager ──stdin: user turn (JSON)──────► one process per session
             ◄──WS chat:item / chat:delta ── normaliser ◄──stdout: NDJSON lines ────────  cwd = repo root
             ◄──WS chat:status / session ──  permission bridge ◄─control_request can_use_tool
             ──WS chat:permission──────────►                ──control_response allow/deny►
@@ -1229,6 +1229,14 @@ When the editor reloads a graph changed outside it (`graphs:changed` from the ch
 - The chat runs in the main checkout with the user's permissions. Writes and commands ask first, and the system prompt keeps Claude to graph work unless the user asks otherwise.
 
 ---
+
+### 21.11 Chat windows and the bottom bar
+
+Chats belong to a tab, as in Linear. Each tab's view sits in an inset panel (rounded, bordered, on the darker window frame `--frame`), and below the panel each tab has a bottom bar (§13.4). In a repository tab the bar holds one button per chat opened in that tab (oldest first, at most 8; a busy chat shows a pulsing dot, one waiting for a permission an amber dot), **Ask Claude** (a new chat) and the chat history (every session of the repository, to reopen one). Clicking a chat's button opens its window or, when it is the open one, minimises it; its × takes it out of the bar (the session stays in the history). At most one window is open per tab: it floats at the bottom right of the panel, over the canvas, with the title, a menu (date, cost, Delete chat), Minimize (also Esc, unless a dictation or a menu uses it), Expand/Shrink and Close. Home tabs have an empty bar.
+
+The tab owns the list: `Tab.chats = {repoId, ids, open}` is persisted with the tab set (§13.4), so a reload, a keep-alive eviction or a tab reopened from the session restores its chats; it is dropped when the tab navigates to another repository. Sessions are the repository's (§21.8): two tabs of one repository can show the same chat, and the chat store keeps one view per opened session (fetched once, then live; a reconnect refetches every opened session). A deleted session leaves every bar.
+
+**Ctrl+J** (also **Alt+J**) acts on the active tab's bar: it minimises the open window, else reopens the newest chat of the bar, else starts a new chat. Browsers leave Ctrl+J to pages; it is not handled while a terminal has focus (Ctrl+J is a line feed there) or while a dialog or menu is open.
 
 ## 22. Voice dictation
 
@@ -1364,7 +1372,7 @@ Email, organization id and name are dropped: they never leave the daemon. A fail
 - `cloud`: `$0.42`, an estimate at Anthropic prices (the provider bills its own);
 - `null` (older runs, unknown): the plain estimate, as before.
 
-The chat panel uses the repository's current billing mode for its session costs.
+Chat windows use the repository's current billing mode for its session costs.
 
 ### 23.3 Subscription usage limits
 
@@ -1381,4 +1389,4 @@ These are observations: they are as old as the last chat reply (`observedAt`, sh
 
 ### 23.4 UI
 
-The header shows a badge next to Chat: the plan ("Max 20x"), "API key", the cloud provider, "Custom auth" or "Signed out". It turns amber, with a warning icon, when an API key overrides a claude.ai login, when signed out, or on a subscription when the limits' status is not `allowed` or a window is at 80% or more. Its popover explains the mode, shows the API-key warning with how to fix it (remove the key from the shell profile, `promptgraph stop`, start again), and on a subscription one bar per window (5-hour, weekly, weekly per model, extra usage) with its reset time and the observation's age. Opening it re-checks the billing mode.
+The bottom bar of a repository tab shows a badge on its left (§13.4), next to **Claude Code**: the plan ("Max 20x"), "API key", the cloud provider, "Custom auth" or "Signed out". It turns amber, with a warning icon, when an API key overrides a claude.ai login, when signed out, or on a subscription when the limits' status is not `allowed` or a window is at 80% or more. Its popover explains the mode, shows the API-key warning with how to fix it (remove the key from the shell profile, `promptgraph stop`, start again), and on a subscription one bar per window (5-hour, weekly, weekly per model, extra usage) with its reset time and the observation's age. Opening it re-checks the billing mode.
