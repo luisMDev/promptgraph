@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import type { RunSummary } from "@promptgraph/shared";
-import { cleanup, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linearGraph, nodeRunOf, runDetailOf } from "../../test-fixtures";
 import { createTestView, type TestView } from "../../store/view/test-view";
-import { PendingApprovals, RunSelector } from "./RunControls";
+import { PendingApprovals, RunControls, RunSelector } from "./RunControls";
 
 const graph = linearGraph();
 
@@ -181,5 +181,49 @@ describe("PendingApprovals menu", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+});
+
+describe("Undo / Redo controls", () => {
+  beforeEach(() => {
+    view = createTestView({ graphId: "g1", path: `${R}/graphs/g1` });
+    view.editor.setState({ graph, loading: false });
+  });
+
+  const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+
+  it("are always shown next to Run, disabled while there is nothing to undo or redo", () => {
+    render(<RunControls />);
+    expect(button("Undo").disabled).toBe(true);
+    expect(button("Redo").disabled).toBe(true);
+    // Left of Run, in the same row.
+    const history = screen.getByRole("group", { name: "History" });
+    const run = screen.getByRole("button", { name: /Run/ });
+    expect(history.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("enable Undo after an edit and Redo after an undo", async () => {
+    const user = userEvent.setup();
+    render(<RunControls />);
+    act(() => view.editor.getState().rename("Renamed"));
+    expect(button("Undo").disabled).toBe(false);
+    await user.click(button("Undo"));
+    expect(view.editor.getState().graph?.name).toBe(graph.name);
+    expect(button("Undo").disabled).toBe(true);
+    expect(button("Redo").disabled).toBe(false);
+  });
+
+  it("stay shown but disabled while a run is shown or active", () => {
+    view.editor.setState({ past: [graph], future: [graph] });
+    view.run.setState({ selectedRunId: "r1" });
+    render(<RunControls />);
+    expect(button("Undo").disabled).toBe(true);
+    expect(button("Redo").disabled).toBe(true);
+    act(() => {
+      view.run.setState({ selectedRunId: null });
+      view.editor.setState({ activeRunId: "r1" });
+    });
+    expect(button("Undo").disabled).toBe(true);
+    expect(button("Redo").disabled).toBe(true);
   });
 });

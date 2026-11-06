@@ -671,12 +671,13 @@ The client reference-counts its subscriptions (two tabs on one run share one `su
 Every view has a URL (§13.2) and lives in an in-app tab (§13.4). The views are **Home** (§13.3), the **graph editor**, a **run** (the canvas in run mode), a **node run** (a run with one node selected and its terminal open) and the **run report** (§13.1). The graph editor and run views are made of:
 
 - **Header**: repository name (links to Home), graph selector, run selector (live or historical), the repository's pending approvals counter, settings.
-- **Canvas** (React Flow): palette on the left (drag node types in), minimap, snap to grid. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails), the problems button, the run's cost and **Report**, and Resume / Run / Cancel. In run mode the graph is read-only and nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance).
+- **Canvas** (React Flow): palette on the left (drag node types in), minimap, snap to grid. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails), the problems button, the run's cost and **Report**, Resume, **Undo / Redo**, and Run / Cancel. In run mode the graph is read-only and nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance).
 - **Inspector** (right): config of the selected node; in run mode, its NodeRun details (output, session id, branch, timings, error) and controls (Done, Fail, Hold, Retry, Skip).
 - **Terminal drawer** (bottom, resizable): opens on node click. Its own small tab row, one per open terminal (not to be confused with the app tabs of §13.4). Live PTY for running nodes, replayed log for finished ones with "Reopen session".
 - **Approval dialog**: diff viewer + approve/reject.
 - **Diff dialog**: what a node changed (§9.7), with a switch to its whole lane; opened from the inspector and the report.
 - **Validation**: invalid nodes/edges are outlined red with a tooltip; Run is disabled while there are errors.
+- **Undo / Redo**: always shown left of Run / Cancel while a graph is open, so the row never shifts; disabled when there is nothing to undo or redo, while the graph is read-only and in run mode. Also Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Ctrl+Y) in the visible view, outside text fields, terminals, dialogs and menus. Each editor store (one per `(repoId, graphId)`, §13.4) keeps an in-memory history of the graph's local edits: at most 100 steps; consecutive edits of the same node, edge, drag, name or settings less than a second apart share one step. Undo and redo are ordinary edits, so they autosave. The history is cleared whenever the graph is (re)loaded from disk, so a version older than the file is never written back silently; when it was reloaded because it changed outside the editor, Undo reverts that change (§21.9).
 
 ### 13.1 Run report
 
@@ -1214,7 +1215,7 @@ Session metadata lives in the `chat_sessions` table (§11.2): id (= Claude sessi
 
 ### 21.9 External changes and undo
 
-When the editor reloads a graph changed outside it (`graphs:changed` from the chat, the MCP server or a file edit), it keeps the previous version, highlights the added and updated nodes for a few seconds, and shows "Graph updated outside the editor · Undo"; Undo saves the previous version back (with `baseHash`). When the Undo fails (the graph changed again, or a run started), the editor reloads the graph on disk so the next edit cannot write a stale version back. Before a chat message is sent, a pending autosave is flushed; if the graph on screen still could not be saved, the message is not sent.
+When the editor reloads a graph changed outside it (`graphs:changed` from the chat, the MCP server or a file edit), it keeps the previous version, highlights the added and updated nodes for a few seconds, and shows "Graph updated outside the editor · Undo"; Undo (the banner's button, or the canvas Undo of §13) saves the previous version back (with `baseHash`). When the Undo fails (the graph changed again, or a run started), the editor reloads the graph on disk so the next edit cannot write a stale version back. Before a chat message is sent, a pending autosave is flushed; if the graph on screen still could not be saved, the message is not sent.
 
 ### 21.10 Risks
 

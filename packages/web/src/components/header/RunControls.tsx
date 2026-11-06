@@ -1,6 +1,6 @@
 import { formatCostUsd, isFinalRunStatus, webRoutes } from "@promptgraph/shared";
-import { Loader2Icon } from "lucide-react";
-import { useState } from "react";
+import { Loader2Icon, Redo2Icon, Undo2Icon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
@@ -15,11 +15,63 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatDateTime } from "../../lib/format";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { Link } from "../../lib/router/Link";
+import { installUndoKeys } from "../../lib/undo-keys";
 import { cancelRun, resumeRun, startRun } from "../../store/view/actions";
-import { useEditor, useRepo, useRun, useView } from "../../store/view/context";
+import { useEditor, useRepo, useRun, useTabActive, useView } from "../../store/view/context";
+import { canRedo, canUndo } from "../../store/view/editor-store";
 import { Icons } from "../common/icons";
 import { ConfirmDialog } from "../common/PromptDialog";
 import { Button, ButtonLink, StatusDot } from "../common/ui";
+
+/**
+ * Undo / Redo of the editor's local edits, left of Run. Always shown while a graph is open, so the row never
+ * shifts; disabled while there is nothing to undo or redo, while the graph is read-only and while a run is shown.
+ */
+export function UndoRedoControls() {
+  const { editor } = useView();
+  const runMode = useRun((s) => s.selectedRunId !== null);
+  const undoable = useEditor((s) => !runMode && canUndo(s));
+  const redoable = useEditor((s) => !runMode && canRedo(s));
+  return (
+    <div role="group" aria-label="History" className="flex items-center rounded-lg bg-card shadow-soft ring-1 ring-border">
+      <IconAction label="Undo" shortcut="Ctrl+Z" disabled={!undoable} onClick={() => editor.getState().undo()}>
+        <Undo2Icon />
+      </IconAction>
+      <IconAction label="Redo" shortcut="Ctrl+Shift+Z" disabled={!redoable} onClick={() => editor.getState().redo()}>
+        <Redo2Icon />
+      </IconAction>
+    </div>
+  );
+}
+
+function IconAction({ label, shortcut, disabled, onClick, children }: { label: string; shortcut: string; disabled: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* A disabled button gets no pointer events: the wrapper keeps the tooltip working. */}
+        <span className="inline-flex">
+          <Button variant="ghost" size="icon" aria-label={label} disabled={disabled} onClick={onClick}>
+            {children}
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {label} <span className="text-muted-foreground">{shortcut}</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Installs the undo / redo shortcuts for the visible view's editor (hidden tab views install none). */
+export function useUndoRedoShortcuts() {
+  const { editor } = useView();
+  const active = useTabActive();
+  const runMode = useRun((s) => s.selectedRunId !== null);
+  useEffect(() => {
+    if (!active || runMode) return;
+    return installUndoKeys(window, (action) => (action === "undo" ? editor.getState().undo() : editor.getState().redo()));
+  }, [editor, active, runMode]);
+}
 
 /** Run / Cancel, validation summary, and the total cost of the shown run. Floats over the canvas, top right. */
 export function RunControls() {
@@ -84,6 +136,7 @@ export function RunControls() {
           <Icons.play /> Resume
         </Button>
       )}
+      <UndoRedoControls />
       {cancellable ? (
         <Button variant="danger" onClick={() => setConfirmCancel(true)}>
           <Icons.stop /> Cancel

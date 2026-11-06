@@ -27,6 +27,7 @@ import { showNodeRun } from "../../store/view/actions";
 import { useEditor, useRun, useTabActive, useView, useViewUi } from "../../store/view/context";
 import { isReadOnly } from "../../store/view/editor-store";
 import { Icons } from "../common/icons";
+import { useUndoRedoShortcuts } from "../header/RunControls";
 import { nodeTypes } from "../nodes/NodeCard";
 import type { PgFlowNode } from "../nodes/types";
 import { edgeTypes, type PgFlowEdge } from "./PgEdge";
@@ -84,6 +85,7 @@ function EditCanvas() {
   // land on top of it: fit on mount only when there is something to fit.
   const fitOnMount = useRef((graph?.nodes.length ?? 0) > 0).current;
   const { manual, onMoveStart, onMoveEnd } = useManualViewport();
+  useUndoRedoShortcuts();
 
   const input = useMemo(
     () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds } : null),
