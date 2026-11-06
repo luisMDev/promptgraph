@@ -74,6 +74,7 @@ function EditCanvas() {
   const validation = useEditorStore((s) => s.validation);
   const selectedNodeIds = useEditorStore((s) => s.selectedNodeIds);
   const selectedEdgeIds = useEditorStore((s) => s.selectedEdgeIds);
+  const highlightNodeIds = useEditorStore((s) => s.highlightNodeIds);
   const readOnly = useEditorStore(isReadOnly);
   const [measured, applyMeasured] = useMeasured();
   const { screenToFlowPosition } = useReactFlow();
@@ -83,8 +84,8 @@ function EditCanvas() {
   const { manual, onMoveStart, onMoveEnd } = useManualViewport();
 
   const input = useMemo(
-    () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured } : null),
-    [graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured],
+    () => (graph ? { graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds } : null),
+    [graph, phase, validation, selectedNodeIds, selectedEdgeIds, measured, highlightNodeIds],
   );
   const nodes = useMemo(() => (input ? toFlowNodes(input) : []), [input]);
   const edges = useMemo(() => (input ? toFlowEdges(input) : []), [input]);

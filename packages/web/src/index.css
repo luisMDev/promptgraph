@@ -88,6 +88,22 @@ body {
   }
 }
 
+/* A node changed outside the editor (chat, MCP): a violet halo that fades out (HIGHLIGHT_MS in the editor store). */
+.pg-highlight {
+  animation: pg-highlight 1.3s ease-in-out 3;
+  box-shadow: 0 0 0 3px rgb(139 92 246 / 0.55);
+}
+
+@keyframes pg-highlight {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgb(139 92 246 / 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 9px rgb(139 92 246 / 0.05);
+  }
+}
+
 /* React Flow on the cream canvas. */
 .react-flow {
   --xy-background-color: var(--background);

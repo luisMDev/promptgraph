@@ -235,6 +235,28 @@ UI marks it and promptgraph sends a desktop notification. Turn notifications off
 The UI is dark by default. Switch to the light theme in the settings menu; the choice is remembered in
 your browser.
 
+### Voice dictation
+
+The chat composer takes dictation, transcribed **locally** by [whisper.cpp](https://github.com/ggml-org/whisper.cpp):
+the audio never leaves your machine and is not stored. It works like Claude Code's `/voice`: hold Space
+while speaking (or press and hold the mic button) when the composer is empty, or Alt+Space at any
+time; in `tap` mode, Space or a click starts and stops it. The transcript is inserted at the cursor
+for you to review and send with Enter; Esc cancels. Mode, language and auto-submit default to your
+Claude Code `voice` and `language` settings and can be changed in Settings → Voice dictation.
+
+promptgraph does not download whisper.cpp or models. To set it up:
+
+```bash
+sudo apt install cmake
+git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp && cd ~/whisper.cpp
+cmake -B build && cmake --build build -j --config Release
+sh ./models/download-ggml-model.sh small
+```
+
+Then set the whisper binary to `~/whisper.cpp/build/bin/whisper-cli` in the settings (or put it on
+your PATH). The model is found automatically in `~/whisper.cpp/models` or `~/.promptgraph/models`.
+See `docs/DESIGN.md` §21.
+
 ### Tokens and cost
 
 Every Claude step shows its token usage (input, output, cache) and an estimated cost, read from Claude
@@ -249,7 +271,8 @@ conditions are counted too. The cost is an estimate from public per-model prices
 | `~/.promptgraph/state.db` | Runs, step results, events (SQLite), shared by all promptgraph processes |
 | `~/.promptgraph/runs/<run-id>/` | Terminal logs and the hook settings of each run |
 | `~/.promptgraph/worktrees/` | Lane worktrees |
-| `~/.promptgraph/settings.json` | App settings (notifications) |
+| `~/.promptgraph/settings.json` | App settings (notifications, voice dictation) |
+| `~/.promptgraph/models/` | Optional whisper.cpp models for voice dictation (you put them there) |
 | `~/.promptgraph/locks/` | One pid file per repository with a running promptgraph |
 | `~/.promptgraph/servers/` | Port and session token of each running server, for the MCP server (mode 0600) |
 | `~/.promptgraph/logs/` | Output of servers started in the background by the MCP server |

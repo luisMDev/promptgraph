@@ -3,9 +3,11 @@ import { ApiRequestError, api, errorMessage, onUnauthorized } from "../api/rest"
 import { wsClient } from "../api/ws";
 import { enteredMergeConflict } from "../lib/run-view";
 import { useAppStore } from "./app-store";
+import { useChatStore } from "./chat-store";
 import { useEditorStore } from "./editor-store";
 import { useRunStore } from "./run-store";
 import { useUiStore } from "./ui-store";
+import { useVoiceStore } from "./voice-store";
 
 /** Cross-store workflows (graph switching, runs, terminals) and the WS → store wiring. */
 
@@ -228,6 +230,7 @@ export function handleServerMessage(msg: ServerMessage): void {
         void useAppStore.getState().refreshGraphs().catch(() => undefined);
         void useAppStore.getState().refreshPending();
         void useRunStore.getState().reloadSelected();
+        void useChatStore.getState().resync();
       }
       return;
     case "run:update": {
@@ -254,6 +257,18 @@ export function handleServerMessage(msg: ServerMessage): void {
       void useAppStore.getState().refreshGraphs().catch(() => undefined);
       void useEditorStore.getState().checkExternalChange(msg.graphId);
       return;
+    case "chat:item":
+    case "chat:delta":
+    case "chat:status":
+    case "chat:session":
+    case "chat:deleted":
+      useChatStore.getState().applyServerMessage(msg);
+      return;
+    case "voice:partial":
+    case "voice:final":
+    case "voice:error":
+      useVoiceStore.getState().applyServerMessage(msg);
+      return;
     default:
       return;
   }
@@ -264,6 +279,8 @@ export function startLiveUpdates(): () => void {
   const offMsg = wsClient.onMessage(handleServerMessage);
   const offConn = wsClient.onConnection((c) => {
     useAppStore.getState().setConnected(c);
+    // The server drops a voice session with its socket: a recording in progress cannot finish.
+    if (!c) useVoiceStore.getState().connectionLost();
     if (!c && wsClient.stopped()) useAppStore.getState().setSessionExpired();
   });
   const offAuth = onUnauthorized(() => useAppStore.getState().setSessionExpired());

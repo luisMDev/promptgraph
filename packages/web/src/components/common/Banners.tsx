@@ -10,6 +10,8 @@ import { Button } from "./ui";
 export function Banners() {
   const modifiedOutside = useEditorStore((s) => s.modifiedOutside);
   const externalChange = useEditorStore((s) => s.externalChange);
+  const canUndoExternal = useEditorStore((s) => s.externalUndo !== null && s.externalUndo.graphId === s.graph?.id && s.activeRunId === null);
+  const saving = useEditorStore((s) => s.saving);
   const activeRunId = useEditorStore((s) => s.activeRunId);
   const hasGraph = useEditorStore((s) => s.graph !== null);
   const selectedRunId = useRunStore((s) => s.selectedRunId);
@@ -31,6 +33,14 @@ export function Banners() {
           </Button>
           <Button size="sm" variant="ghost" className="ml-1" onClick={() => useEditorStore.getState().keepLocalChanges()}>
             Keep my edits
+          </Button>
+        </Banner>
+      )}
+      {!runMode && canUndoExternal && (
+        <Banner tone="info" onDismiss={() => useEditorStore.getState().dismissExternalUndo()}>
+          Graph updated outside the editor.
+          <Button size="sm" className="ml-3" disabled={saving} onClick={() => void useEditorStore.getState().undoExternalChange()}>
+            Undo
           </Button>
         </Banner>
       )}

@@ -28,6 +28,7 @@ parallel lanes are joined only through a \`merge\` node.
 \`\`\`
 
 \`position\` ({x, y}) and edge \`id\` may be omitted: save_graph lays out nodes top to bottom (error handlers to the right of their source) and names edges.
+To change a graph that already exists, use patch_graph with ops (add_node, update_node, remove_node, connect, disconnect, insert_after, insert_before) instead of rewriting it: untouched nodes keep their ids and positions.
 
 ## Node types and config
 

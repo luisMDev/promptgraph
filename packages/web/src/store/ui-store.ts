@@ -43,6 +43,9 @@ export interface UiStore extends UiState {
   /** Sidebar widths in px, resized by dragging their edge rail; persisted in localStorage. */
   sidebarWidth: number;
   inspectorWidth: number;
+  /** Chat panel (§20) expanded, and its width (resized from its edge rail; persisted). */
+  chatOpen: boolean;
+  chatWidth: number;
   toasts: Toast[];
   /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
   revealNodeId: string | null;
@@ -64,6 +67,8 @@ export interface UiStore extends UiState {
   setInspectorOpen(open: boolean): void;
   setSidebarWidth(px: number): void;
   setInspectorWidth(px: number): void;
+  setChatOpen(open: boolean): void;
+  setChatWidth(px: number): void;
   toast(kind: Toast["kind"], message: string): void;
   dismissToast(id: number): void;
 }
@@ -74,7 +79,8 @@ let toastSeq = 0;
 
 export const SIDEBAR_WIDTH = { min: 192, max: 480, default: 240 } as const;
 export const INSPECTOR_WIDTH = { min: 256, max: 640, default: 320 } as const;
-const WIDTH_KEYS = { sidebar: "promptgraph.sidebarWidth", inspector: "promptgraph.inspectorWidth" } as const;
+export const CHAT_WIDTH = { min: 300, max: 760, default: 400 } as const;
+const WIDTH_KEYS = { sidebar: "promptgraph.sidebarWidth", inspector: "promptgraph.inspectorWidth", chat: "promptgraph.chatWidth" } as const;
 
 export function clampWidth(px: number, bounds: { min: number; max: number }): number {
   return Math.round(Math.max(bounds.min, Math.min(px, bounds.max)));
@@ -116,6 +122,8 @@ export const useUiStore = create<UiStore>()((set, get) => ({
   inspectorOpen: true,
   sidebarWidth: loadWidth(WIDTH_KEYS.sidebar, SIDEBAR_WIDTH),
   inspectorWidth: loadWidth(WIDTH_KEYS.inspector, INSPECTOR_WIDTH),
+  chatOpen: false,
+  chatWidth: loadWidth(WIDTH_KEYS.chat, CHAT_WIDTH),
   toasts: [],
   revealNodeId: null,
 
@@ -197,6 +205,16 @@ export const useUiStore = create<UiStore>()((set, get) => ({
     const inspectorWidth = clampWidth(px, INSPECTOR_WIDTH);
     set({ inspectorWidth });
     saveWidth(WIDTH_KEYS.inspector, inspectorWidth);
+  },
+
+  setChatOpen(open) {
+    set({ chatOpen: open });
+  },
+
+  setChatWidth(px) {
+    const chatWidth = clampWidth(px, CHAT_WIDTH);
+    set({ chatWidth });
+    saveWidth(WIDTH_KEYS.chat, chatWidth);
   },
 
   toast(kind, message) {

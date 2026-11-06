@@ -19,6 +19,8 @@ export interface PgNodeData extends Record<string, unknown> {
   issues: NodeIssues;
   /** Phase 2 shows the error port on every node. */
   phase: 1 | 2;
+  /** Changed outside the editor a moment ago (chat, MCP): drawn with a pulsing halo. */
+  highlighted?: boolean;
 }
 
 export type PgFlowNode = Node<PgNodeData, "pg">;

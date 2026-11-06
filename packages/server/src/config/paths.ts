@@ -19,6 +19,10 @@ export interface PgPaths {
   worktreesDir: string;
   /** Installed helper scripts (pg-hook). */
   binDir: string;
+  /** Short-lived private files (voice dictation WAVs, §21.5). */
+  tmpDir: string;
+  /** Whisper models the user drops in (voice dictation auto-detection, §21.3). */
+  modelsDir: string;
 }
 
 export function getPaths(env: NodeJS.ProcessEnv = process.env): PgPaths {
@@ -30,6 +34,8 @@ export function getPaths(env: NodeJS.ProcessEnv = process.env): PgPaths {
     runsDir: path.join(home, "runs"),
     worktreesDir: path.join(home, "worktrees"),
     binDir: path.join(home, "bin"),
+    tmpDir: path.join(home, "tmp"),
+    modelsDir: path.join(home, "models"),
   };
 }
 
@@ -59,6 +65,11 @@ export function graphsDir(repoPath: string): string {
 /** Claude Code's global config file: `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json` (SPIKE A5). */
 export function claudeConfigFile(env: NodeJS.ProcessEnv = process.env): string {
   return env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, ".claude.json") : path.join(os.homedir(), ".claude.json");
+}
+
+/** Claude Code's user settings: `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` (read-only). */
+export function claudeUserSettingsFile(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
+  return env.CLAUDE_CONFIG_DIR ? path.join(path.resolve(env.CLAUDE_CONFIG_DIR), "settings.json") : path.join(homeDir, ".claude", "settings.json");
 }
 
 /** packages/server root (works from src/ via tsx and from dist/). */

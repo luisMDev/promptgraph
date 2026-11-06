@@ -70,6 +70,7 @@ export const MCP_TOOL_GROUPS: readonly McpToolGroup[] = [
       { name: "list_graphs", summary: "Graphs saved in the repository." },
       { name: "get_graph", summary: "The full JSON of a graph and whether a run locks it." },
       { name: "save_graph", summary: "Creates or replaces a graph; lays out nodes and returns its validation." },
+      { name: "patch_graph", summary: "Edits a saved graph in place (add, update, remove, connect, insert steps); keeps ids and positions." },
       { name: "validate_graph", summary: "Errors and warnings of a saved graph or an unsaved draft." },
       { name: "delete_graph", summary: "Deletes a graph file.", confirmFirst: true },
       { name: "list_commands", summary: "Slash commands and skills available to command steps." },

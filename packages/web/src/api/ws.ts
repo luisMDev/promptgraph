@@ -72,8 +72,24 @@ export class WsClient {
     };
   }
 
+  /** True while the socket is open (messages sent now reach the server). */
+  isOpen(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN;
+  }
+
   send(msg: ClientMessage): void {
     this.rawSend(msg);
+  }
+
+  /**
+   * Sends a binary frame (voice audio, §21: LE Int16 mono PCM at 16 kHz). Returns false when the socket is not
+   * open: audio is never queued for a later connection.
+   */
+  sendBinary(data: ArrayBuffer | Uint8Array<ArrayBuffer>): boolean {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(data);
+    return true;
   }
 
   /** Returns unsubscribe. */

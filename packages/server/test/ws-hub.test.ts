@@ -160,4 +160,23 @@ describe("WsHub", () => {
     c.ws.send("not json");
     expect(await c.next((m) => m.type === "error")).toMatchObject({ message: "Invalid message" });
   });
+
+  it("routes chat messages to the ChatManager and broadcasts chat:* to every client", async () => {
+    const a = await connect();
+    const b = await connect();
+    const context = { graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: null, readOnly: false };
+    a.send({ type: "chat:send", sessionId: "missing", text: "hi", context });
+    expect(await a.next((m) => m.type === "error")).toMatchObject({ message: "Chat session missing not found" });
+
+    const session = setup.ctx.chat.create();
+    expect(await b.next((m) => m.type === "chat:session")).toMatchObject({ session: { id: session.id } });
+    // The test context never starts claude: the send ends with an error item.
+    a.send({ type: "chat:send", sessionId: session.id, text: "hi", context });
+    expect(await b.next((m) => m.type === "chat:item" && m.item.kind === "user")).toMatchObject({ sessionId: session.id, item: { text: "hi" } });
+    expect(await b.next((m) => m.type === "chat:item" && m.item.kind === "error")).toMatchObject({ item: { message: expect.stringContaining("Could not start") } });
+    expect(await a.next((m) => m.type === "chat:status" && m.status === "error")).toMatchObject({ sessionId: session.id });
+
+    a.send({ type: "chat:permission", sessionId: session.id, requestId: "nope", allow: true });
+    expect(await a.next((m) => m.type === "error" && m.message.includes("No pending permission"))).toBeTruthy();
+  });
 });

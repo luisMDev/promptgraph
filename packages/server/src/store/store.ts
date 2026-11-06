@@ -54,6 +54,46 @@ export type RunPatch = Partial<Pick<Run, "status" | "error" | "finishedAt" | "cl
   loops?: LoopState[];
 };
 
+/** A chat panel session row (§20.8). The live status is not persisted: it belongs to the ChatManager. */
+export interface ChatSessionRecord {
+  id: string;
+  repoPath: string;
+  /** null until the first user message. */
+  title: string | null;
+  model: string | null;
+  totalCostUsd: number;
+  /** Claude Code created the session: the next process uses --resume instead of --session-id. */
+  started: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type ChatSessionPatch = Partial<Pick<ChatSessionRecord, "title" | "model" | "totalCostUsd" | "started">>;
+
+interface ChatSessionRow {
+  id: string;
+  repo_path: string;
+  title: string | null;
+  model: string | null;
+  total_cost_usd: number;
+  started: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function chatSessionFromRow(r: ChatSessionRow): ChatSessionRecord {
+  return {
+    id: r.id,
+    repoPath: r.repo_path,
+    title: r.title,
+    model: r.model,
+    totalCostUsd: r.total_cost_usd,
+    started: r.started === 1,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
 export type NewLane = Omit<Lane, "pushed" | "status"> & { status?: LaneStatus };
 export type LanePatch = Partial<Pick<Lane, "status" | "pushed" | "worktreePath">>;
 
@@ -444,6 +484,47 @@ export class Store {
          ON CONFLICT (repo_path, graph_id) DO UPDATE SET known_hash = excluded.known_hash, updated_at = excluded.updated_at`,
       )
       .run(repoPath, graphId, hash, this.now());
+  }
+
+  // chat sessions (§20.8) ------------------------------------------------------
+  insertChatSession(session: { id: string; repoPath: string; model?: string | null }): ChatSessionRecord {
+    const now = this.now();
+    this.db
+      .prepare(`INSERT INTO chat_sessions (id, repo_path, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(session.id, session.repoPath, session.model ?? null, now, now);
+    return this.getChatSession(session.id)!;
+  }
+
+  /** Applies `patch` and bumps updated_at. */
+  updateChatSession(id: string, patch: ChatSessionPatch): ChatSessionRecord {
+    const { sql, values } = assignments([
+      ["title", patch.title],
+      ["model", patch.model],
+      ["total_cost_usd", patch.totalCostUsd],
+      ["started", patch.started === undefined ? undefined : patch.started ? 1 : 0],
+      ["updated_at", this.now()],
+    ]);
+    this.db.prepare(`UPDATE chat_sessions SET ${sql} WHERE id = ?`).run(...values, id);
+    const session = this.getChatSession(id);
+    if (!session) throw new Error(`Chat session ${id} not found`);
+    return session;
+  }
+
+  getChatSession(id: string): ChatSessionRecord | undefined {
+    const row = this.db.prepare(`SELECT * FROM chat_sessions WHERE id = ?`).get(id) as ChatSessionRow | undefined;
+    return row ? chatSessionFromRow(row) : undefined;
+  }
+
+  /** One repository's sessions, most recently updated first. */
+  listChatSessions(repoPath: string): ChatSessionRecord[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM chat_sessions WHERE repo_path = ? ORDER BY updated_at DESC, rowid DESC`)
+      .all(repoPath) as ChatSessionRow[];
+    return rows.map(chatSessionFromRow);
+  }
+
+  deleteChatSession(id: string): boolean {
+    return this.db.prepare(`DELETE FROM chat_sessions WHERE id = ?`).run(id).changes > 0;
   }
 
   /** Runs `fn` in a transaction. */

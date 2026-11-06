@@ -3,11 +3,13 @@ import type { AppContext } from "../app/context.js";
 import { webDistDir } from "../config/paths.js";
 import { localhostOnly, tokenAuth } from "./auth.js";
 import { toApiError } from "./errors.js";
+import { registerChatRoutes } from "./routes/chat.js";
 import { registerGraphRoutes } from "./routes/graphs.js";
 import { registerHookRoutes } from "./routes/hooks.js";
 import { registerMiscRoutes } from "./routes/misc.js";
 import { registerNodeRunRoutes } from "./routes/node-runs.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerVoiceRoutes } from "./routes/voice.js";
 import { registerStatic } from "./static.js";
 
 /**
@@ -23,6 +25,8 @@ export function createHttpApp(ctx: AppContext): Hono {
   registerRunRoutes(app, ctx);
   registerNodeRunRoutes(app, ctx);
   registerHookRoutes(app, ctx);
+  registerChatRoutes(app, ctx);
+  registerVoiceRoutes(app, ctx);
   registerStatic(app, webDistDir(ctx.env));
   app.notFound((c) => c.json({ error: `No route for ${c.req.method} ${new URL(c.req.url).pathname}`, code: "not_found" }, 404));
   app.onError((err, c) => {

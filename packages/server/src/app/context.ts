@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ChatManager } from "../chat/chat-manager.js";
+import { resolveChatMcp } from "../chat/launch.js";
+import type { ChatSpawner } from "../chat/process.js";
 import { AppSettingsStore } from "../config/app-settings.js";
 import { getPaths, ptyLogPath, type PgPaths } from "../config/paths.js";
 import { SUPPORTED_PHASE } from "../config/version.js";
@@ -7,12 +10,14 @@ import { Engine } from "../engine/engine.js";
 import { EventBus } from "../events/bus.js";
 import { GraphStore } from "../graphs/graph-store.js";
 import { HookRouter } from "../hooks/hook-router.js";
+import { bundledMarketplaceRoot, currentCliEntry } from "../mcp/setup.js";
 import { Notifier } from "../notify/notifier.js";
 import { PtyManager } from "../pty/pty-manager.js";
 import { ClaudeRunner } from "../runners/claude/claude-runner.js";
 import { installPgHook } from "../runners/claude/pg-hook.js";
 import { createRunnerRegistry } from "../runners/registry.js";
 import { openDatabase, Store } from "../store/store.js";
+import { VoiceService } from "../voice/voice-service.js";
 import { LaneManager, type RepoRef } from "../workspace/lane-manager.js";
 
 /** Everything the HTTP/WS layers need. Built once by createAppContext (composition root). */
@@ -32,6 +37,10 @@ export interface AppContext {
   lanes: LaneManager;
   engine: Engine;
   notifier: Notifier;
+  /** Chat panel sessions (§20). */
+  chat: ChatManager;
+  /** Voice dictation (§21): whisper.cpp probe and recordings. */
+  voice: VoiceService;
   /** Set by the server once listening; read by ClaudeRunner for PG_PORT. */
   port: number;
   /** Base env of the server (locates the user's Claude config for GET /api/commands). */
@@ -43,12 +52,14 @@ export interface CreateAppContextOptions {
   token: string;
   warnings?: string[];
   env?: NodeJS.ProcessEnv;
+  /** Chat process spawner (tests); defaults to child_process. */
+  chatSpawner?: ChatSpawner;
 }
 
 /**
  * Wires every module: paths → DB (openDatabase + Store) → EventBus → GraphStore → AppSettingsStore →
  * PtyManager (log resolver via store.findNodeRunByPtyId / reopen registry) → HookRouter → installPgHook →
- * LaneManager → ClaudeRunner → createRunnerRegistry → Engine → Notifier. Does not start listening.
+ * LaneManager → ClaudeRunner → createRunnerRegistry → Engine → Notifier → ChatManager → VoiceService. Does not start listening.
  */
 export async function createAppContext(opts: CreateAppContextOptions): Promise<AppContext> {
   const env = opts.env ?? process.env;
@@ -72,6 +83,23 @@ export async function createAppContext(opts: CreateAppContextOptions): Promise<A
   const engine = new Engine({ store, graphs, lanes, ptys, runners, claude, bus, paths, repo, phase: SUPPORTED_PHASE, env });
   ptys.onUserInput((ptyId) => engine.handleUserInput(ptyId));
   const notifier = new Notifier({ bus, settings });
+  const chat = new ChatManager({
+    store,
+    bus,
+    repoPath: repo.path,
+    env,
+    spawner: opts.chatSpawner,
+    mcp: () =>
+      resolveChatMcp({
+        repoPath: repo.path,
+        cliEntry: currentCliEntry(),
+        nodePath: process.execPath,
+        execArgv: process.execArgv,
+        marketplaceRoot: bundledMarketplaceRoot(),
+        binDir: paths.binDir,
+      }),
+  });
+  const voice = new VoiceService({ settings, paths, env });
   const ctx: AppContext = {
     repo,
     paths,
@@ -86,6 +114,8 @@ export async function createAppContext(opts: CreateAppContextOptions): Promise<A
     lanes,
     engine,
     notifier,
+    chat,
+    voice,
     port: 0,
     env,
   };

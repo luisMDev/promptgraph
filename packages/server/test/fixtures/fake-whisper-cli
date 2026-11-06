@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+// Fake `whisper-cli` (whisper.cpp) for promptgraph voice tests. Never transcribes anything: it validates the
+// arguments and the WAV header, then prints a canned transcript. Behaviour via env:
+//   FAKE_WHISPER_TEXT       transcript template; "{ms}" = milliseconds of audio in the WAV (default "hello world")
+//   FAKE_WHISPER_DELAY_MS   wait before printing (simulates CPU latency)
+//   FAKE_WHISPER_FAIL=1     print an error to stderr and exit 1
+//   FAKE_WHISPER_FAIL_FIRST=<file>       fail (exit 1) the first run only; <file> marks that it happened
+//   FAKE_WHISPER_FAIL_AFTER_FIRST=<file> succeed on the first run, fail every later one
+//   FAKE_WHISPER_HANG=1     never exit (timeouts, kills)
+//   FAKE_WHISPER_HELP_FAIL=1  `--help` exits 3 without a usage text (smoke test failure)
+//   FAKE_WHISPER_LOG        append one JSON line per run: {pid, args, wav: {mode, dataBytes, valid}}
+import fs from "node:fs";
+
+const args = process.argv.slice(2);
+const env = process.env;
+
+if (args.includes("--help") || args.includes("-h")) {
+  if (env.FAKE_WHISPER_HELP_FAIL === "1") {
+    process.stderr.write("illegal instruction\n");
+    process.exit(3);
+  }
+  process.stdout.write("\nusage: whisper-cli [options] file0 file1 ...\n\noptions:\n  -h, --help  show this help message and exit\n");
+  process.exit(0);
+}
+
+const value = (flag) => {
+  const i = args.indexOf(flag);
+  return i === -1 ? undefined : args[i + 1];
+};
+
+const model = value("-m");
+const wavPath = value("-f");
+if (!model || !fs.existsSync(model)) {
+  process.stderr.write(`error: failed to open model '${model}'\n`);
+  process.exit(2);
+}
+if (!wavPath || !fs.existsSync(wavPath)) {
+  process.stderr.write(`error: input file not found '${wavPath}'\n`);
+  process.exit(2);
+}
+
+const wav = fs.readFileSync(wavPath);
+const mode = fs.statSync(wavPath).mode & 0o777;
+const valid =
+  wav.length >= 44 &&
+  wav.toString("ascii", 0, 4) === "RIFF" &&
+  wav.toString("ascii", 8, 12) === "WAVE" &&
+  wav.readUInt16LE(20) === 1 &&
+  wav.readUInt16LE(22) === 1 &&
+  wav.readUInt32LE(24) === 16000 &&
+  wav.readUInt16LE(34) === 16 &&
+  wav.readUInt32LE(40) === wav.length - 44 &&
+  wav.readUInt32LE(4) === wav.length - 8;
+const dataBytes = wav.length - 44;
+
+if (env.FAKE_WHISPER_LOG) {
+  fs.appendFileSync(env.FAKE_WHISPER_LOG, `${JSON.stringify({ pid: process.pid, args, wav: { mode, dataBytes, valid } })}\n`);
+}
+if (!valid) {
+  process.stderr.write("error: failed to read WAV file\n");
+  process.exit(2);
+}
+const firstRun = (marker) => {
+  if (fs.existsSync(marker)) return false;
+  fs.writeFileSync(marker, "1");
+  return true;
+};
+const failNow =
+  env.FAKE_WHISPER_FAIL === "1" ||
+  (env.FAKE_WHISPER_FAIL_FIRST && firstRun(env.FAKE_WHISPER_FAIL_FIRST)) ||
+  (env.FAKE_WHISPER_FAIL_AFTER_FIRST && !firstRun(env.FAKE_WHISPER_FAIL_AFTER_FIRST));
+if (failNow) {
+  process.stderr.write("whisper_init_from_file: failed to load model\n");
+  process.exit(1);
+}
+if (env.FAKE_WHISPER_HANG === "1") {
+  setInterval(() => {}, 1000);
+} else {
+  const ms = Math.round((dataBytes / 32000) * 1000);
+  const text = (env.FAKE_WHISPER_TEXT ?? "hello world").replaceAll("{ms}", String(ms));
+  setTimeout(() => {
+    process.stdout.write(`[BLANK_AUDIO]\n ${text}\n`);
+    process.exit(0);
+  }, Number(env.FAKE_WHISPER_DELAY_MS ?? 0));
+}

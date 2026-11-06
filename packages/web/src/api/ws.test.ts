@@ -13,8 +13,8 @@ class FakeSocket {
   constructor(readonly url: string) {
     FakeSocket.instances.push(this);
   }
-  send(data: string) {
-    this.sent.push(JSON.parse(data));
+  send(data: string | Uint8Array) {
+    this.sent.push(typeof data === "string" ? JSON.parse(data) : data);
   }
   close() {
     this.readyState = 3;
@@ -96,5 +96,17 @@ describe("WsClient", () => {
     client.close();
     vi.advanceTimersByTime(10_000);
     expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it("sends binary voice frames only while open, never queued", () => {
+    const client = new WsClient(() => "ws://test/ws");
+    client.connect();
+    const frame = new Uint8Array([1, 0, 2, 0]);
+    expect(client.sendBinary(frame)).toBe(false);
+    FakeSocket.instances[0]!.open();
+    expect(client.sendBinary(frame)).toBe(true);
+    expect(FakeSocket.instances[0]!.sent).toEqual([frame]);
+    client.close();
+    expect(client.sendBinary(frame)).toBe(false);
   });
 });

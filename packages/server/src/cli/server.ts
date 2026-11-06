@@ -25,7 +25,7 @@ export interface RunningServer {
   url: string;
   port: number;
   token: string;
-  /** Engine.shutdown, WS close, HTTP close, DB close. */
+  /** Engine.shutdown + ChatManager.shutdown + VoiceService.shutdown, WS close, HTTP close, DB close. */
   close(): Promise<void>;
 }
 
@@ -87,7 +87,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   let closing: Promise<void> | null = null;
   const close = async () => {
     removeServerInfo(paths, opts.repoPath);
-    await ctx.engine.shutdown();
+    await Promise.all([ctx.engine.shutdown(), ctx.chat.shutdown(), ctx.voice.shutdown()]);
     stopWatch();
     stopNotifier();
     await hub.close();

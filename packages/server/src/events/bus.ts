@@ -1,12 +1,15 @@
 import { EventEmitter } from "node:events";
-import type { Lane, NodeRun, RunSummary } from "@promptgraph/shared";
+import type { Lane, NodeRun, RunSummary, ServerMessageOf } from "@promptgraph/shared";
+
+/** Chat panel messages (§20.6), broadcast as-is by the WsHub. */
+export type ChatServerMessage = ServerMessageOf<"chat:item" | "chat:delta" | "chat:status" | "chat:session" | "chat:deleted">;
 
 /** Status that makes a node need the user (desktop notification, header counter). */
 export type AttentionKind = "waiting_input" | "waiting_approval" | "idle";
 
 /**
  * In-process events. Producers: engine (run/node/lane/attention), PtyManager (pty:*), GraphStore
- * (graphs:changed). Consumers: WsHub (all but attention), Notifier (attention).
+ * (graphs:changed), ChatManager (chat). Consumers: WsHub (all but attention), Notifier (attention).
  */
 export interface BusEvents {
   /** After every persisted change to a run or to the counters/usage derived from its node runs. */
@@ -18,6 +21,8 @@ export interface BusEvents {
   "pty:data": { ptyId: string; data: Buffer };
   "pty:exit": { ptyId: string; code: number | null };
   "graphs:changed": { graphId: string };
+  /** Chat panel (§20): every chat:* server message. */
+  chat: { message: ChatServerMessage };
   /** A node entered an attention status (emitted once per transition). */
   attention: { kind: AttentionKind; nodeRun: NodeRun; nodeLabel: string; graphName: string; message: string | null };
 }

@@ -467,6 +467,13 @@ CREATE TABLE events (                    -- append-only log; drives UI replay an
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, node_run_id TEXT,
   type TEXT, payload TEXT, at INTEGER
 );
+CREATE TABLE chat_sessions (             -- chat panel, §20.8; history comes from the Claude transcript
+  id TEXT PRIMARY KEY,                   -- = Claude session id
+  repo_path TEXT, title TEXT, model TEXT,
+  total_cost_usd REAL,
+  started INTEGER,                       -- 1 once Claude created the session: the next process uses --resume
+  created_at INTEGER, updated_at INTEGER
+);
 ```
 
 Terminal logs: `~/.promptgraph/runs/<run-id>/<node-run-id>.log`.
@@ -480,7 +487,7 @@ Terminal logs: `~/.promptgraph/runs/<run-id>/<node-run-id>.log`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/graphs` | List graphs in the repo |
-| GET/PUT/DELETE | `/api/graphs/:id` | Read / save / delete a graph |
+| GET/PUT/DELETE | `/api/graphs/:id` | Read / save / delete a graph. `PUT ?baseHash=<hash>` saves only if the file still has that hash, else 409 `graph_conflict` (§20.7) |
 | POST | `/api/graphs/:id/validate` | Validation errors (cycles, invalid joins, missing config) |
 | POST | `/api/graphs/:id/runs` | Start a run |
 | GET | `/api/runs?graph=` | Run history |
@@ -493,6 +500,9 @@ Terminal logs: `~/.promptgraph/runs/<run-id>/<node-run-id>.log`.
 | GET | `/api/runs/:id/lanes/:laneId/diff` | Lane diff vs base, also after cleanup (from snapshots) |
 | POST | `/api/node-runs/:id/reopen` | Spawn `claude --resume` PTY for a finished node |
 | GET | `/api/commands` | Available slash commands/skills (for the `command` picker) |
+| GET/POST | `/api/chat/sessions` | List chat sessions / create one (`{ model? }`), §20 |
+| GET/DELETE | `/api/chat/sessions/:id` | Session + item history + open permission prompts + partial streamed text / delete (kills the process; the Claude transcript stays) |
+| GET | `/api/voice` | Voice dictation status (`VoiceStatus`, §21): whisper binary and model found, why not, setup lines, resolved mode / language / autoSubmit and where each came from. Cached for 5 s; `?refresh=1` ("Check again") re-probes, at most once per second and coalesced with a probe in flight; honoured only without `Sec-Fetch-Site` or with `same-origin`/`none` (a probe spawns `whisper-cli --help`, and the cookie also rides subresource GETs from other localhost ports) |
 | POST | `/hooks/:nodeRunId/:event` | Hook receiver (token-protected) |
 
 All routes require the token (`Authorization: Bearer` or the `t` cookie set from the opening URL).
@@ -505,12 +515,30 @@ All routes require the token (`Authorization: Bearer` or the `t` cookie set from
 { type: "node:update", nodeRun }              // status, activity, output
 { type: "pty:data", ptyId, data }             // base64
 { type: "pty:exit", ptyId, code }
+{ type: "graphs:changed", graphId }
+{ type: "chat:item", sessionId, item }        // §20: normalised ChatItem
+{ type: "chat:delta", sessionId, messageId, text, offset } // streamed assistant text; offset = chars streamed before it
+{ type: "chat:status", sessionId, status, warning? }
+{ type: "chat:session", session }             // created / metadata changed
+{ type: "chat:deleted", sessionId }
+{ type: "voice:partial", voiceId, text }      // §21: transcript of all audio so far (replaces, not a delta)
+{ type: "voice:final", voiceId, text, truncated?, notice? } // terminal; truncated = stopped at the 2 min cap; notice = final pass failed, text is the last partial
+{ type: "voice:error", voiceId, code, message } // terminal; code: unavailable | too_long | failed | busy | cancelled
 // client → server
 { type: "subscribe", runId }
 { type: "pty:attach", ptyId }                 // server replies with buffered output first
 { type: "pty:input", ptyId, data }
 { type: "pty:resize", ptyId, cols, rows }
+{ type: "chat:send", sessionId, text, context }
+{ type: "chat:interrupt", sessionId }
+{ type: "chat:permission", sessionId, requestId, allow, message? }
+{ type: "voice:start", voiceId, sampleRate: 16000, keyterms?, language? } // §21
+<binary frame>                                // voice audio: LE Int16 mono PCM, 16 kHz, ~100 ms per frame
+{ type: "voice:stop", voiceId }
+{ type: "voice:cancel", voiceId }
 ```
+
+`run:update`, `graphs:changed` and every `chat:*` message are broadcast to all clients (one user); `voice:*` replies go only to the client that started the recording. Text frames are JSON; the only binary frames are voice audio (§21.4). The full protocol is `packages/shared/src/ws.ts`.
 
 ---
 
@@ -543,6 +571,7 @@ A page that answers "what happened while I was away". It replaces the editor vie
 - Random per-start token required by REST, WS and hook endpoints. Local clients (the MCP server, §19) read it from the server-info record, a mode-0600 file under `~/.promptgraph`, the same trust boundary as the state DB.
 - No `bypassPermissions` by default; nothing is pushed without an approval gate.
 - Shell nodes run arbitrary commands by design: graph files are trusted like any script in the repo. The UI shows a warning when opening a graph modified outside the app since the last run (hash comparison).
+- Binary WebSocket frames are accepted only as voice audio (§21): routed to the sending client's active voice session, ignored when it has none, at most 64 KiB per frame and 2 minutes of audio (3 840 000 bytes) per session. Audio is never logged, never persisted beyond a mode-0600 temp WAV (in a per-server 0700 directory) deleted after each transcription pass, and never leaves the machine. whisper-cli is spawned with an argument array (no shell), and nothing derived from the audio is ever put in its arguments.
 
 ---
 
@@ -677,11 +706,12 @@ Once listening, the server writes `~/.promptgraph/servers/<repo-key>.json` (`Ser
 | Group | Tools |
 |---|---|
 | Server | `server_status`, `start_server`, `open_ui` |
-| Graphs | `graph_reference` (markdown guide or JSON Schema), `list_graphs`, `get_graph`, `save_graph`, `validate_graph`, `delete_graph`, `list_commands` |
+| Graphs | `graph_reference` (markdown guide or JSON Schema), `list_graphs`, `get_graph`, `save_graph`, `patch_graph`, `validate_graph`, `delete_graph`, `list_commands` |
 | Runs | `start_run`, `list_runs`, `get_run`, `wait_for_run`, `get_node_output`, `node_action` (done, fail, retry, skip, hold, release), `get_diff`, `get_run_report`, `cancel_run`, `resume_run`, `cleanup_run` |
 | Approvals | `list_pending`, `get_approval` (read-only) |
 
-- `save_graph` accepts a draft: edge `id`s and node `position`s may be omitted. Missing ids are derived from the endpoints. Missing positions come from a layered top-to-bottom layout: the row is the longest path from a root over non-loop edges (a failure edge does not add a row, so an error handler sits to the right of its source), and the nodes of a row are centred horizontally, nodes reached only through failure edges last. The draft is then parsed with `GraphSchema`, saved through `PUT /api/graphs/:id`, and validated. The validation result is returned so Claude can fix errors.
+- `save_graph` accepts a draft: edge `id`s and node `position`s may be omitted. Missing ids are derived from the endpoints. Missing positions come from a layered top-to-bottom layout: the row is the longest path from a root over non-loop edges (a failure edge does not add a row, so an error handler sits to the right of its source), and the nodes of a row are centred horizontally, nodes reached only through failure edges last. The draft is then parsed with `GraphSchema`, saved through `PUT /api/graphs/:id`, and validated. The validation result is returned so Claude can fix errors. `save_graph` refuses to turn on `settings.allowPrWithoutApproval` unless the file on disk already has it: only the user unlocks PRs without approval, in the UI (invariant 4).
+- `patch_graph` (`{ graphId, ops, repo? }`) edits an existing graph with the ops of §20.7 instead of rewriting it: it reads the graph and its hash, applies `applyGraphPatch` (`packages/shared/src/graph-patch.ts`), saves with `PUT /api/graphs/:id?baseHash=<hash>`, validates, and returns the added / removed / updated node ids and the validation result. Existing nodes keep their ids and positions. On 409 `graph_conflict` (the graph changed in between) it tells Claude to re-read the graph and retry. It is not destructive: every change can be undone from the UI (§20.9).
 - Run tools return compact views: the latest attempt of each (node, iteration), outputs truncated, a `next` hint, and `attention` (the nodeRunIds of steps that need the user). `get_node_output` returns the full output.
 - `wait_for_run` polls `GET /api/runs/:id` until the run is final or paused, or (by default) a step needs the user (`idle`, `waiting_input`, `waiting_approval`), or the timeout passes (at most 600 s; Claude calls it again).
 - **Approvals are not exposed.** Approving or rejecting an `approval` or `pr` gate stays a human action in the UI (invariant: nothing leaves the machine without approval). An agent must not approve its own pull request. `get_approval` and `get_diff` let Claude summarise what the user is asked to approve.
@@ -702,3 +732,211 @@ The header has a **Claude Code** button that opens a wizard with five steps: con
 - The skill and tool lists are the catalog in `packages/shared/src/mcp-guide.ts`. A test checks that the catalog names are exactly the registered MCP tools and that every skill has a `SKILL.md`, so the wizard cannot describe a tool that does not exist.
 - The check only reads the output of `claude mcp list`; it does not install anything.
 
+---
+
+## 20. Chat panel
+
+A panel next to the canvas where the user talks to Claude Code about the graph on screen: "I want to build a landing page with X, Y, Z" produces a graph; "remove this node", "simplify this", "add a lint step after this one" edit it, and the canvas updates live. The chat is a background Claude Code session in the repository's main checkout with the promptgraph plugin (MCP server + skills, §19) connected, so it changes graphs through the same REST API as every other client.
+
+```
+Browser                                   promptgraph server                          claude -p (stream-json)
+ Chat panel ──WS chat:send{text,context}──► ChatManager ──stdin: user turn (JSON)──────► one process per session
+            ◄──WS chat:item / chat:delta ── normaliser ◄──stdout: NDJSON lines ────────  cwd = repo root
+            ◄──WS chat:status / session ──  permission bridge ◄─control_request can_use_tool
+            ──WS chat:permission──────────►                ──control_response allow/deny►
+ Canvas    ◄──WS graphs:changed ────────── graph store ◄──REST PUT /api/graphs/:id ──── promptgraph mcp (patch_graph, save_graph)
+```
+
+### 20.1 Transport
+
+The server spawns `claude` with `child_process` (pipes, no PTY) in structured streaming mode. One long-lived process handles many turns: the server writes one JSON line per user turn to stdin and reads NDJSON from stdout until the turn's `result` line.
+
+This does not break invariant 1 (never parse the TUI): there is no TUI. `--output-format stream-json` is structured CLI output (system/init, stream_event deltas, assistant and user messages, result, control requests), parsed per line with lenient zod schemas; unknown line types and fields are ignored. Node runs keep using the interactive PTY (§7), because there the user wants the real terminal; the chat wants a message view.
+
+### 20.2 Spawn
+
+```bash
+claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages \
+  --session-id <uuid>                 # new session (we generate it); --resume <id> after the process exited
+  --name "pg:chat/<title>" \
+  --permission-mode default --permission-prompt-tool stdio \
+  --plugin-dir <bundled plugins/promptgraph>   # or --mcp-config '<inline JSON>' (below)
+  --append-system-prompt <CHAT_SYSTEM_PROMPT> \
+  --disallowedTools AskUserQuestion \
+  --allowedTools <non-destructive promptgraph MCP tools> \
+  [--model <m>]
+```
+
+- Env: `childEnv()` / `claudeBin()` as for headless calls, plus `PROMPTGRAPH_REPO=<repo root>` (the MCP server finds this server) and `PROMPTGRAPH_BIN` (the plugin's `.mcp.json` runs `${PROMPTGRAPH_BIN:-promptgraph} mcp`; it is set to the built CLI, derived like the setup wizard does, §19.5).
+- With the plugin, MCP tools are named `mcp__plugin_promptgraph_promptgraph__<tool>` (server `plugin:promptgraph:promptgraph`). When the running server does not bundle the plugin, `--mcp-config` registers `{"mcpServers":{"promptgraph":{"command":<node>,"args":[<cli entry>,"mcp"],"env":{…}}}}` (tools `mcp__promptgraph__<tool>`); there are no skills then, and `chat:status` carries a warning.
+- `AskUserQuestion` is disallowed: in stream-json mode it arrives as a `can_use_tool` prompt the panel cannot answer, so the system prompt has Claude ask in plain text instead.
+- No built-in tool is pre-allowed. In `default` mode Claude Code reads inside the cwd (the repository) without asking; a bare `Read` / `Grep` / `Glob` / `LS` allow rule would also silence the prompt for reads outside it (`~/.ssh`, `~/.promptgraph` with the session token, other repositories), and the pre-allowed `save_graph` / `patch_graph` could then copy what was read into a committed graph file without any prompt.
+- `bypassPermissions` is never used (invariant 5). Destructive MCP tools (`delete_graph`, `cancel_run`, `cleanup_run`) and every write or shell tool are not pre-allowed, so they go through the permission card (§20.4).
+- `CHAT_SYSTEM_PROMPT` (server chat module) tells Claude where it runs: the user sees the graph live; each message starts with a context block (§20.3); use the promptgraph MCP tools (`save_graph` for new graphs, `patch_graph` for edits, keeping ids and positions) and the `design-graph` skill; never call `start_server` or `open_ui`; never approve gates; ask before destructive tools; do not edit repository files or run commands unless asked, because real work happens in graph runs; keep replies short and say what changed in the graph.
+
+### 20.3 Context block
+
+Every `chat:send` carries a `ChatContext` (`graphId | null`, `graphName?`, `selectedNodeIds`, `selectedEdgeIds`, `runId | null`, `readOnly`). The server prepends it to the user content, followed by a blank line:
+
+```
+<promptgraph-context graph="landing" selected-nodes="n1,n2" selected-edges="" run="none" read-only="false" />
+
+remove this node
+```
+
+`buildChatContextBlock` / `withChatContext` (`packages/shared/src/chat.ts`) build it; attribute values are escaped. "This node" means the selection. The UI shows only the user's text (`stripChatContext` removes the block from history rebuilt from a transcript). Before sending, the web flushes the editor's pending autosave so Claude reads the graph the user sees.
+
+### 20.4 Permissions
+
+With `--permission-prompt-tool stdio`, each permission prompt arrives as a `control_request` (`subtype: "can_use_tool"`, tool name, input, description, blocked path). The server emits a `permission_request` item and the status `waiting_permission`; the UI shows a card with Allow / Deny, and `chat:permission` answers with a `control_response` (`allow` with the unchanged input, or `deny` with a message). A prompt still open when the turn is interrupted or the process exits is resolved with `by: "interrupt"` or `"exit"`. Parallel tool calls can open several prompts at once: the server keeps all of them (the session detail lists them oldest first) and the panel shows them one at a time, oldest first, with the number still waiting.
+
+### 20.5 Lifecycle
+
+- One `ChatSession` per chat; its process is spawned lazily on the first `chat:send`, and respawned with `--resume <id>` after it exited.
+- At most one turn is in flight per process. Claude Code merges user lines written during a running turn into that turn and ends them with a single `result` (verified with 2.1.318), so the server keeps a FIFO of turns sent while one runs (another tab, a double submit) and writes the next one only after the previous `result`.
+- `chat:interrupt` writes a `control_request` `interrupt` and drops the queued turns; the running turn then ends with a `result` of subtype `error_during_execution`.
+- Deleting a session detaches its process before stopping it: output still in the pipe is ignored, so it can never touch the deleted row or bring the session back in the UI. A line that fails to apply is logged and never thrown out of the stream listener.
+- Idle timeout: 15 minutes without a turn kills the process (the session resumes on the next message).
+- Server shutdown: stdin is closed, then SIGTERM after 3 s.
+- Statuses: `idle`, `starting`, `thinking`, `waiting_permission`, `exited`, `error`.
+
+### 20.6 Items and WebSocket
+
+The normaliser turns stream-json lines into `ChatItem`s (`user`, `assistant`, `tool_use` with a one-line summary, `tool_result` truncated to 2 000 characters, `permission_request`, `permission_resolved`, `result` with cost and duration, `error`, `notice` e.g. an MCP server that failed to connect). Text deltas stream as `chat:delta` and the final text arrives as an `assistant` item. Each delta carries its `offset` in the message text, and the session detail (`GET /api/chat/sessions/:id`) carries the text streamed so far for messages still streaming, so a client that opens the session or reconnects mid-stream joins the two without gaps or duplicates; a message whose beginning it never got shows "Receiving reply…" until the final item. On a reconnect the panel keeps the shown conversation on screen while it reloads, and a status received while the detail loads wins over the (older) status in the detail. All `chat:*` messages are broadcast (§12.2). REST: §12.1.
+
+### 20.7 Graph patches
+
+`GraphPatchOpSchema` (`packages/shared/src/graph-patch.ts`) is a list of ops on node ids:
+
+| Op | Effect |
+|---|---|
+| `add_node {node}` | New node; `id` derived from the label (or type) when absent, `position` placed when absent |
+| `update_node {id, label?, position?, onError?, config?}` | Shallow merge into `config` (a key set to `null` is removed); `onError: null` clears it |
+| `remove_node {id, reconnect?}` | Removes the node and its edges; by default bridges each predecessor to each success successor (outgoing success edges on port `out`), keeping the predecessor's port and condition, and a loop on the successor edge. Failure, `always` and condition-branch edges of the removed node are dropped with it, so a handler never turns into a success branch of the predecessor |
+| `connect {source, target, sourcePort?, when?, loop?, id?}` | Adds an edge (id derived from the endpoints when absent) |
+| `disconnect {edgeId} \| {source, target, sourcePort?}` | Removes one edge |
+| `insert_after {after, node, port?}` | The new node takes over the outgoing success edges of `after` on `port` (default `out`); failure, `always` and loop edges stay on `after`; `after` → new is added |
+| `insert_before {before, node}` | The new node takes over every incoming edge of `before`; new → `before` is added |
+
+`applyGraphPatch(graph, ops)` is pure: it applies the ops in order to a copy, places new nodes without a position (below their first placed predecessor — to its right when reached through a failure edge —, else above their first successor, moved right until they do not overlap; the layered layout of §19.3 when every node is new), parses the result with `GraphSchema`, and returns the graph with the added / removed / updated node and edge ids. An op that cannot apply throws `GraphPatchError` (code, op index, message). A config field that the node type does not have is an error (`invalid_node`, listing the expected fields), because the config schemas would otherwise drop it and the op would report success without changing anything. Existing nodes keep their ids and positions. Structural rules are left to `validateGraph`, whose result `patch_graph` returns.
+
+Optimistic concurrency: `PUT /api/graphs/:id?baseHash=<hash>` (`SaveGraphQuerySchema`) refuses the save with 409 `graph_conflict` when the file's hash changed since Claude read it. The web editor's autosave also sends the last hash it knows, so a patch saved while a local edit was pending is never overwritten: the 409 shows the "changed outside the editor" banner (reload, or keep the local edits, which saves once without `baseHash`). A `graphs:changed` that arrives while an editor save is pending or in flight is checked again once the save settles.
+
+### 20.8 Persistence
+
+Session metadata lives in the `chat_sessions` table (§11.2): id (= Claude session id), title (first user message, truncated), timestamps, total cost, model. While the server runs, each session keeps its normalised item log in memory. A session opened after a restart rebuilds its items from the Claude transcript (`~/.claude/projects/<cwd with non-alphanumerics replaced by "-">/<sessionId>.jsonl`); a missing transcript gives an empty history. Deleting a session removes the metadata and kills the process; the transcript stays on disk.
+
+### 20.9 External changes and undo
+
+When the editor reloads a graph changed outside it (`graphs:changed` from the chat, the MCP server or a file edit), it keeps the previous version, highlights the added and updated nodes for a few seconds, and shows "Graph updated outside the editor · Undo"; Undo saves the previous version back (with `baseHash`). When the Undo fails (the graph changed again, or a run started), the editor reloads the graph on disk so the next edit cannot write a stale version back. Before a chat message is sent, a pending autosave is flushed; if the graph on screen still could not be saved, the message is not sent.
+
+### 20.10 Risks
+
+- The stream-json input format and the control protocol (`can_use_tool`, `interrupt`) are only partly documented; they were verified against Claude Code 2.1.318 and may change. The parser is lenient and ignores unknown lines; tests replay recorded lines through an injected spawner.
+- If the promptgraph plugin is also installed globally, `--plugin-dir` may load it twice and Claude may see the MCP server under two names. Pre-allowed tools are listed by their full names, so the duplicate's tools still ask for permission.
+- The chat runs in the main checkout with the user's permissions. Writes and commands ask first, and the system prompt keeps Claude to graph work unless the user asks otherwise.
+
+---
+
+## 21. Voice dictation
+
+The chat composer (§20) accepts dictation: the user speaks, sees the transcript appear, reviews it and sends it with Enter. The UX copies Claude Code's `/voice`; the transcription is local, done by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`whisper-cli`) run by the promptgraph server.
+
+### 21.1 Why not Claude Code's voice service
+
+Claude Code's `/voice` streams audio to a private, undocumented Anthropic speech-to-text endpoint authenticated with the claude.ai OAuth token. promptgraph does not read that token (it only spawns `claude`), the endpoint and its protocol can change without notice, and using it would send audio off the machine through a path the user never configured for this tool. The browser Web Speech API is not used either: in Chromium it uploads the audio to Google. whisper.cpp keeps everything local, works offline, and is a single binary plus a model file the user installs.
+
+### 21.2 Architecture
+
+```
+Browser (chat composer)                         promptgraph server                       whisper.cpp
+ mic ─getUserMedia─► AudioWorklet (mono, ~50 ms) WS hub
+                     main thread (pcm.ts):     ── binary frame ──► VoiceSession (one per WS client)
+                     → 16 kHz Int16, ~100 ms       (PCM)            PCM buffer in memory (≤ 2 min)
+                     chunks, RMS level
+ useDictation ──WS voice:start{voiceId,…}──────►                     every ~2 s of new audio, if idle:
+              ──WS voice:stop / voice:cancel──►                        write temp WAV (0600) ─────────► whisper-cli -m <model> -f <wav>
+              ◄─WS voice:partial{text}─────────                        cleanWhisperText(stdout) ◄─────── -l <lang> -nt -np [-t n] [--prompt]
+              ◄─WS voice:final{text} / voice:error                     delete WAV
+ composer: partial shown dimmed at the cursor; final inserted at the cursor; Enter sends (§20)
+ GET /api/voice ◄──────────────────────────────── VoiceService (probe: binary, model, `--help` smoke; cached 5 s, ?refresh=1)
+```
+
+- `packages/shared/src/voice.ts`: settings, `VoiceStatus`, the `voice:*` messages, limits and the pure helpers (`sanitizeKeyterms`, `cleanWhisperText`, `claudeLanguageToWhisper`, `resolveVoicePreferences`, `findVoiceModel`).
+- Server `packages/server/src/voice/`: `VoiceService` (probe, status, global concurrency) and `VoiceSession` (one recording).
+- Web `src/lib/voice/`: a plain-JS AudioWorklet (`pcm-capture.worklet.js`, emitted by Vite as a separate asset, never inlined) that only mixes to mono and posts Float32 blocks; resampling to 16 kHz Int16, the 100 ms framing and the RMS level run on the main thread in `pcm.ts` (plain TS, unit-tested). Then the `useDictation` hook, the `voice-store` state machine and the mic button in the chat composer.
+
+### 21.3 Configuration and defaults
+
+`AppSettings.voice` (`~/.promptgraph/settings.json`, Settings → Voice dictation): `whisperBin?`, `model?` (absolute paths), `mode?` (`hold` | `tap`), `language?` (a whisper code or `auto`), `autoSubmit?`, `threads?`. An absent field means "use the default"; a settings file without `voice` stays valid. `PUT /api/settings` replaces the `voice` object as a whole. Reading the file is lenient per field: an invalid value (a hand-edited `"es-ES"` language, a `~/…` path) falls back to its default on its own, so it never resets the other settings (which the next PUT would then write over the file).
+
+| Field | Resolution (first that applies) |
+|---|---|
+| binary | `voice.whisperBin` > `whisper-cli` on PATH > `whisper-cpp` on PATH |
+| model | `voice.model` > first `ggml-*.bin` in `~/.promptgraph/models` (VAD models excluded; small, base, medium, large-v3-turbo first, then by name) > first of `~/whisper.cpp/models/ggml-{small,base,medium,large-v3-turbo}*.bin`, in that order |
+| mode | `voice.mode` > Claude Code `voice.mode` > `hold` |
+| language | `voice.language` > Claude Code top-level `language` mapped to a whisper code (`"spanish"`, `"Español"`, `"es-ES"` → `es`; unknown → absent) > `auto` |
+| autoSubmit | `voice.autoSubmit` > Claude Code `voice.autoSubmit` > `false` |
+
+Claude Code's settings are read from `~/.claude/settings.json` (read-only; a missing or invalid file, or a field of the wrong type, is ignored; the legacy `voiceEnabled` is read but does not gate promptgraph's dictation). `VoiceStatus.defaultsFrom` says where each of mode, language and autoSubmit came from (`promptgraph` | `claude` | `fallback`).
+
+`GET /api/voice` returns `available` and, when false, `reason`: `binary_not_found`, `model_not_found` or `binary_failed` (the `--help` smoke test failed), plus the setup lines. promptgraph never downloads binaries or models; the UI shows:
+
+```bash
+sudo apt install cmake
+git clone https://github.com/ggml-org/whisper.cpp ~/whisper.cpp && cd ~/whisper.cpp
+cmake -B build && cmake --build build -j --config Release
+sh ./models/download-ggml-model.sh small
+# Then set the whisper binary to ~/whisper.cpp/build/bin/whisper-cli (or put it on PATH);
+# the model is auto-detected in ~/whisper.cpp/models.
+```
+
+### 21.4 Protocol
+
+Client → server: `voice:start {voiceId, sampleRate: 16000, keyterms?, language?}`, then binary frames of little-endian Int16 mono PCM at 16 kHz (about 100 ms each), then `voice:stop {voiceId}` or `voice:cancel {voiceId}`. Server → client: `voice:partial {voiceId, text}`, then exactly one terminal message, `voice:final {voiceId, text, truncated?, notice?}` or `voice:error {voiceId, code, message}`; nothing after `voice:cancel`. `notice` is set when the final pass failed and the server fell back to the last good partial; the client shows it and never auto-submits that text.
+
+- One active session per WS client. A binary frame with no active session is ignored; a new `voice:start` cancels the previous session silently. Closing the socket cancels it.
+- `voice:partial` carries the transcript of all audio so far and replaces the previous one.
+- `keyterms` (at most 50, each at most 60 characters; the web sends "promptgraph", the node type names and the labels of the open graph's nodes) are cleaned with `sanitizeKeyterms` and passed as `--prompt "<a, b, c>"` to bias the vocabulary.
+- Error codes: `unavailable` (no binary/model), `too_long` (the wall-clock watchdog, 150 s after `voice:start`, ended a session that never stopped), `failed` (the final pass exited non-zero or timed out with no partial to fall back to, an oversized frame), `busy` (the global transcription slot is taken and the queue is full), `cancelled` (the server ended the session, e.g. shutdown).
+- At 2 minutes of audio (3 840 000 bytes) the server stops by itself and sends `voice:final` with `truncated: true`; later frames are ignored.
+
+### 21.5 Server
+
+- `VoiceSession` keeps the PCM in memory. While recording, after each ~2 s of new audio and when no pass is running, it writes a WAV (44-byte RIFF header, PCM16 mono 16 kHz) to a mode-0600 temp file in the server's own directory `~/.promptgraph/tmp/voice-<pid>-<random>/` (mode 0700), runs `<bin> -m <model> -f <wav> -l <lang> -nt -np [-t <threads>] [--prompt <keyterms>]` with `child_process.spawn` (argument array, no shell), cleans stdout with `cleanWhisperText` (drops `[BLANK_AUDIO]`, `[Music]`, `(silence)`, timestamps; joins lines), sends `voice:partial` and deletes the file.
+- A partial pass that fails or times out never ends the recording: partials are a preview, the next partial or the final pass retries.
+- On stop it waits for a running pass, runs a final pass on all the audio, sends `voice:final` and drops the buffer. If the final pass fails but an earlier partial succeeded, `voice:final` carries that partial with a `notice` instead of a `voice:error`. Cancel and socket close kill the child, delete the file and drop the buffer.
+- At most one whisper process per session and one per server process; other passes queue (a partial pass is skipped rather than queued twice), a session that cannot get the slot in time gets `busy`. Each pass times out after 60 s. Several servers (one per repository, §19.1) each have their own slot, so two dictations in two servers can run whisper at the same time; that is accepted (dictation is interactive and rarely concurrent) rather than adding a cross-process lock.
+- Temp files: several servers share `~/.promptgraph/tmp`, so each one writes and deletes only inside its own `voice-<pid>-<random>/` directory. At startup and on shutdown a server also removes the directories of servers whose pid is no longer running (audio left by a crash or SIGKILL mid-pass) and loose `voice-*.wav` older than two pass timeouts; it never touches the directory of a live server. All removals are best effort and never throw.
+- Graceful shutdown kills the whisper children and removes the server's temp directory.
+
+### 21.6 UX parity with Claude Code
+
+| Claude Code `/voice` | promptgraph |
+|---|---|
+| `hold`: hold Space while speaking, release ends | Same, when the composer is empty; also press-and-hold on the mic button |
+| `tap`: Space starts/stops, only with an empty prompt | Same; click on the mic button toggles |
+| — | Alt+Space starts/stops at any time, also with text in the composer |
+| Interim text shown dimmed while speaking | Partial transcript shown dimmed at the insertion point (not part of the textarea value) |
+| Final transcript inserted at the cursor, not submitted | Same (a space is added when needed); Enter sends |
+| `voice.autoSubmit` | Same setting, default taken from Claude Code |
+| Esc cancels and restores the prompt | Same |
+| Stops after 15 s of silence or 2 min | Same (silence detected in the browser from the RMS level; the 2 min cap enforced by the server too) |
+| Language from the `language` setting | Same, mapped to a whisper code; overridable |
+| Anthropic speech-to-text service | Local whisper.cpp |
+
+The mic button shows a level meter and the elapsed time, has `aria-pressed` and an `aria-live` status, and is disabled while the chat is not usable. When dictation is unavailable it opens a popover with the reason, the setup lines (with copy buttons) and "Check again". A denied microphone permission shows a clear message. The microphone is released (tracks stopped, AudioContext closed) on stop, cancel and unmount. On stop the capture is drained first: the worklet posts the block it is filling and acknowledges, the frames still queued on its port and the resampler's last partial period are sent, and only then `voice:stop` goes out, so a hold released right at the end of a word keeps its last syllable (cancel releases at once). A microphone lost mid-recording (track `ended`, AudioContext closed or interrupted) stops the recording with a notice instead of waiting for the silence timeout.
+
+Keyboard and pointer details: a mic-button hold captures the pointer (and a window `pointerup` listener backs it up), so releasing off the button still stops. Esc and Alt+Space work wherever the focus is while dictating (e.g. on the mic button after a keyboard activation). Releasing a held Space, or the window losing focus, while the browser shows the microphone permission prompt keeps the recording going as tap instead of cancelling it. With autoSubmit on, a transcript that arrives while Claude is still replying stays in the composer with a "not sent" notice. While the chat is disconnected the mic button is `aria-disabled` (not `disabled`), so its tooltip and screen-reader description still say why.
+
+### 21.7 Privacy
+
+Audio stays on the machine: browser → `127.0.0.1` WebSocket (token-protected, §14) → memory → a mode-0600 temp WAV, in the server's own 0700 directory, deleted right after each pass → whisper.cpp. WAVs left by a server that crashed mid-pass are removed when any later server starts or shuts down. Nothing is persisted, and neither audio nor transcripts are logged; the transcript only becomes data when the user sends it as a chat message.
+
+### 21.8 Limits and risks
+
+- Partial passes re-transcribe all the audio so far on the CPU, so their latency grows with the recording (a few seconds for a minute of audio with `small` on a laptop). A pass only starts when the previous one finished, so partials lag rather than pile up; the final pass on stop is the one that counts. Smaller models (`base`) are faster and less accurate; `threads` tunes the CPU use.
+- Quality depends on the model: `small` is a reasonable default for Spanish and English; the `.en` models are English only. whisper can hallucinate short phrases on silence; `cleanWhisperText` only removes the bracketed artefacts.
+- whisper.cpp's CLI flags and output are not a stable API; the `--help` smoke test catches a broken binary, and tests use a fake `whisper-cli`.
+- Measured with a real whisper.cpp build (`ggml-base`, CPU, the 11 s `jfk.wav` sample streamed in real time over the WS): partials every ~2 s, and 1.5–2 s from `voice:stop` to `voice:final`. The final transcript matched the reference sentence; cancelling mid-pass left no temp WAV and no whisper process.
+- A language that does not match the speech degrades the result (with `language: "es"` inherited from Claude Code, English audio came back with a stray leading word). Users who dictate in several languages should set `auto`.

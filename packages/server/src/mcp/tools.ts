@@ -1,5 +1,9 @@
 import {
   API,
+  GRAPH_CONFLICT_CODE,
+  GraphPatchError,
+  GraphPatchSchema,
+  applyGraphPatch,
   isFinalRunStatus,
   type ApprovalInfoResponse,
   type DiffResponse,
@@ -49,6 +53,7 @@ function describeError(err: unknown): string {
     return `promptgraph API error ${err.status}${err.code ? ` (${err.code})` : ""}: ${err.message}${details}`;
   }
   if (err instanceof GraphDraftError) return `${err.message}\nSee graph_reference for the format.`;
+  if (err instanceof GraphPatchError) return `patch_graph (${err.code}): ${err.message}\nNothing was saved. Fix the ops (get_graph shows the current ids) and retry.`;
   return errorMessage(err);
 }
 
@@ -191,6 +196,17 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     guarded(async ({ repo, graph, layout }) => {
       const normalized = normalizeGraphDraft(graph, { layout });
       const client = await api(repo);
+      // Invariant 4: an agent must not unlock PRs without approval. Only the user can, in the UI; a
+      // graph that is already unlocked on disk keeps its setting.
+      if (normalized.settings.allowPrWithoutApproval) {
+        const existing = await client.get<GetGraphResponse>(API.graph(normalized.id)).catch(() => null);
+        if (!existing?.graph.settings.allowPrWithoutApproval) {
+          return fail(
+            "settings.allowPrWithoutApproval cannot be turned on from Claude: PR nodes keep their approval gate. " +
+              "Save the graph without it; the user can unlock it in the promptgraph UI (graph settings) if they want to.",
+          );
+        }
+      }
       const saved = await client.put<SaveGraphResponse>(API.graph(normalized.id), normalized);
       const validation = await client.post<ValidateGraphResponse>(API.validate(saved.graph.id), { graph: saved.graph });
       return json({
@@ -199,6 +215,61 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         file: `.promptgraph/graphs/${saved.graph.id}.json`,
         nodes: saved.graph.nodes.length,
         edges: saved.graph.edges.length,
+        runnable: validation.errors.length === 0,
+        validation,
+      });
+    }),
+  );
+
+  server.registerTool(
+    "patch_graph",
+    {
+      title: "Edit a graph",
+      description:
+        "Applies incremental edits to a saved graph: add_node, update_node (shallow config merge, null deletes a key), remove_node " +
+        "(bridges predecessors to the success successors by default; failure / always handlers go with the node), connect, disconnect, " +
+        "insert_after (takes over the success edges of the anchor), insert_before. Unknown config fields are rejected. Ops apply in order and " +
+        "all-or-nothing; existing nodes keep their ids and positions, new nodes get an id and a position when omitted. Prefer this over " +
+        "save_graph for any change to an existing graph. Refused while a run of the graph is active. The UI updates live and can undo it.",
+      inputSchema: {
+        ...repoArg,
+        graphId: graphIdArg,
+        ops: GraphPatchSchema.describe("Edits, applied in order. Node config fields per type: graph_reference."),
+      },
+      // Removals are not destructive: the user undoes them in the UI.
+      annotations: WRITE,
+    },
+    guarded(async ({ repo, graphId, ops }) => {
+      const client = await api(repo);
+      const current = await client.get<GetGraphResponse>(API.graph(graphId));
+      if (current.activeRunId) {
+        return fail(`Graph "${graphId}" is read-only while run ${current.activeRunId} is active. Wait for it to finish (or ask the user to cancel it) and retry.`);
+      }
+      const patched = applyGraphPatch(current.graph, ops);
+      let saved: SaveGraphResponse;
+      try {
+        saved = await client.put<SaveGraphResponse>(API.saveGraph(graphId, current.hash), patched.graph);
+      } catch (err) {
+        if (err instanceof ApiRequestError && err.code === GRAPH_CONFLICT_CODE) {
+          return fail(`The graph "${graphId}" changed while it was being patched (the user may be editing it). Nothing was saved. Call get_graph again, rebuild the ops against the current graph and retry.`);
+        }
+        throw err;
+      }
+      const validation = await client.post<ValidateGraphResponse>(API.validate(graphId), { graph: saved.graph });
+      const nodeLabels = (ids: string[]) =>
+        ids.map((id) => {
+          const node = saved.graph.nodes.find((n) => n.id === id);
+          return node ? { id, type: node.type, label: node.label } : { id };
+        });
+      return json({
+        saved: true,
+        graphId,
+        added: nodeLabels(patched.added),
+        removed: patched.removed,
+        updated: nodeLabels(patched.updated),
+        edges: { added: patched.addedEdges, removed: patched.removedEdges, rewired: patched.updatedEdges },
+        nodes: saved.graph.nodes.length,
+        edgeCount: saved.graph.edges.length,
         runnable: validation.errors.length === 0,
         validation,
       });

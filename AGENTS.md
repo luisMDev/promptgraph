@@ -23,7 +23,7 @@ Design phase. No code yet. Next milestone is **M0 — spike** (`docs/DESIGN.md` 
 ```
 packages/
   shared/   # zod schemas, TS types, WebSocket protocol — imported by server and web
-  server/   # CLI entry (bin: promptgraph), engine, runners, workspaces, store, HTTP/WS
+  server/   # CLI entry (bin: promptgraph), engine, runners, workspaces, store, HTTP/WS, chat (DESIGN §20)
   web/      # React app; built assets are served by the server
 site/       # Astro landing page, deployed to GitHub Pages by .github/workflows/pages.yml
 video/      # Remotion launch video, recorded from the real app (video/README.md)

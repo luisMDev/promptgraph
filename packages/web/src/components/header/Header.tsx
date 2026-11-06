@@ -1,4 +1,9 @@
+import { MessageSquareIcon } from "lucide-react";
 import { useAppStore } from "../../store/app-store";
+import { toggleChatPanel } from "../../store/chat-actions";
+import { useUiStore } from "../../store/ui-store";
+import { Button } from "../common/ui";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Separator } from "../ui/separator";
 import { ClaudeSetupButton } from "../claude/ClaudeSetupWizard";
 import { SettingsMenu } from "../settings/SettingsMenu";
@@ -29,10 +34,27 @@ export function Header() {
           !connected && <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-700">Reconnecting…</span>
         )}
         <PendingApprovals />
+        <ChatToggle />
         <ClaudeSetupButton />
         <SettingsMenu />
       </div>
     </header>
+  );
+}
+
+/** Opens / closes the chat panel (§20). */
+export function ChatToggle() {
+  const open = useUiStore((s) => s.chatOpen);
+  const label = open ? "Close chat" : "Chat with Claude";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant={open ? "secondary" : "ghost"} size="sm" aria-label={label} aria-pressed={open} className="gap-1.5" onClick={toggleChatPanel}>
+          <MessageSquareIcon /> <span className="hidden lg:inline">Chat</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 

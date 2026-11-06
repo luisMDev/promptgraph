@@ -39,6 +39,9 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: true,
+    // The voice AudioWorklet (src/lib/voice/*.worklet.js) stays a same-origin file: addModule() of a data: URL is
+    // not allowed everywhere (and a CSP would block it).
+    assetsInlineLimit: (file) => (file.endsWith(".worklet.js") ? false : undefined),
     rollupOptions: {
       output: {
         // Long-lived vendor code in its own chunk; xterm and diff2html are split off by the lazy imports.

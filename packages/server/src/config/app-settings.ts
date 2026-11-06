@@ -1,8 +1,52 @@
 import fs from "node:fs";
 import path from "node:path";
-import { AppSettingsSchema, UpdateAppSettingsRequestSchema, type AppSettings, type UpdateAppSettingsRequest } from "@promptgraph/shared";
+import {
+  AppSettingsSchema,
+  UpdateAppSettingsRequestSchema,
+  VoiceSettingsSchema,
+  type AppSettings,
+  type UpdateAppSettingsRequest,
+  type VoiceSettings,
+} from "@promptgraph/shared";
 
-/** App-wide settings persisted in PgPaths.settingsFile (JSON). Missing/invalid file → defaults. */
+/**
+ * Lenient read of a stored settings object: each top-level key, and each `voice` field, is validated on its own
+ * and only the invalid ones fall back to their default. A hand-edited typo (e.g. `voice.language: "es-ES"` or a
+ * `~/…` path) must not reset every other setting, which the next PUT would then write over the file.
+ */
+export function parseStoredAppSettings(raw: unknown): AppSettings {
+  const whole = AppSettingsSchema.safeParse(raw);
+  if (whole.success) return whole.data;
+  const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const shape = AppSettingsSchema.shape;
+  const kept: Record<string, unknown> = {};
+  for (const key of Object.keys(shape) as Array<keyof typeof shape>) {
+    if (!(key in obj)) continue;
+    if (key === "voice") {
+      const voice = parseStoredVoiceSettings(obj.voice);
+      if (voice) kept.voice = voice;
+      continue;
+    }
+    const field = shape[key].safeParse(obj[key]);
+    if (field.success) kept[key] = field.data;
+  }
+  return AppSettingsSchema.parse(kept);
+}
+
+function parseStoredVoiceSettings(raw: unknown): VoiceSettings | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const shape = VoiceSettingsSchema.shape;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(shape) as Array<keyof typeof shape>) {
+    if (obj[key] === undefined) continue;
+    const field = shape[key].safeParse(obj[key]);
+    if (field.success) out[key] = field.data;
+  }
+  return VoiceSettingsSchema.parse(out);
+}
+
+/** App-wide settings persisted in PgPaths.settingsFile (JSON). Missing file → defaults; invalid fields → their default. */
 export class AppSettingsStore {
   constructor(readonly file: string) {}
 
@@ -13,8 +57,7 @@ export class AppSettingsStore {
     } catch {
       // Missing or unreadable file: defaults.
     }
-    const parsed = AppSettingsSchema.safeParse(raw);
-    return parsed.success ? parsed.data : AppSettingsSchema.parse({});
+    return parseStoredAppSettings(raw);
   }
 
   /**

@@ -83,4 +83,18 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE node_runs ADD COLUMN snapshot_start TEXT;
   ALTER TABLE node_runs ADD COLUMN snapshot_end TEXT;
   `,
+  // §20.8 chat panel sessions; the history itself lives in the Claude transcript.
+  `
+  CREATE TABLE chat_sessions (
+    id TEXT PRIMARY KEY,                 -- = Claude session id
+    repo_path TEXT NOT NULL,
+    title TEXT,                          -- NULL until the first user message
+    model TEXT,
+    total_cost_usd REAL NOT NULL DEFAULT 0,
+    started INTEGER NOT NULL DEFAULT 0,  -- 1 once Claude created the session (next process uses --resume)
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX chat_sessions_repo ON chat_sessions (repo_path, updated_at DESC);
+  `,
 ];

@@ -1,14 +1,34 @@
 import { z } from "zod";
+import {
+  ChatDeletedMessageSchema,
+  ChatDeltaMessageSchema,
+  ChatInterruptMessageSchema,
+  ChatItemMessageSchema,
+  ChatPermissionMessageSchema,
+  ChatSendMessageSchema,
+  ChatSessionMessageSchema,
+  ChatStatusMessageSchema,
+} from "./chat.js";
 import { LaneSchema, NodeRunSchema, RunSummarySchema } from "./run.js";
+import {
+  VoiceCancelMessageSchema,
+  VoiceErrorMessageSchema,
+  VoiceFinalMessageSchema,
+  VoicePartialMessageSchema,
+  VoiceStartMessageSchema,
+  VoiceStopMessageSchema,
+} from "./voice.js";
 
 /**
- * WebSocket protocol on /ws (§12.2). JSON text frames, one message per frame.
+ * WebSocket protocol on /ws (§12.2). JSON text frames, one message per frame. The only binary frames are the
+ * client's voice audio (§21): little-endian Int16 mono PCM at 16 kHz, routed to that client's active voice session.
  * Auth: `pg_token` cookie or `?t=<token>` on the upgrade request.
  *
  * Delivery rules:
- * - `run:update` and `graphs:changed` are broadcast to every client.
+ * - `run:update`, `graphs:changed` and `chat:*` (§20) are broadcast to every client.
  * - `node:update` / `lane:update` go to clients subscribed to that run.
  * - `pty:*` go to clients attached to that pty.
+ * - `voice:*` go only to the client that sent the voice:start.
  */
 
 // --- server → client -------------------------------------------------------
@@ -27,6 +47,16 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pty:error"), ptyId: z.string(), message: z.string() }),
   /** A graph file was saved, created or deleted (by this app or detected on disk). */
   z.object({ type: z.literal("graphs:changed"), graphId: z.string() }),
+  // Chat panel (§20)
+  ChatItemMessageSchema,
+  ChatDeltaMessageSchema,
+  ChatStatusMessageSchema,
+  ChatSessionMessageSchema,
+  ChatDeletedMessageSchema,
+  // Voice dictation (§21)
+  VoicePartialMessageSchema,
+  VoiceFinalMessageSchema,
+  VoiceErrorMessageSchema,
   z.object({ type: z.literal("error"), message: z.string() }),
   z.object({ type: z.literal("pong") }),
 ]);
@@ -50,6 +80,14 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pty:input"), ptyId: z.string(), data: z.string() }),
   /** The most recent attach/resize drives the PTY size. */
   z.object({ type: z.literal("pty:resize"), ptyId: z.string(), cols: z.number().int().positive(), rows: z.number().int().positive() }),
+  // Chat panel (§20)
+  ChatSendMessageSchema,
+  ChatInterruptMessageSchema,
+  ChatPermissionMessageSchema,
+  // Voice dictation (§21)
+  VoiceStartMessageSchema,
+  VoiceStopMessageSchema,
+  VoiceCancelMessageSchema,
   z.object({ type: z.literal("ping") }),
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;

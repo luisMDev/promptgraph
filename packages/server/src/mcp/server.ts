@@ -9,6 +9,7 @@ import { registerTools, type ToolDeps } from "./tools.js";
 
 const MCP_INSTRUCTIONS = `promptgraph runs graphs of Claude Code steps (prompts, slash commands, shell, commit, PR, approval, merge, condition) on a local server, each parallel branch in its own git worktree.
 Workflow: server_status → (start_server) → graph_reference → save_graph → start_run → wait_for_run → get_run_report.
+To change an existing graph use patch_graph (small edits that keep ids and positions) instead of rewriting it with save_graph.
 Approvals and pull-request gates are approved by the user in the UI (open_ui), never through these tools. Confirm with the user before cancel_run, cleanup_run or delete_graph.`;
 
 /** The MCP server with every promptgraph tool and the graph reference resource (§19). */

@@ -127,6 +127,12 @@ export class GraphStore {
     return { graph: parsed.data, hash: hashContent(raw.content), updatedAt: raw.updatedAt };
   }
 
+  /** sha256 of the file's current bytes (valid or not), or null when it does not exist. */
+  currentHash(id: string): string | null {
+    const raw = this.readRaw(id);
+    return raw ? hashContent(raw.content) : null;
+  }
+
   /** Parses with GraphSchema (fills defaults), writes, returns the stored graph + new hash. */
   save(graph: Graph): LoadedGraph {
     const parsed = GraphSchema.parse(graph);

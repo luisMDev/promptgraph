@@ -1,4 +1,4 @@
-import { GraphSchema, emptyUsage, type Graph, type GraphInput, type Lane, type NodeRun, type RunDetail } from "@promptgraph/shared";
+import { GraphSchema, VOICE_SETUP_INSTRUCTIONS, emptyUsage, type ChatSessionSummary, type Graph, type GraphInput, type Lane, type NodeRun, type RunDetail, type VoiceStatus } from "@promptgraph/shared";
 
 /** Shared builders for the web unit tests. */
 
@@ -106,4 +106,25 @@ export function testFixLoopGraph(): Graph {
       { id: "loop", source: "fix", target: "test", loop: { maxIterations: 3, onExhausted: "fail" } },
     ],
   });
+}
+
+export function chatSessionOf(patch: Partial<ChatSessionSummary> & Pick<ChatSessionSummary, "id">): ChatSessionSummary {
+  return { title: "Chat", createdAt: 1, updatedAt: 1, status: "idle", totalCostUsd: 0, ...patch };
+}
+
+/** GET /api/voice answer with whisper ready (override any field). */
+export function voiceStatusOf(patch: Partial<VoiceStatus> = {}): VoiceStatus {
+  return {
+    available: true,
+    whisperBin: "/usr/local/bin/whisper-cli",
+    whisperBinFrom: "path",
+    model: "/home/u/whisper.cpp/models/ggml-small.bin",
+    modelFrom: "detected",
+    mode: "hold",
+    language: "auto",
+    autoSubmit: false,
+    setup: [...VOICE_SETUP_INSTRUCTIONS],
+    defaultsFrom: { mode: "fallback", language: "fallback", autoSubmit: "fallback" },
+    ...patch,
+  };
 }

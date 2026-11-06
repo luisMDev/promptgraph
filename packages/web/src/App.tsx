@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas } from "./components/canvas/Canvas";
+import { ChatPanel } from "./components/chat/ChatPanel";
 import { Banners } from "./components/common/Banners";
 import { PromptDialog } from "./components/common/PromptDialog";
 import { Toasts } from "./components/common/Toasts";
@@ -36,6 +37,8 @@ export function App() {
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const inspectorWidth = useUiStore((s) => s.inspectorWidth);
+  const chatOpen = useUiStore((s) => s.chatOpen);
+  const chatWidth = useUiStore((s) => s.chatWidth);
   useAutoOpenReport();
 
   useEffect(() => {
@@ -70,20 +73,29 @@ export function App() {
           always sits below the header and any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
+        {/* A third provider for the chat panel (§20), docked at the far right: canvas and inspector stay visible. */}
         <SidebarProvider
-          open={inspectorOpen}
-          onOpenChange={(open) => useUiStore.getState().setInspectorOpen(open)}
+          open={chatOpen}
+          onOpenChange={(open) => useUiStore.getState().setChatOpen(open)}
           className="relative min-h-0 min-w-0 flex-1"
-          style={{ "--sidebar-width": `${inspectorWidth}px` } as CSSProperties}
+          style={{ "--sidebar-width": `${chatWidth}px` } as CSSProperties}
         >
-          <main className="relative flex min-w-0 flex-1 flex-col">
-            <CanvasOverlay />
-            <div className="min-h-0 flex-1">
-              <CanvasArea />
-            </div>
-            <TerminalDrawer />
-          </main>
-          <RightSidebar />
+          <SidebarProvider
+            open={inspectorOpen}
+            onOpenChange={(open) => useUiStore.getState().setInspectorOpen(open)}
+            className="relative min-h-0 min-w-0 flex-1"
+            style={{ "--sidebar-width": `${inspectorWidth}px` } as CSSProperties}
+          >
+            <main className="relative flex min-w-0 flex-1 flex-col">
+              <CanvasOverlay />
+              <div className="min-h-0 flex-1">
+                <CanvasArea />
+              </div>
+              <TerminalDrawer />
+            </main>
+            <RightSidebar />
+          </SidebarProvider>
+          <ChatSidebar />
         </SidebarProvider>
       </div>
       <ApprovalGate />
@@ -169,6 +181,18 @@ function RightSidebar() {
         <Inspector />
       </div>
       <SidebarRail aria-label="Collapse or resize inspector" title="Click to collapse, drag to resize" onResize={(px) => useUiStore.getState().setInspectorWidth(px)} />
+    </Sidebar>
+  );
+}
+
+function ChatSidebar() {
+  const open = useUiStore((s) => s.chatOpen);
+  return (
+    // nokey: Backspace/Delete typed in the composer must not delete canvas items.
+    <Sidebar side="right" collapsible="offcanvas" className="nokey absolute h-full">
+      {/* Mounted only while open: a collapsed chat costs nothing and the composer gets focus when it opens. */}
+      <div className="min-h-0 flex-1">{open && <ChatPanel />}</div>
+      <SidebarRail aria-label="Collapse or resize chat" title="Click to collapse, drag to resize" onResize={(px) => useUiStore.getState().setChatWidth(px)} />
     </Sidebar>
   );
 }

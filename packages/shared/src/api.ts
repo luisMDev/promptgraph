@@ -2,6 +2,7 @@ import { z } from "zod";
 import { GraphSchema, NodeTypeSchema } from "./graph.js";
 import { LaneSchema, NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
 import { ValidationResultSchema } from "./validation/types.js";
+import { VoiceSettingsSchema } from "./voice.js";
 
 /**
  * REST API (§12.1). Every route requires the session token (`Authorization: Bearer <t>` or the `pg_token`
@@ -43,6 +44,8 @@ export type RepoInfoResponse = z.infer<typeof RepoInfoResponseSchema>;
 export const AppSettingsSchema = z.object({
   /** Desktop notifications when a node needs attention (§18 Q2). */
   notifications: z.boolean().default(true),
+  /** Voice dictation (§21). Absent in files written before it existed; absent fields = defaults. */
+  voice: VoiceSettingsSchema.optional(),
 });
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 
@@ -78,9 +81,18 @@ export const GetGraphResponseSchema = z.object({
 });
 export type GetGraphResponse = z.infer<typeof GetGraphResponseSchema>;
 
-/** PUT /api/graphs/:id (upsert; body.id must equal :id; 409 while a run is active) */
+/**
+ * PUT /api/graphs/:id[?baseHash=<hash>] (upsert; body.id must equal :id; 409 while a run is active).
+ * With `baseHash` (optimistic concurrency, §20.7), the save is refused with 409
+ * ApiError{code: GRAPH_CONFLICT_CODE} when the file's current hash differs (or the graph does not exist).
+ * The web editor saves without it.
+ */
 export const SaveGraphRequestSchema = GraphSchema;
 export type SaveGraphRequest = z.input<typeof SaveGraphRequestSchema>;
+export const SaveGraphQuerySchema = z.object({ baseHash: z.string().min(1).optional() });
+export type SaveGraphQuery = z.infer<typeof SaveGraphQuerySchema>;
+/** ApiError code of a PUT /api/graphs/:id whose baseHash is stale. */
+export const GRAPH_CONFLICT_CODE = "graph_conflict";
 export const SaveGraphResponseSchema = z.object({ graph: GraphSchema, hash: z.string() });
 export type SaveGraphResponse = z.infer<typeof SaveGraphResponseSchema>;
 
@@ -299,6 +311,9 @@ export const API = {
   settings: "/api/settings",
   graphs: "/api/graphs",
   graph: (id: string) => `/api/graphs/${encodeURIComponent(id)}`,
+  /** PUT with optimistic concurrency (SaveGraphQuery). */
+  saveGraph: (id: string, baseHash?: string) =>
+    `/api/graphs/${encodeURIComponent(id)}${baseHash ? `?baseHash=${encodeURIComponent(baseHash)}` : ""}`,
   validate: (id: string) => `/api/graphs/${encodeURIComponent(id)}/validate`,
   startRun: (id: string) => `/api/graphs/${encodeURIComponent(id)}/runs`,
   runs: "/api/runs",
@@ -319,6 +334,10 @@ export const API = {
   commands: "/api/commands",
   claudeSetup: "/api/claude-setup",
   claudeCheck: "/api/claude-setup/check",
+  /** GET list · POST create (§20). */
+  chatSessions: "/api/chat/sessions",
+  /** GET detail · DELETE. */
+  chatSession: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}`,
   hook: (nodeRunId: string, event: string) => `/hooks/${encodeURIComponent(nodeRunId)}/${event}`,
   ws: "/ws",
 } as const;

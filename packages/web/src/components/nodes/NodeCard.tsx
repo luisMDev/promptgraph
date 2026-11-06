@@ -18,7 +18,7 @@ const handleBase = "!size-2.5 !border-2 !border-card";
 
 /** Canvas card for every node type: label, type icon, config preview; in run mode status, timing, activity, lane, usage. */
 export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgFlowNode>) {
-  const { node, nodeRun, lane, runMode, issues, phase, mergeInputs } = data;
+  const { node, nodeRun, lane, runMode, issues, phase, mergeInputs, highlighted } = data;
   const meta = NODE_TYPE_META[node.type];
   const style = runMode ? nodeRunStyle(nodeRun) : null;
   const hasErrors = !runMode && issues.errors.length > 0;
@@ -37,7 +37,8 @@ export const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<PgF
   return (
     <div
       title={tooltip}
-      className={`relative w-60 rounded-xl border-2 text-left shadow-soft transition-[color,background-color,border-color,box-shadow] hover:shadow-lifted ${border} ${selected ? "outline-2 outline-offset-2 outline-primary" : ""}`}
+      className={`relative w-60 rounded-xl border-2 text-left shadow-soft transition-[color,background-color,border-color,box-shadow] hover:shadow-lifted ${border} ${selected ? "outline-2 outline-offset-2 outline-primary" : ""} ${highlighted ? "pg-highlight" : ""}`}
+      data-highlighted={highlighted || undefined}
     >
       {lane && <span className="absolute top-2 bottom-2 -left-0.5 w-1 rounded-full" style={{ background: laneSwatch(lane.index).hex }} />}
       <Handle type="target" position={Position.Top} id="in" className={`${handleBase} !bg-stone-400`} isConnectable={!runMode} />

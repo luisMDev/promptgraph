@@ -1,11 +1,13 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { ClientMessageSchema, type ClientMessage, type ServerMessage } from "@promptgraph/shared";
+import { ClientMessageSchema, type ClientMessage, type ClientMessageOf, type ServerMessage } from "@promptgraph/shared";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type { AppContext } from "../app/context.js";
+import { ChatError } from "../chat/chat-manager.js";
 import { VERSION } from "../config/version.js";
 import { isAuthorized, isLocalRequest } from "../http/auth.js";
 import { errorMessage } from "../util/text.js";
+import type { VoiceSession } from "../voice/voice-session.js";
 
 /** Replay is sent in chunks of at most this many bytes (before base64). */
 export const REPLAY_CHUNK_BYTES = 64 * 1024;
@@ -22,6 +24,8 @@ interface Client {
   runs: Set<string>;
   ptys: Set<string>;
   alive: boolean;
+  /** Active voice recording (§21): binary frames go here. At most one per client. */
+  voice: VoiceSession | null;
 }
 
 /**
@@ -29,7 +33,11 @@ interface Client {
  * isAuthorized(). On connect sends `hello`. Bus → clients: run:update and graphs:changed to all;
  * node:update/lane:update to subscribers of the run; pty:data (base64) / pty:exit to attached clients.
  * Client messages are validated with ClientMessageSchema; pty:attach replies pty:attached + replay;
- * pty:input → PtyManager.userInput (live only, else pty:error).
+ * pty:input → PtyManager.userInput (live only, else pty:error). Chat (§20): bus `chat` messages are
+ * broadcast to all; chat:send / chat:interrupt / chat:permission go to the ChatManager (failures → error).
+ * Voice (§21): voice:start opens the client's single recording (cancelling a previous one), binary frames
+ * (PCM) are routed to it — ignored when there is none — and voice:stop/cancel end it; closing the socket
+ * cancels it. voice:* replies go only to that client. Binary frames are accepted for nothing else.
  */
 export class WsHub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
@@ -48,6 +56,7 @@ export class WsHub {
     this.unsubscribe.push(
       bus.on("run:update", ({ run }) => this.broadcast({ type: "run:update", run }, () => true)),
       bus.on("graphs:changed", ({ graphId }) => this.broadcast({ type: "graphs:changed", graphId }, () => true)),
+      bus.on("chat", ({ message }) => this.broadcast(message, () => true)),
       bus.on("node:update", ({ nodeRun }) => this.broadcast({ type: "node:update", nodeRun }, (c) => c.runs.has(nodeRun.runId))),
       bus.on("lane:update", ({ lane }) => this.broadcast({ type: "lane:update", lane }, (c) => c.runs.has(lane.runId))),
       bus.on("pty:data", ({ ptyId, data }) =>
@@ -79,19 +88,25 @@ export class WsHub {
   }
 
   private connect(ws: WebSocket): void {
-    const client: Client = { ws, runs: new Set(), ptys: new Set(), alive: true };
+    const client: Client = { ws, runs: new Set(), ptys: new Set(), alive: true, voice: null };
     this.clients.add(client);
     ws.on("pong", () => (client.alive = true));
     ws.on("message", (raw, isBinary) => this.receive(client, raw, isBinary));
-    ws.on("close", () => this.clients.delete(client));
+    ws.on("close", () => {
+      this.clients.delete(client);
+      client.voice?.cancel();
+      client.voice = null;
+    });
     ws.on("error", () => ws.terminate());
     this.send(client, { type: "hello", version: VERSION });
   }
 
   private receive(client: Client, raw: RawData, isBinary: boolean): void {
+    // Binary = voice audio for the active recording; without one it is ignored (§21.4).
+    if (isBinary) return void client.voice?.pushAudio(rawToBuffer(raw));
     let data: unknown;
     try {
-      data = isBinary ? undefined : JSON.parse(rawToString(raw));
+      data = JSON.parse(rawToString(raw));
     } catch {
       // handled below
     }
@@ -124,8 +139,47 @@ export class WsHub {
       case "pty:resize":
         ptys.resize(msg.ptyId, msg.cols, msg.rows);
         return;
+      case "chat:send":
+      case "chat:interrupt":
+      case "chat:permission":
+        return this.handleChat(client, msg);
+      case "voice:start":
+        return this.startVoice(client, msg);
+      case "voice:stop":
+        if (client.voice?.voiceId === msg.voiceId) client.voice.stop();
+        return;
+      case "voice:cancel":
+        if (client.voice?.voiceId === msg.voiceId) client.voice.cancel();
+        return;
       case "ping":
         return this.send(client, { type: "pong" });
+    }
+  }
+
+  /** A new voice:start silently cancels the client's previous recording (§21.4). */
+  private startVoice(client: Client, msg: ClientMessageOf<"voice:start">): void {
+    client.voice?.cancel();
+    const session = this.ctx.voice.start({
+      voiceId: msg.voiceId,
+      keyterms: msg.keyterms,
+      language: msg.language,
+      send: (m) => this.send(client, m),
+      onEnd: (s) => {
+        if (client.voice === s) client.voice = null;
+      },
+    });
+    client.voice = session.ended ? null : session;
+  }
+
+  private handleChat(client: Client, msg: ClientMessageOf<"chat:send" | "chat:interrupt" | "chat:permission">): void {
+    const { chat } = this.ctx;
+    try {
+      if (msg.type === "chat:send") chat.send(msg.sessionId, msg.text, msg.context);
+      else if (msg.type === "chat:interrupt") chat.interrupt(msg.sessionId);
+      else chat.answerPermission(msg.sessionId, msg.requestId, msg.allow, msg.message);
+    } catch (err) {
+      if (!(err instanceof ChatError)) console.error(err);
+      this.send(client, { type: "error", message: errorMessage(err) });
     }
   }
 
@@ -186,6 +240,11 @@ export class WsHub {
 
 function rejectUpgrade(socket: Duplex, status: number, text: string): void {
   socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
+
+function rawToBuffer(raw: RawData): Buffer {
+  if (Array.isArray(raw)) return Buffer.concat(raw);
+  return Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
 }
 
 function rawToString(raw: RawData): string {

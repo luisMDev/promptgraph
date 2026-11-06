@@ -1,6 +1,11 @@
 import {
   type ClaudeCheckResponse,
   type ClaudeSetupResponse,
+  type ChatSessionSummary,
+  type CreateChatSessionRequest,
+  type CreateChatSessionResponse,
+  type GetChatSessionResponse,
+  type ListChatSessionsResponse,
   API,
   type ApiError,
   type AppSettings,
@@ -23,6 +28,8 @@ import {
   type StartRunResponse,
   type UpdateAppSettingsRequest,
   type ValidationResult,
+  type VoiceStatus,
+  VOICE_API_PATH,
 } from "@promptgraph/shared";
 import { devToken } from "./token";
 
@@ -114,8 +121,9 @@ export const api = {
   getGraph(id: string): Promise<GetGraphResponse> {
     return request("GET", API.graph(id));
   },
-  saveGraph(graph: Graph): Promise<SaveGraphResponse> {
-    return request("PUT", API.graph(graph.id), graph);
+  /** `baseHash`: optimistic concurrency, the server answers 409 (GRAPH_CONFLICT_CODE) when the file changed since. */
+  saveGraph(graph: Graph, baseHash?: string): Promise<SaveGraphResponse> {
+    return request("PUT", API.saveGraph(graph.id, baseHash), graph);
   },
   async deleteGraph(id: string): Promise<void> {
     await request("DELETE", API.graph(id));
@@ -186,5 +194,22 @@ export const api = {
   },
   checkClaudeSetup(): Promise<ClaudeCheckResponse> {
     return request("POST", API.claudeCheck, {});
+  },
+  listChatSessions(): Promise<ListChatSessionsResponse> {
+    return request("GET", API.chatSessions);
+  },
+  async createChatSession(req: CreateChatSessionRequest = {}): Promise<ChatSessionSummary> {
+    const res = await request<CreateChatSessionResponse>("POST", API.chatSessions, req);
+    return res.session;
+  },
+  getChatSession(id: string): Promise<GetChatSessionResponse> {
+    return request("GET", API.chatSession(id));
+  },
+  async deleteChatSession(id: string): Promise<void> {
+    await request("DELETE", API.chatSession(id));
+  },
+  /** Voice dictation status (§21): whisper binary, model and the resolved preferences. `refresh` skips the server's probe cache. */
+  voiceStatus(refresh = false): Promise<VoiceStatus> {
+    return request("GET", refresh ? `${VOICE_API_PATH}?refresh=1` : VOICE_API_PATH);
   },
 };

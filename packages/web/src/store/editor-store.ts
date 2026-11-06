@@ -1,4 +1,5 @@
 import {
+  GRAPH_CONFLICT_CODE,
   layeredLayout,
   validateGraph,
   type GetGraphResponse,
@@ -46,6 +47,13 @@ export interface EditorStore extends EditorState {
   /** Multi-selection; selectedNodeId/selectedEdgeId are set only when exactly one element is selected. */
   selectedNodeIds: string[];
   selectedEdgeIds: string[];
+  /**
+   * The graph was reloaded because it changed outside the editor (chat, MCP, another tool): the version shown before,
+   * which "Undo" saves back. Cleared by a local edit, another graph or a dismiss.
+   */
+  externalUndo: ExternalUndo | null;
+  /** Nodes added or changed by the last external change; highlighted on the canvas for HIGHLIGHT_MS. */
+  highlightNodeIds: string[];
 
   setPhase(phase: 1 | 2, supportedNodeTypes?: readonly NodeType[] | null): void;
   openGraph(id: string): Promise<void>;
@@ -70,19 +78,30 @@ export interface EditorStore extends EditorState {
   checkExternalChange(graphId: string): Promise<void>;
   reloadFromDisk(): Promise<void>;
   dismissModifiedOutside(): void;
-  /** Resolves `externalChange` by keeping the local edits (the pending autosave overwrites the file). */
+  /** Resolves `externalChange` by keeping the local edits (the next autosave overwrites the file, without baseHash). */
   keepLocalChanges(): void;
+  /** Saves `externalUndo.previous` back (with the current hash as baseHash) and shows it. */
+  undoExternalChange(): Promise<void>;
+  dismissExternalUndo(): void;
   setActiveRunId(runId: string | null): void;
 }
 
+export interface ExternalUndo {
+  graphId: string;
+  previous: Graph;
+}
+
 export const AUTOSAVE_DELAY_MS = 500;
+/** How long nodes changed outside the editor stay highlighted. */
+export const HIGHLIGHT_MS = 4000;
 
 export interface EditorPersistence {
   load(id: string): Promise<GetGraphResponse>;
-  save(graph: Graph): Promise<SaveGraphResponse>;
+  /** `baseHash`: refuse (409) when the file no longer has this hash. */
+  save(graph: Graph, baseHash?: string): Promise<SaveGraphResponse>;
 }
 
-let persistence: EditorPersistence = { load: (id) => api.getGraph(id), save: (g) => api.saveGraph(g) };
+let persistence: EditorPersistence = { load: (id) => api.getGraph(id), save: (g, baseHash) => api.saveGraph(g, baseHash) };
 
 /** Test seam. */
 export function setEditorPersistence(p: EditorPersistence): void {
@@ -106,11 +125,42 @@ function validate(graph: Graph | null, s: Pick<EditorStore, "phase" | "supported
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let inflight: Promise<void> | null = null;
+/**
+ * A `graphs:changed` for this graph arrived while a save was pending or in flight and was not checked: it is
+ * checked once the save settles, so a change saved meanwhile (e.g. Claude's patch_graph) is never missed.
+ */
+let recheckGraphId: string | null = null;
+/** The user chose to keep the local edits over a conflicting file: the next save goes without baseHash. */
+let overwriteOnce = false;
 
 function clearSaveTimer(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
 }
+
+let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearHighlightTimer(): void {
+  if (highlightTimer) clearTimeout(highlightTimer);
+  highlightTimer = null;
+}
+
+/** JSON with object keys sorted, so two equal values compare equal whatever order their keys were built in. */
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
+/** Ids of nodes of `next` that are new or differ from `prev` (position changes included; key order ignored). Pure. */
+export function changedNodeIds(prev: Graph, next: Graph): string[] {
+  const before = new Map(prev.nodes.map((n) => [n.id, stableStringify(n)]));
+  return next.nodes.filter((n) => before.get(n.id) !== stableStringify(n)).map((n) => n.id);
+}
+
+const NO_UNDO = { externalUndo: null, highlightNodeIds: [] };
 
 const NO_SELECTION = { selectedNodeIds: [], selectedEdgeIds: [], selectedNodeId: null, selectedEdgeId: null };
 
@@ -129,19 +179,26 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       if (get().dirty && !saveTimer) return runSave();
       return;
     }
-    const { graph, dirty } = get();
-    if (!graph || !dirty) return;
+    const { graph, dirty, graphHash, externalChange } = get();
+    // A conflict is open: nothing is saved until the user reloads or keeps the local edits.
+    if (!graph || !dirty || externalChange) return;
+    // baseHash: a change saved meanwhile by someone else (chat, MCP) is refused (409) instead of overwritten.
+    const baseHash = overwriteOnce ? undefined : (graphHash ?? undefined);
+    overwriteOnce = false;
     set({ saving: true });
     inflight = (async () => {
       try {
-        const res = await persistence.save(graph);
+        const res = await persistence.save(graph, baseHash);
         const cur = get();
         if (cur.graph?.id !== graph.id) return;
         set(cur.graph === graph ? { dirty: false, graphHash: res.hash, saveError: null } : { graphHash: res.hash, saveError: null });
       } catch (err) {
         if (get().graph?.id !== graph.id) return;
-        if (err instanceof ApiRequestError && err.body.code === "run_active") {
-          set({ saveError: "A run is active: changes cannot be saved until it finishes." });
+        if (isConflict(err)) {
+          // The file changed since the editor read it: same banner as a change seen while dirty.
+          set({ externalChange: true, saveError: null });
+        } else if (err instanceof ApiRequestError && err.body.code === "run_active") {
+          set({ saveError: RUN_ACTIVE_MESSAGE });
         } else {
           set({ saveError: `Save failed: ${errorMessage(err)}` });
         }
@@ -151,9 +208,19 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       }
     })();
     await inflight;
+    runPendingRecheck();
+  }
+
+  /** Runs the external-change check skipped while saving, once nothing is pending. */
+  function runPendingRecheck(): void {
+    const id = recheckGraphId;
+    if (!id || saveTimer || inflight || get().saving) return;
+    recheckGraphId = null;
+    void get().checkExternalChange(id);
   }
 
   function applyLoaded(res: GetGraphResponse, keepSelection: boolean): void {
+    overwriteOnce = false;
     const selection = keepSelection ? pruneSelection(get(), res.graph) : NO_SELECTION;
     set({
       graph: res.graph,
@@ -189,6 +256,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     externalChange: false,
     selectedNodeIds: [],
     selectedEdgeIds: [],
+    externalUndo: null,
+    highlightNodeIds: [],
 
     setPhase(phase, supportedNodeTypes = null) {
       set({ phase, supportedNodeTypes, validation: validate(get().graph, { phase, supportedNodeTypes }) });
@@ -197,7 +266,9 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     async openGraph(id) {
       await get().flushSave();
       clearSaveTimer();
-      set({ graphId: id, loading: true, loadError: null, graph: null, graphHash: null, dirty: false, validation: EMPTY_VALIDATION, ...NO_SELECTION });
+      clearHighlightTimer();
+      recheckGraphId = null;
+      set({ ...NO_UNDO, graphId: id, loading: true, loadError: null, graph: null, graphHash: null, dirty: false, validation: EMPTY_VALIDATION, ...NO_SELECTION });
       try {
         const res = await persistence.load(id);
         applyLoaded(res, false);
@@ -208,7 +279,11 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
 
     closeGraph() {
       clearSaveTimer();
+      clearHighlightTimer();
+      recheckGraphId = null;
+      overwriteOnce = false;
       set({
+        ...NO_UNDO,
         graphId: null,
         graph: null,
         graphHash: null,
@@ -228,7 +303,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
       if (isReadOnly(s) || !s.graph) return;
       const next = fn(s.graph);
       if (next === s.graph) return;
-      set({ graph: next, dirty: true, validation: validate(next, s), ...pruneSelection(s, next) });
+      // Undoing an external change after local edits would silently discard them.
+      set({ graph: next, dirty: true, validation: validate(next, s), ...pruneSelection(s, next), externalUndo: null });
       scheduleSave();
     },
 
@@ -305,7 +381,11 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
 
     async checkExternalChange(graphId) {
       const s = get();
-      if (s.graph?.id !== graphId || s.saving || saveTimer) return;
+      if (s.graph?.id !== graphId) return;
+      if (s.saving || saveTimer) {
+        recheckGraphId = graphId;
+        return;
+      }
       let res: GetGraphResponse;
       try {
         res = await persistence.load(graphId);
@@ -317,19 +397,39 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
         return;
       }
       const cur = get();
-      if (cur.graph?.id !== graphId || cur.saving || saveTimer) return;
+      if (cur.graph?.id !== graphId) return;
+      if (cur.saving || saveTimer) {
+        recheckGraphId = graphId;
+        return;
+      }
       if (res.hash === cur.graphHash) {
         set({ activeRunId: res.activeRunId });
         return;
       }
-      if (cur.dirty) set({ externalChange: true, activeRunId: res.activeRunId });
-      else applyLoaded(res, true);
+      if (cur.dirty) {
+        set({ externalChange: true, activeRunId: res.activeRunId });
+        return;
+      }
+      const previous = cur.graph;
+      applyLoaded(res, true);
+      const highlightNodeIds = changedNodeIds(previous, res.graph);
+      // Keep the oldest version across consecutive external changes (one chat turn may save several times).
+      const prevUndo = cur.externalUndo?.graphId === graphId ? cur.externalUndo : null;
+      set({ externalUndo: prevUndo ?? { graphId, previous }, highlightNodeIds });
+      clearHighlightTimer();
+      if (highlightNodeIds.length) {
+        highlightTimer = setTimeout(() => {
+          highlightTimer = null;
+          set({ highlightNodeIds: [] });
+        }, HIGHLIGHT_MS);
+      }
     },
 
     async reloadFromDisk() {
       const id = get().graph?.id;
       if (!id) return;
       clearSaveTimer();
+      set(NO_UNDO);
       try {
         applyLoaded(await persistence.load(id), true);
       } catch (err) {
@@ -342,8 +442,57 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     },
 
     keepLocalChanges() {
+      if (!get().externalChange) return;
+      overwriteOnce = true;
       set({ externalChange: false });
       if (get().dirty && !saveTimer) scheduleSave();
+    },
+
+    async undoExternalChange() {
+      const s = get();
+      const undo = s.externalUndo;
+      if (!undo || s.graph?.id !== undo.graphId || isReadOnly(s) || s.saving) return;
+      clearSaveTimer();
+      clearHighlightTimer();
+      set({ saving: true });
+      let failure: string | null = null;
+      try {
+        const res = await persistence.save(undo.previous, s.graphHash ?? undefined);
+        if (get().graph?.id !== undo.graphId) return;
+        set({
+          ...NO_UNDO,
+          graph: res.graph,
+          graphHash: res.hash,
+          dirty: false,
+          saveError: null,
+          validation: validate(res.graph, get()),
+          ...pruneSelection(get(), res.graph),
+        });
+      } catch (err) {
+        if (get().graph?.id !== undo.graphId) return;
+        failure = isConflict(err)
+          ? "Undo failed: the graph changed again in the meantime."
+          : err instanceof ApiRequestError && err.body.code === "run_active"
+            ? `Undo failed: ${RUN_ACTIVE_MESSAGE}`
+            : `Undo failed: ${errorMessage(err)}`;
+        set({ ...NO_UNDO, saveError: failure });
+      } finally {
+        set({ saving: false });
+      }
+      if (failure === null) {
+        runPendingRecheck();
+        return;
+      }
+      // The shown graph and hash may be stale now (the change that made the undo fail was not loaded):
+      // reload what is on disk so the next edit does not write the stale version back.
+      recheckGraphId = null;
+      await get().checkExternalChange(undo.graphId);
+      if (get().graph?.id === undo.graphId) set({ saveError: failure });
+    },
+
+    dismissExternalUndo() {
+      clearHighlightTimer();
+      set(NO_UNDO);
     },
 
     setActiveRunId(runId) {
@@ -351,6 +500,12 @@ export const useEditorStore = create<EditorStore>()((set, get) => {
     },
   };
 });
+
+const RUN_ACTIVE_MESSAGE = "A run is active: changes cannot be saved until it finishes.";
+
+function isConflict(err: unknown): boolean {
+  return err instanceof ApiRequestError && err.body.code === GRAPH_CONFLICT_CODE;
+}
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
