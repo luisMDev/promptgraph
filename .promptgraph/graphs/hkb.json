@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "hkb",
+  "name": "hkb",
+  "settings": {
+    "baseBranch": "main",
+    "branchPrefix": "",
+    "maxParallelClaude": 3,
+    "defaults": {
+      "permissionMode": "acceptEdits",
+      "completion": {
+        "mode": "auto",
+        "graceSec": 5
+      }
+    },
+    "keepWorktrees": "on-failure",
+    "autoTrustWorktrees": true,
+    "allowPrWithoutApproval": false
+  },
+  "nodes": [],
+  "edges": []
+}

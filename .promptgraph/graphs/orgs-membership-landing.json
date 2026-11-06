@@ -1,0 +1,424 @@
+{
+  "version": 1,
+  "id": "orgs-membership-landing",
+  "name": "App con organizaciones, membresías y landing",
+  "settings": {
+    "baseBranch": "main",
+    "branchPrefix": "",
+    "maxParallelClaude": 2,
+    "workspaceSetup": "if [ -f orgs-app/package.json ]; then cd orgs-app && pnpm install --ignore-workspace; fi",
+    "defaults": {
+      "permissionMode": "acceptEdits",
+      "completion": {
+        "mode": "auto",
+        "graceSec": 5
+      }
+    },
+    "keepWorktrees": "on-failure",
+    "autoTrustWorktrees": true,
+    "allowPrWithoutApproval": false
+  },
+  "nodes": [
+    {
+      "id": "plan",
+      "label": "Plan",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "We are going to build a new standalone web app in the directory `orgs-app/` at the repository root (it is NOT part of the existing pnpm workspace; always run pnpm there with `--ignore-workspace`). The app has: (1) user auth (email + password), (2) organizations (multi-tenant), (3) organization memberships with roles owner/admin/member and email invitations, (4) a public marketing landing page.\n\nStack: Next.js (App Router, TypeScript strict), Tailwind CSS, Better Auth with its `organization` plugin, Drizzle ORM with SQLite (better-sqlite3) for local development, Vitest for unit/integration tests, ESLint.\n\nWrite a concrete implementation plan, do not write code yet. Include: the folder structure, the data model (users, sessions, organizations, members, invitations), the routes (public landing at `/`, `/login`, `/signup`, `/app` dashboard, `/app/orgs/new`, `/app/orgs/[slug]/members`, `/invite/[token]`), the permission rules per role, which files belong to the 'organizations & memberships' work and which to the 'landing' work (they must not overlap, so they can be built in parallel), and the exact scripts package.json will expose (`dev`, `build`, `test`, `lint`). Invitation emails are only logged to the console (no email provider).",
+        "context": "fresh",
+        "permissionMode": "plan",
+        "completion": {
+          "mode": "manual"
+        }
+      }
+    },
+    {
+      "id": "scaffold",
+      "label": "Scaffold base",
+      "position": {
+        "x": 0,
+        "y": 200
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "Follow the plan above. Create the base app in `orgs-app/` (standalone, not part of the root pnpm workspace; use `pnpm install --ignore-workspace`). Set up: Next.js App Router + TypeScript strict, Tailwind, ESLint, Vitest, Drizzle + SQLite with the auth schema and migrations, Better Auth with email/password and the `organization` plugin enabled (server config + client), `/login` and `/signup` pages, a protected `/app` layout that redirects to `/login` when there is no session, and a placeholder `/` page. Add a `.env.example` and a README in `orgs-app/` with setup steps. package.json must expose `dev`, `build`, `test` (vitest run) and `lint`. Add at least one test for the auth setup. Do NOT implement organization management UI or the landing content yet. Finish when `pnpm --ignore-workspace install && pnpm test && pnpm lint && pnpm build` pass inside `orgs-app/`.",
+        "context": "fresh",
+        "allowedTools": [
+          "Bash(pnpm:*)",
+          "Bash(npx:*)",
+          "Bash(cd:*)",
+          "Bash(mkdir:*)",
+          "Bash(ls:*)"
+        ]
+      }
+    },
+    {
+      "id": "commit-scaffold",
+      "label": "Commit scaffold",
+      "position": {
+        "x": 0,
+        "y": 400
+      },
+      "type": "commit",
+      "config": {
+        "generateMessage": true,
+        "squashCheckpoints": true
+      }
+    },
+    {
+      "id": "orgs",
+      "label": "Organizaciones y membresías",
+      "position": {
+        "x": -150,
+        "y": 600
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "In the Next.js app in `orgs-app/` (standalone; run pnpm with `--ignore-workspace`), Better Auth with the `organization` plugin and Drizzle/SQLite are already set up. Implement organizations and memberships. Only touch files under `orgs-app/src/app/app/`, `orgs-app/src/app/invite/`, `orgs-app/src/lib/orgs/` and `orgs-app/src/components/orgs/` plus their tests (and the auth/db config only if strictly needed). Do NOT touch the landing page `/` or `orgs-app/src/components/landing/`.\n\nFeatures:\n- `/app`: list the user's organizations and an organization switcher (sets the active organization).\n- `/app/orgs/new`: create an organization (name + unique slug); the creator becomes owner.\n- `/app/orgs/[slug]/members`: list members with roles; owner/admin can invite by email with a role, change roles and remove members; members can only view; the last owner cannot be removed or demoted; a member can leave the organization.\n- Invitations: pending list with cancel; the invite link `/invite/[token]` lets a logged-in user accept or reject (redirect to login/signup first if needed). Log the invite link to the server console instead of sending email.\n- Enforce permissions on the server (server actions / route handlers), not only in the UI.\n\nAdd Vitest tests for the permission rules and the invitation flow (create, accept, reject, expired/cancelled). Finish when `pnpm test && pnpm lint && pnpm build` pass inside `orgs-app/`.",
+        "context": "clean",
+        "allowedTools": [
+          "Bash(pnpm:*)",
+          "Bash(cd:*)",
+          "Bash(ls:*)"
+        ]
+      }
+    },
+    {
+      "id": "commit-orgs",
+      "label": "Commit orgs",
+      "position": {
+        "x": -150,
+        "y": 800
+      },
+      "type": "commit",
+      "config": {
+        "generateMessage": true,
+        "squashCheckpoints": true
+      }
+    },
+    {
+      "id": "landing",
+      "label": "Landing page",
+      "position": {
+        "x": 150,
+        "y": 600
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "In the Next.js + Tailwind app in `orgs-app/` (standalone; run pnpm with `--ignore-workspace`), replace the placeholder public page `/` with a polished, responsive marketing landing page for a team collaboration SaaS built around organizations and memberships. Only touch `orgs-app/src/app/page.tsx`, `orgs-app/src/app/(marketing)/` if you need it, and `orgs-app/src/components/landing/`. Do NOT touch `/app`, `/invite`, auth or database code.\n\nSections: header with logo and links (Features, Pricing, FAQ, Log in, Sign up), hero with a headline and primary CTA to `/signup`, feature grid (organizations, roles & permissions, invitations, security), how it works in 3 steps, pricing with 3 plans (Free, Team, Enterprise; static content, no payments), FAQ (accordion), final CTA and footer. Use semantic HTML, accessible contrast and keyboard-friendly navigation, good metadata (title, description, Open Graph). No external images: use SVG or CSS. Add a Vitest + Testing Library test that renders the page and checks the main sections and the CTA links. Finish when `pnpm test && pnpm lint && pnpm build` pass inside `orgs-app/`.",
+        "context": "clean",
+        "allowedTools": [
+          "Bash(pnpm:*)",
+          "Bash(cd:*)",
+          "Bash(ls:*)"
+        ]
+      }
+    },
+    {
+      "id": "commit-landing",
+      "label": "Commit landing",
+      "position": {
+        "x": 150,
+        "y": 800
+      },
+      "type": "commit",
+      "config": {
+        "generateMessage": true,
+        "squashCheckpoints": true
+      }
+    },
+    {
+      "id": "merge",
+      "label": "Merge",
+      "position": {
+        "x": 0,
+        "y": 1000
+      },
+      "type": "merge",
+      "config": {
+        "strategy": "merge",
+        "onConflict": "claude"
+      }
+    },
+    {
+      "id": "tests",
+      "label": "Test, lint, build",
+      "position": {
+        "x": 0,
+        "y": 1200
+      },
+      "type": "shell",
+      "config": {
+        "run": "cd orgs-app && pnpm install --ignore-workspace && pnpm test && pnpm lint && pnpm build",
+        "timeoutSec": 900
+      }
+    },
+    {
+      "id": "tests-green",
+      "label": "¿Tests en verde?",
+      "position": {
+        "x": 0,
+        "y": 1400
+      },
+      "type": "condition",
+      "config": {
+        "evaluator": {
+          "kind": "exitCode",
+          "equals": 0
+        }
+      }
+    },
+    {
+      "id": "fix-tests",
+      "label": "Arreglar tests",
+      "position": {
+        "x": 150,
+        "y": 1600
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "The command `cd orgs-app && pnpm install --ignore-workspace && pnpm test && pnpm lint && pnpm build` failed; its output is above. Find the root cause and fix the code in `orgs-app/` (fix the implementation, do not delete or skip tests to make them pass). Finish when that command passes.",
+        "context": "fresh",
+        "allowedTools": [
+          "Bash(pnpm:*)",
+          "Bash(cd:*)",
+          "Bash(ls:*)"
+        ]
+      }
+    },
+    {
+      "id": "review",
+      "label": "Code review",
+      "position": {
+        "x": -176,
+        "y": 1600
+      },
+      "type": "command",
+      "config": {
+        "command": "/code-review high",
+        "context": "fresh"
+      }
+    },
+    {
+      "id": "review-blocking",
+      "label": "¿Problemas bloqueantes?",
+      "position": {
+        "x": 0,
+        "y": 1800
+      },
+      "type": "condition",
+      "config": {
+        "evaluator": {
+          "kind": "judge",
+          "question": "Did the code review report blocking issues (correctness bugs, security problems or broken permission checks) that must be fixed before merging?"
+        }
+      }
+    },
+    {
+      "id": "fix-review",
+      "label": "Aplicar review",
+      "position": {
+        "x": -150,
+        "y": 2000
+      },
+      "type": "prompt",
+      "config": {
+        "prompt": "Fix every blocking issue reported by the code review above in `orgs-app/`. Add or update tests that cover each fix. Finish when `cd orgs-app && pnpm test && pnpm lint && pnpm build` pass.",
+        "context": "fresh",
+        "allowedTools": [
+          "Bash(pnpm:*)",
+          "Bash(cd:*)",
+          "Bash(ls:*)"
+        ]
+      }
+    },
+    {
+      "id": "commit-final",
+      "label": "Commit final",
+      "position": {
+        "x": 150,
+        "y": 2000
+      },
+      "type": "commit",
+      "config": {
+        "generateMessage": true,
+        "squashCheckpoints": true
+      }
+    },
+    {
+      "id": "approve",
+      "label": "Revisar antes del PR",
+      "position": {
+        "x": 0,
+        "y": 2200
+      },
+      "type": "approval",
+      "config": {
+        "message": "Revisa el diff de orgs-app antes de abrir el PR.",
+        "showDiff": true
+      }
+    },
+    {
+      "id": "pr",
+      "label": "PR",
+      "position": {
+        "x": 0,
+        "y": 2400
+      },
+      "type": "pr",
+      "config": {
+        "title": "feat: add orgs-app with organizations, memberships and landing page",
+        "draft": true,
+        "requireApproval": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-plan-scaffold",
+      "source": "plan",
+      "sourcePort": "out",
+      "target": "scaffold",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-scaffold-commit-scaffold",
+      "source": "scaffold",
+      "sourcePort": "out",
+      "target": "commit-scaffold",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-commit-scaffold-orgs",
+      "source": "commit-scaffold",
+      "sourcePort": "out",
+      "target": "orgs",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-commit-scaffold-landing",
+      "source": "commit-scaffold",
+      "sourcePort": "out",
+      "target": "landing",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-orgs-commit-orgs",
+      "source": "orgs",
+      "sourcePort": "out",
+      "target": "commit-orgs",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-landing-commit-landing",
+      "source": "landing",
+      "sourcePort": "out",
+      "target": "commit-landing",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-commit-orgs-merge",
+      "source": "commit-orgs",
+      "sourcePort": "out",
+      "target": "merge",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-commit-landing-merge",
+      "source": "commit-landing",
+      "sourcePort": "out",
+      "target": "merge",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-merge-tests",
+      "source": "merge",
+      "sourcePort": "out",
+      "target": "tests",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-tests-tests-green",
+      "source": "tests",
+      "sourcePort": "out",
+      "target": "tests-green",
+      "targetPort": "in",
+      "when": "always"
+    },
+    {
+      "id": "e-tests-green-true-review",
+      "source": "tests-green",
+      "sourcePort": "true",
+      "target": "review",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-tests-green-false-fix-tests",
+      "source": "tests-green",
+      "sourcePort": "false",
+      "target": "fix-tests",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-fix-tests-tests",
+      "source": "fix-tests",
+      "sourcePort": "out",
+      "target": "tests",
+      "targetPort": "in",
+      "loop": {
+        "maxIterations": 3,
+        "onExhausted": "fail"
+      }
+    },
+    {
+      "id": "e-review-review-blocking",
+      "source": "review",
+      "sourcePort": "out",
+      "target": "review-blocking",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-review-blocking-false-commit-final",
+      "source": "review-blocking",
+      "sourcePort": "false",
+      "target": "commit-final",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-review-blocking-true-fix-review",
+      "source": "review-blocking",
+      "sourcePort": "true",
+      "target": "fix-review",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-fix-review-review",
+      "source": "fix-review",
+      "sourcePort": "out",
+      "target": "review",
+      "targetPort": "in",
+      "loop": {
+        "maxIterations": 2,
+        "onExhausted": "fail"
+      }
+    },
+    {
+      "id": "e-commit-final-approve",
+      "source": "commit-final",
+      "sourcePort": "out",
+      "target": "approve",
+      "targetPort": "in"
+    },
+    {
+      "id": "e-approve-pr",
+      "source": "approve",
+      "sourcePort": "out",
+      "target": "pr",
+      "targetPort": "in"
+    }
+  ]
+}
