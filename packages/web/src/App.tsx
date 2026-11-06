@@ -66,7 +66,7 @@ export function AppShell({ strip, children }: { strip?: ReactNode; children: Rea
     );
   }
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+    <div className="flex h-full min-h-0 flex-col bg-frame text-foreground">
       {strip}
       <SessionBanners />
       {hasInfo ? (

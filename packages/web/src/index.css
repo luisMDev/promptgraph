@@ -223,6 +223,7 @@ body {
 }
 
 @theme inline {
+  --color-frame: var(--frame);
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
@@ -268,6 +269,8 @@ body {
 :root {
   /* Warm neutrals sampled from the banner: cream background, off-white surfaces, near-black ink (#0a0a0a). */
   --background: oklch(0.965 0.007 75);
+  /* The window frame around the tab panels (tab strip, bottom bar): a shade darker than the panel. */
+  --frame: oklch(0.925 0.009 75);
   --foreground: oklch(0.18 0.006 60);
   --card: oklch(0.993 0.003 80);
   --card-foreground: oklch(0.18 0.006 60);
@@ -304,6 +307,7 @@ body {
 .dark {
   /* Near-black neutrals after the dark banner and the landing page. */
   --background: oklch(0.155 0.002 286);
+  --frame: oklch(0.115 0.002 286);
   --foreground: oklch(0.96 0.002 286);
   --card: oklch(0.195 0.003 286);
   --card-foreground: oklch(0.96 0.002 286);

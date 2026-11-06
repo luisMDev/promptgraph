@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tabDragTarget, tabShift } from "./TabStrip";
+import { tabDragTarget, tabGap, tabShift } from "./TabStrip";
 
 // Three 100px tabs side by side, starting at x = 10.
 const slots = [0, 1, 2].map((i) => ({ left: 10 + i * 100, width: 100 }));
@@ -26,5 +26,13 @@ describe("tab drag geometry", () => {
     // Tab 2 hovering over slot 0: tabs 0 and 1 move right.
     expect([0, 1, 2].map((i) => tabShift(i, 2, 0, 100))).toEqual([100, 100, 0]);
     expect([0, 1, 2].map((i) => tabShift(i, 1, 1, 100))).toEqual([0, 0, 0]);
+  });
+});
+
+describe("tab gap", () => {
+  it("is the space between the first two pills, 0 for a single tab or touching tabs", () => {
+    expect(tabGap([{ left: 10, width: 100 }, { left: 114, width: 100 }])).toBe(4);
+    expect(tabGap(slots)).toBe(0);
+    expect(tabGap([{ left: 0, width: 50 }])).toBe(0);
   });
 });

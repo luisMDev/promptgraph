@@ -56,18 +56,18 @@ export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBrid
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-stretch border-b bg-muted/40 text-xs select-none" data-pg-tabstrip="" {...dragRegion}>
+    <div className="flex h-10 shrink-0 items-center gap-1 px-1.5 text-xs select-none" data-pg-tabstrip="" {...dragRegion}>
       <button
         type="button"
         aria-label="promptgraph Home"
         title="Home"
-        className="flex shrink-0 items-center gap-2 border-r px-3 text-foreground hover:bg-accent/60"
+        className="flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-foreground hover:bg-accent/60"
         onClick={() => tabsStore().getState().open(HOME_PATH, { activate: true })}
       >
         <Logo size={18} />
         <span className="text-[13px] font-semibold tracking-tight">promptgraph</span>
       </button>
-      <div ref={listRef} role="tablist" aria-label="Tabs" className="pg-tab-list flex min-w-0 items-stretch overflow-x-auto" onKeyDown={onKeyDown}>
+      <div ref={listRef} role="tablist" aria-label="Tabs" className="pg-tab-list flex min-w-0 items-center gap-1 overflow-x-auto py-0.5" onKeyDown={onKeyDown}>
         {tabs.map((tab, i) => (
           <TabItem
             key={tab.id}
@@ -83,7 +83,7 @@ export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBrid
         type="button"
         aria-label="New tab"
         title="New tab"
-        className="flex w-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground"
+        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
         onClick={() => tabsStore().getState().open(HOME_PATH, { activate: true, dedupe: false })}
       >
         <Icons.plus />
@@ -123,6 +123,12 @@ export function tabDragTarget(slots: readonly TabSlot[], from: number, rawDx: nu
   }
   const edge = self.left + dx;
   return { dx, to: from - slots.slice(0, from).filter((slot) => middle(slot) > edge).length };
+}
+
+/** The space between two tabs of the strip (they are separate pills), from the boxes measured at drag start. */
+export function tabGap(slots: readonly TabSlot[]): number {
+  if (slots.length < 2) return 0;
+  return Math.max(0, slots[1]!.left - (slots[0]!.left + slots[0]!.width));
 }
 
 /** How far the tab at strip index `i` moves aside while the tab at `from` (`width` wide) hovers over `to` (pure). */
@@ -213,14 +219,15 @@ function useTabDrag(listRef: RefObject<HTMLDivElement | null>) {
         document.documentElement.dataset.pgTabDragging = "";
       }
       current = tabDragTarget(slots, from, ev.clientX - startX);
-      setView({ id, from, to: current.to, dx: current.dx, width: slots[from]!.width, phase: "drag", animate: false });
+      setView({ id, from, to: current.to, dx: current.dx, width: slots[from]!.width + tabGap(slots), phase: "drag", animate: false });
     };
 
     const finish = (how: "drop" | "cancel") => {
       const dragged = slots;
       stop.current?.();
       if (!dragged) return;
-      const width = dragged[from]!.width;
+      const gap = tabGap(dragged);
+      const width = dragged[from]!.width + gap;
       if (how === "cancel" || current.to === from) {
         // Slide back to the original slot.
         setView({ id, from, to: from, dx: 0, width, phase: "return", animate: true });
@@ -229,7 +236,7 @@ function useTabDrag(listRef: RefObject<HTMLDivElement | null>) {
       }
       // Reorder now; the tab is first drawn where it was dropped, then slides into its new slot.
       const between = current.to > from ? dragged.slice(from + 1, current.to + 1) : dragged.slice(current.to, from);
-      const travel = between.reduce((sum, slot) => sum + slot.width, 0) * (current.to > from ? 1 : -1);
+      const travel = between.reduce((sum, slot) => sum + slot.width + gap, 0) * (current.to > from ? 1 : -1);
       tabsStore().getState().move(id, current.to);
       setView({ id, from: current.to, to: current.to, dx: current.dx - travel, width, phase: "settle", animate: false });
       // Two frames: the start offset must be painted before the transition is switched on.
@@ -316,12 +323,13 @@ function TabItem({
       data-dragging={dragging || undefined}
       title={title}
       className={cn(
-        "group relative flex w-44 min-w-24 shrink items-center gap-1.5 border-r pr-1 pl-3 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "bg-background text-foreground" : "cursor-pointer text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        "group relative flex h-7 w-44 min-w-24 shrink items-center gap-1.5 rounded-md pr-1 pl-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        // The active tab is lit (a lighter fill), the others sit dim on the frame.
+        active ? "bg-foreground/12 font-medium text-foreground" : "cursor-pointer bg-muted/50 text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
         dragStyle.animate && "transition-transform duration-150 ease-out motion-reduce:transition-none",
         dragStyle.offset !== 0 && "z-[1]",
         // Lifted: above its neighbours, opaque, with a shadow and the grabbing cursor while it follows the pointer.
-        dragging && "z-20 cursor-grabbing rounded-t-md border-l bg-background text-foreground shadow-xl shadow-black/25 ring-1 ring-foreground/20 will-change-transform",
+        dragging && "z-20 cursor-grabbing bg-accent text-foreground shadow-xl shadow-black/25 ring-1 ring-foreground/20 will-change-transform",
       )}
       style={dragStyle.offset !== 0 ? { transform: `translateX(${dragStyle.offset}px)` } : undefined}
       onPointerDown={(e) => onPointerDown(tab.id, e)}
@@ -374,7 +382,7 @@ function DocumentTitle({ bridge }: { bridge: DesktopBridge }) {
 export function WindowTitleBar({ bridge = getDesktopBridge() }: { bridge?: DesktopBridge }) {
   if (!bridge.isDesktop || !bridge.customTitleBar) return null;
   return (
-    <div className="flex h-9 shrink-0 items-stretch border-b bg-muted/40 text-xs select-none" data-pg-titlebar="" data-tauri-drag-region="">
+    <div className="flex h-10 shrink-0 items-stretch text-xs select-none" data-pg-titlebar="" data-tauri-drag-region="">
       <div className="min-w-6 flex-1" data-tauri-drag-region="" />
       <WindowFrame bridge={bridge} />
     </div>
