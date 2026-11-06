@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LocationContext, type LocationValue, type NavigateOptions, type OpenInNewTabOptions } from "../../lib/router/location";
+import { cn } from "@/lib/utils";
+import { parseRoute } from "../../lib/router/routes";
 import { planMounted } from "../../lib/tabs/keep-alive";
 import { tabsStore, useTabs, type Tab } from "../../store/tabs-store";
 import type { EditorStoreApi } from "../../store/view/editor-store";
@@ -67,15 +69,20 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
   );
   useEffect(() => () => void editors.delete(id), [editors, id]);
 
-  // The view sits in an inset panel (rounded, bordered, as in Linear); below it, the tab's bottom bar (§13.4).
+  // The view sits in an inset panel (rounded, bordered, as in Linear); below it, the tab's bottom bar (§13.4). Home
+  // has neither: it sits on the window frame. The elements stay the same, so navigating in or out of Home keeps them.
+  const home = parseRoute(path).kind === "home";
   return (
     <div data-tab-view={id} hidden={!active} inert={!active} className={active ? "flex min-h-0 flex-1 flex-col px-1.5" : undefined}>
       <LocationContext.Provider value={location}>
         <TabContext.Provider value={context}>
-          <div data-pg-panel="" className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background shadow-xs">
+          <div
+            data-pg-panel={home ? undefined : ""}
+            className={cn("relative flex min-h-0 flex-1 flex-col overflow-hidden", !home && "rounded-lg border bg-background shadow-xs")}
+          >
             {children}
           </div>
-          <div data-pg-bottom-bar="" className="flex h-9 shrink-0 items-center gap-1 px-1 text-xs">
+          <div data-pg-bottom-bar="" hidden={home} className="flex h-9 shrink-0 items-center gap-1 px-1 text-xs">
             <div ref={setBottomBarStart} className="flex min-w-0 items-center gap-1" />
             <div ref={setBottomBar} className="ml-auto flex min-w-0 items-center justify-end gap-1" />
           </div>

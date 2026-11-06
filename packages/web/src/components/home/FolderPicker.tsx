@@ -2,6 +2,7 @@ import type { ListDirsResponse } from "@promptgraph/shared";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { daemonApi, errorMessage } from "../../api/rest";
 import { Icons } from "../common/icons";
 import { Button, Modal } from "../common/ui";
@@ -34,7 +35,18 @@ export function tildePath(path: string, home: string): string {
  * subdirectories of what is typed (`GET /api/fs/dirs`). ↑/↓ highlight, Tab or Enter on a highlighted
  * suggestion complete it, Escape closes the list; Enter without a highlighted suggestion submits the form.
  */
-export function PathInput({ value, onChange, disabled }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
+export function PathInput({
+  value,
+  onChange,
+  disabled,
+  inputClassName,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  /** Extra classes of the input (e.g. a borderless field inside a card). */
+  inputClassName?: string;
+}) {
   const listId = useId();
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<{ dir: string; hidden: boolean; res: ListDirsResponse | null } | null>(null);
@@ -116,7 +128,7 @@ export function PathInput({ value, onChange, disabled }: { value: string; onChan
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
-        className="font-mono text-xs"
+        className={cn("font-mono text-xs", inputClassName)}
       />
       {shown && (
         <ul
