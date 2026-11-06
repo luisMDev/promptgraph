@@ -545,12 +545,13 @@ All routes require the token (`Authorization: Bearer` or the `t` cookie set from
 ## 13. UI
 
 - **Header**: graph selector, run selector (live or historical), pending approvals counter, settings.
-- **Canvas** (React Flow): palette on the left (drag node types in), minimap, snap to grid. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails), the problems button, the run's cost and **Report**, and Resume / Run / Cancel. In run mode the graph is read-only and nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance).
+- **Canvas** (React Flow): palette on the left (drag node types in), minimap, snap to grid. Floating over its top right corner: a "Saving…" spinner while an edit is being autosaved (nothing once saved; the error if a save fails), the problems button, the run's cost and **Report**, **Undo / Redo**, and Resume / Run / Cancel. In run mode the graph is read-only and nodes show status colour, elapsed time, last activity, and lane badge (colour per lane so you can see worktrees at a glance).
 - **Inspector** (right): config of the selected node; in run mode, its NodeRun details (output, session id, branch, timings, error) and controls (Done, Fail, Hold, Retry, Skip).
 - **Terminal drawer** (bottom, resizable): opens on node click. Tabs, one per open terminal. Live PTY for running nodes, replayed log for finished ones with "Reopen session".
 - **Approval dialog**: diff viewer + approve/reject.
 - **Diff dialog**: what a node changed (§9.7), with a switch to its whole lane; opened from the inspector and the report.
 - **Validation**: invalid nodes/edges are outlined red with a tooltip; Run is disabled while there are errors.
+- **Undo / Redo**: always shown left of Run, disabled when there is nothing to undo or redo, while the graph is read-only and in run mode; also Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Ctrl+Y) outside text fields and terminals. The editor keeps an in-memory history of the open graph's local edits (at most 100 steps; consecutive edits of the same node, edge, drag, name or settings less than a second apart share one step). Undo and redo are ordinary edits, so they autosave. The history is cleared when another graph opens or the graph is (re)loaded from disk, so a version older than the file is never written back silently; when the graph was reloaded because it changed outside the editor, Undo reverts that change (§20.9).
 
 ### 13.1 Run report
 
@@ -828,7 +829,7 @@ Session metadata lives in the `chat_sessions` table (§11.2): id (= Claude sessi
 
 ### 20.9 External changes and undo
 
-When the editor reloads a graph changed outside it (`graphs:changed` from the chat, the MCP server or a file edit), it keeps the previous version, highlights the added and updated nodes for a few seconds, and shows "Graph updated outside the editor · Undo"; Undo saves the previous version back (with `baseHash`). When the Undo fails (the graph changed again, or a run started), the editor reloads the graph on disk so the next edit cannot write a stale version back. Before a chat message is sent, a pending autosave is flushed; if the graph on screen still could not be saved, the message is not sent.
+When the editor reloads a graph changed outside it (`graphs:changed` from the chat, the MCP server or a file edit), it keeps the previous version, highlights the added and updated nodes for a few seconds, and shows "Graph updated outside the editor · Undo"; Undo (the banner's button, or the canvas Undo of §13) saves the previous version back (with `baseHash`). When the Undo fails (the graph changed again, or a run started), the editor reloads the graph on disk so the next edit cannot write a stale version back. Before a chat message is sent, a pending autosave is flushed; if the graph on screen still could not be saved, the message is not sent.
 
 ### 20.10 Risks
 
