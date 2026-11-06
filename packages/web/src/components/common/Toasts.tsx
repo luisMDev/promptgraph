@@ -1,12 +1,12 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useUiStore } from "../../store/ui-store";
+import { useToastStore } from "../../store/toast-store";
 import { Icons } from "./icons";
 import { Button } from "./ui";
 
 export function Toasts() {
-  const toasts = useUiStore((s) => s.toasts);
+  const toasts = useToastStore((s) => s.toasts);
   if (!toasts.length) return null;
   return (
     <div className="pointer-events-none fixed right-4 bottom-4 z-[60] flex w-96 flex-col gap-2">
@@ -28,7 +28,7 @@ export function Toasts() {
                 size="icon-xs"
                 aria-label="Dismiss"
                 className="-my-0.5 shrink-0 text-muted-foreground"
-                onClick={() => useUiStore.getState().dismissToast(t.id)}
+                onClick={() => useToastStore.getState().dismiss(t.id)}
               >
                 <Icons.x />
               </Button>

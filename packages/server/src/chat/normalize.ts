@@ -46,7 +46,7 @@ const FAILED_MCP_STATUSES = new Set(["failed", "needs-auth"]);
 const SUMMARY_MAX_CHARS = 120;
 
 /**
- * Turns raw stream-json lines (DESIGN §20.6) into chat events. Stateful per Claude Code process: it
+ * Turns raw stream-json lines (DESIGN §21.6) into chat events. Stateful per Claude Code process: it
  * pairs streamed text deltas with the final assistant text blocks. Text block `k` (0-based, counting
  * text blocks only) of API message `m` has messageId `m#k` in both chat:delta and the assistant item.
  * Unknown or malformed lines yield nothing.

@@ -12,7 +12,7 @@ export function ghBin(env: NodeJS.ProcessEnv = process.env): string {
  * Variables that make a child `claude` behave as a nested/hermetic session (SPIKE): it would not persist
  * transcripts or would refuse to start. Stripped from every child process env.
  */
-const STRIPPED_EXACT = new Set([
+const CLAUDE_NESTING_VARS = new Set([
   "CLAUDECODE",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_SESSION_ID",
@@ -23,6 +23,11 @@ const STRIPPED_EXACT = new Set([
 ]);
 const STRIPPED_PATTERN = /HERMETIC/;
 
+/** Whether `name` makes a child `claude` a nested/hermetic session (also stripped from a detached daemon's env). */
+export function isClaudeNestingVar(name: string): boolean {
+  return CLAUDE_NESTING_VARS.has(name) || STRIPPED_PATTERN.test(name);
+}
+
 /** promptgraph's own variables passed to hooks (§7.1). */
 export interface PgHookEnv {
   PG_PORT: string;
@@ -31,11 +36,23 @@ export interface PgHookEnv {
   PG_NODE_RUN_ID: string;
 }
 
-/** Child env = parent env − nested-session vars + TERM + `extra`. */
+/**
+ * The PgHookEnv keys. They belong to one node run: inherited from a Claude session promptgraph spawned
+ * (start_server called from inside a run), they would point every child at that run's stale hook
+ * endpoint and header file. Stripped from a detached daemon's env and from every child env; a Claude
+ * runner passes its own through `extra`.
+ */
+export const PG_HOOK_ENV_VARS: ReadonlySet<string> = new Set<keyof PgHookEnv>(["PG_PORT", "PG_HOOK_HEADER_FILE", "PG_NODE_RUN_ID"]);
+
+/** Variables of the desktop shell (`PG_DESKTOP_AUTO_ANSWER`, `PG_DESKTOP_UPDATES`, …): never a node run's business (DESIGN §4.1 item 5). */
+export const DESKTOP_ENV_PREFIX = "PG_DESKTOP_";
+
+/** Child env = parent env − nested-session vars − PG_HOME − PG_DESKTOP_* − PG_HOOK_ENV_VARS + TERM + `extra`. */
 export function childEnv(extra: Record<string, string> = {}, base: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (v === undefined || STRIPPED_EXACT.has(k) || STRIPPED_PATTERN.test(k)) continue;
+    // promptgraph's home holds the token and the DB: children (Claude, shell nodes) are not told where it is (DESIGN §7.6).
+    if (v === undefined || k === "PG_HOME" || k.startsWith(DESKTOP_ENV_PREFIX) || PG_HOOK_ENV_VARS.has(k) || isClaudeNestingVar(k)) continue;
     env[k] = v;
   }
   return { ...env, TERM: "xterm-256color", ...extra };

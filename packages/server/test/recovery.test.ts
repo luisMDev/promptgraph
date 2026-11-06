@@ -48,4 +48,16 @@ describe("markInterrupted", () => {
     expect(store.getRun("a")!.status).toBe("running");
     expect(store.getNodeRun("a-n")!.status).toBe("running");
   });
+
+  it("without a repoPath interrupts the runs of every repository (daemon start: one writer)", () => {
+    const store = new Store(openDatabase(":memory:"));
+    const graph = createEmptyGraph("g", "G");
+    for (const [id, repoPath] of [["a", "/repoA"], ["b", "/repoB"]] as const) {
+      store.insertRun({ id, repoPath, graph, graphHash: "h", shortId: id, startedAt: 1 });
+      store.insertNodeRun({ id: `${id}-n`, runId: id, nodeId: "n", iteration: 0, attempt: 0, laneId: "main", status: "waiting_input" });
+    }
+    expect(markInterrupted(store, {}).sort()).toEqual(["a", "b"]);
+    expect(store.getRun("a")!.status).toBe("paused");
+    expect(store.getNodeRun("b-n")!.status).toBe("interrupted");
+  });
 });

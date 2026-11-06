@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Voice dictation in the chat composer (§21). Audio is captured in the browser, streamed to this server over
+ * Voice dictation in the chat composer (§22). Audio is captured in the browser, streamed to this server over
  * the WebSocket as binary PCM frames and transcribed locally by whisper.cpp (`whisper-cli`). Audio never leaves
  * the machine, is never persisted beyond a temp WAV deleted right after each pass, and is never logged.
  *
@@ -152,7 +152,7 @@ const AbsolutePathSchema = z
 
 /**
  * `voice` in AppSettings (~/.promptgraph/settings.json). Every field is optional: absent = use the default
- * (§21.3 resolution order). PUT /api/settings replaces the `voice` object as a whole.
+ * (§22.3 resolution order). PUT /api/settings replaces the `voice` object as a whole.
  */
 export const VoiceSettingsSchema = z.object({
   /** Absolute path of whisper-cli. Default: VOICE_WHISPER_BINARIES on PATH. */

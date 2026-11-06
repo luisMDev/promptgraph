@@ -70,7 +70,7 @@ export interface StartVoiceOptions {
 }
 
 /**
- * Voice dictation (§21): probes whisper.cpp (binary, model, `--help` smoke; cached), resolves the defaults
+ * Voice dictation (§22): probes whisper.cpp (binary, model, `--help` smoke; cached), resolves the defaults
  * (promptgraph settings > Claude Code settings > fallback) for GET /api/voice, and creates one VoiceSession per
  * recording, sharing a global transcription slot (one whisper process at a time).
  */

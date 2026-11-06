@@ -14,12 +14,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatDateTime } from "../../lib/format";
-import { useAppStore } from "../../store/app-store";
 import { currentChatContext, sendChatMessage } from "../../store/chat-actions";
-import { emptyView, formatCost, isBusy, useChatStore, type ChatSessionView } from "../../store/chat-store";
-import { useEditorStore } from "../../store/editor-store";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import { emptyView, formatCost, getChatStore, isBusy, useRepoChat, type ChatSessionView, type ChatStore } from "../../store/chat-store";
+import { useDaemonStore } from "../../store/daemon-store";
+import { useEditor, useRun, useView } from "../../store/view/context";
 import { useDictation } from "../../lib/voice/use-dictation";
 import { ConfirmDialog } from "../common/PromptDialog";
 import { Icons } from "../common/icons";
@@ -30,13 +28,19 @@ import { DictationPreview, DictationStatus, MicButton } from "./Dictation";
 const EMPTY_VIEW = emptyView();
 
 /**
- * Chat with a background Claude Code session in the repository (DESIGN §20): session picker, messages with streamed
+ * Chat with a background Claude Code session in the repository (DESIGN §21): session picker, messages with streamed
  * text and folded tool calls, the permission card, a status line and the composer with the context chip.
  */
+/** The chat state of the view's repository (each repository has its own sessions, §21). */
+function useChat<T>(selector: (s: ChatStore) => T): T {
+  return useRepoChat(useView().repoId, selector);
+}
+
 export function ChatPanel() {
-  const activeId = useChatStore((s) => s.activeSessionId);
-  const view = useChatStore((s) => (activeId ? s.views[activeId] : undefined)) ?? EMPTY_VIEW;
-  const error = useChatStore((s) => s.error);
+  const chatApi = getChatStore(useView().repoId);
+  const activeId = useChat((s) => s.activeSessionId);
+  const view = useChat((s) => (activeId ? s.views[activeId] : undefined)) ?? EMPTY_VIEW;
+  const error = useChat((s) => s.error);
   // Parallel tool calls may open several prompts: they are answered one at a time, oldest first.
   const pending = view.pendingPermissions[0];
 
@@ -56,7 +60,7 @@ export function ChatPanel() {
             key={pending.requestId}
             request={pending}
             queued={view.pendingPermissions.length - 1}
-            onAnswer={(allow) => useChatStore.getState().answerPermission(activeId, pending.requestId, allow, allow ? undefined : "Denied by the user")}
+            onAnswer={(allow) => chatApi.getState().answerPermission(activeId, pending.requestId, allow, allow ? undefined : "Denied by the user")}
           />
         </div>
       )}
@@ -94,8 +98,10 @@ function ReplyAnnouncer({ view }: { view: ChatSessionView }) {
 }
 
 function ChatHeader() {
-  const sessions = useChatStore((s) => s.sessions);
-  const activeId = useChatStore((s) => s.activeSessionId);
+  const view = useView();
+  const chatApi = getChatStore(view.repoId);
+  const sessions = useChat((s) => s.sessions);
+  const activeId = useChat((s) => s.activeSessionId);
   const active = sessions.find((s) => s.id === activeId);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -111,7 +117,7 @@ function ChatHeader() {
         <DropdownMenuContent align="start" className="w-80 p-0">
           <div className="max-h-80 overflow-y-auto p-1">
             {sessions.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">No chats yet.</p>}
-            <DropdownMenuRadioGroup value={activeId ?? ""} onValueChange={(id) => void useChatStore.getState().selectSession(id)}>
+            <DropdownMenuRadioGroup value={activeId ?? ""} onValueChange={(id) => void chatApi.getState().selectSession(id)}>
               {sessions.map((s) => (
                 <DropdownMenuRadioItem key={s.id} value={s.id} className="gap-2 py-1.5 pr-8 pl-3">
                   <span className="min-w-0 flex-1">
@@ -126,7 +132,7 @@ function ChatHeader() {
           </div>
           <DropdownMenuSeparator className="mx-0 my-0" />
           <div className="p-1">
-            <DropdownMenuItem className="justify-center text-xs font-medium" onSelect={() => void useChatStore.getState().newSession()}>
+            <DropdownMenuItem className="justify-center text-xs font-medium" onSelect={() => void chatApi.getState().newSession()}>
               <Icons.plus /> New chat
             </DropdownMenuItem>
           </div>
@@ -137,7 +143,7 @@ function ChatHeader() {
           {formatCost(active.totalCostUsd)}
         </span>
       )}
-      <IconAction label="New chat" onClick={() => void useChatStore.getState().newSession()}>
+      <IconAction label="New chat" onClick={() => void chatApi.getState().newSession()}>
         <MessageSquarePlusIcon />
       </IconAction>
       {active && (
@@ -145,7 +151,7 @@ function ChatHeader() {
           <Icons.trash />
         </IconAction>
       )}
-      <IconAction label="Close chat" onClick={() => useUiStore.getState().setChatOpen(false)}>
+      <IconAction label="Close chat" onClick={() => view.ui.getState().setChatOpen(false)}>
         <PanelRightCloseIcon />
       </IconAction>
       {confirmDelete && active && (
@@ -153,7 +159,7 @@ function ChatHeader() {
           title="Delete chat"
           message={`Delete "${active.title || "this chat"}"? Its Claude Code process is stopped; the transcript stays in ~/.claude.`}
           confirmLabel="Delete"
-          onConfirm={() => void useChatStore.getState().deleteSession(active.id)}
+          onConfirm={() => void chatApi.getState().deleteSession(active.id)}
           onClose={() => setConfirmDelete(false)}
         />
       )}
@@ -245,9 +251,11 @@ function StatusLine({ status, warning }: { status: ChatStatus; warning: string |
 }
 
 function Composer({ sessionId, status }: { sessionId: string | null; status: ChatStatus }) {
+  const view = useView();
+  const chatApi = getChatStore(view.repoId);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const connected = useAppStore((s) => s.connected);
+  const connected = useDaemonStore((s) => s.connection === "open");
   const busy = isBusy(status);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const canSendText = (value: string) => value.trim().length > 0 && !busy && !sending && connected;
@@ -260,7 +268,7 @@ function Composer({ sessionId, status }: { sessionId: string | null; status: Cha
     if (!canSendText(value)) return;
     setSending(true);
     try {
-      if (await sendChatMessage(value)) setText("");
+      if (await sendChatMessage(view, value)) setText("");
     } finally {
       setSending(false);
     }
@@ -328,7 +336,7 @@ function Composer({ sessionId, status }: { sessionId: string | null; status: Cha
         {busy && sessionId ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="secondary" size="icon" aria-label="Stop" onClick={() => useChatStore.getState().interrupt(sessionId)}>
+              <Button variant="secondary" size="icon" aria-label="Stop" onClick={() => chatApi.getState().interrupt(sessionId)}>
                 <SquareIcon className="fill-current" />
               </Button>
             </TooltipTrigger>
@@ -355,14 +363,15 @@ function Composer({ sessionId, status }: { sessionId: string | null; status: Cha
 /** What the next message tells Claude about the screen: the graph, the selection and the run. */
 export function ContextChip() {
   // Subscriptions only re-render the chip; the context itself is read the same way sendChatMessage reads it.
-  useEditorStore((s) => s.graph?.id);
-  useEditorStore((s) => s.graph?.name);
-  useEditorStore((s) => s.selectedNodeIds);
-  useEditorStore((s) => s.selectedEdgeIds);
-  useEditorStore((s) => s.activeRunId);
-  useRunStore((s) => s.selectedRunId);
-  useRunStore((s) => s.selectedNodeId);
-  const ctx = currentChatContext();
+  const view = useView();
+  useEditor((s) => s.graph?.id);
+  useEditor((s) => s.graph?.name);
+  useEditor((s) => s.selectedNodeIds);
+  useEditor((s) => s.selectedEdgeIds);
+  useEditor((s) => s.activeRunId);
+  useRun((s) => s.selectedRunId);
+  useRun((s) => s.selectedNodeId);
+  const ctx = currentChatContext(view);
   const parts: string[] = [];
   const nodes = ctx.selectedNodeIds.length;
   const edges = ctx.selectedEdgeIds.length;

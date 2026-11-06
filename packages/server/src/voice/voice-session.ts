@@ -52,7 +52,7 @@ type State = "recording" | "stopping" | "ended";
 class SessionEnded extends Error {}
 
 /**
- * One recording (§21.5). Keeps the PCM in memory (≤ maxAudioBytes); while recording, after each
+ * One recording (§22.5). Keeps the PCM in memory (≤ maxAudioBytes); while recording, after each
  * `partialIntervalBytes` of new audio and when no pass is running (here or globally), transcribes all the audio
  * so far and sends voice:partial. stop() waits for the running pass, runs the final pass and sends voice:final;
  * every session ends with exactly one voice:final or voice:error, except after cancel() (silent).
@@ -172,7 +172,7 @@ export class VoiceSession {
           this.opts.send({ type: "voice:partial", voiceId: this.voiceId, text });
         }
       })
-      // A partial is only a lagging preview (§21.5): a failed or timed-out one never ends the recording. Only
+      // A partial is only a lagging preview (§22.5): a failed or timed-out one never ends the recording. Only
       // the final pass decides; a busy slot or an abort here is just a skipped preview.
       .catch((err) => this.onPartialError(err))
       .finally(() => {

@@ -44,6 +44,8 @@ export class ChatError extends Error {
 export interface ChatManagerOptions {
   store: Store;
   bus: EventBus;
+  /** Repository id: stamped on every chat:* message so the WsHub delivers it to that repository's subscribers. */
+  repoId: string;
   /** Repository root: cwd of every chat process (the main checkout). */
   repoPath: string;
   /** Base env (claudeBin + childEnv; also locates transcripts via CLAUDE_CONFIG_DIR). */
@@ -56,6 +58,9 @@ export interface ChatManagerOptions {
   now?: () => number;
   newSessionId?: () => string;
 }
+
+/** A chat:* message before publish() stamps the repository on it. */
+type ChatMessageBody = ChatServerMessage extends infer M ? (M extends ChatServerMessage ? Omit<M, "repoId"> : never) : never;
 
 /** One live Claude Code process of a session. */
 interface ChatProcess {
@@ -100,7 +105,7 @@ interface ChatSessionState {
 }
 
 /**
- * Chat panel sessions (DESIGN §20). One ChatSession per chat; its `claude -p` stream-json process is
+ * Chat panel sessions (DESIGN §21). One ChatSession per chat; its `claude -p` stream-json process is
  * spawned lazily on the first message, killed after the idle timeout and respawned with `--resume`.
  * Every change is published on the bus as a chat:* server message (broadcast by the WsHub).
  */
@@ -492,8 +497,8 @@ export class ChatManager {
     };
   }
 
-  private publish(message: ChatServerMessage): void {
-    this.opts.bus.emit("chat", { message });
+  private publish(message: ChatMessageBody): void {
+    this.opts.bus.emit("chat", { message: { ...message, repoId: this.opts.repoId } as ChatServerMessage });
   }
 }
 

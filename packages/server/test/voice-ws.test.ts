@@ -10,7 +10,7 @@ import { createHttpApp } from "../src/http/app.js";
 import { VoiceService } from "../src/voice/voice-service.js";
 import { WsHub } from "../src/ws/hub.js";
 import { createTempRepo, tempDir, waitFor } from "./helpers.js";
-import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
+import { createTestDaemon, TEST_TOKEN, type TestDaemon } from "./support/test-daemon.js";
 
 const FAKE_WHISPER = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-whisper-cli");
 const CHUNK = 3200;
@@ -18,7 +18,12 @@ const CHUNK = 3200;
 let server: Server;
 let hub: WsHub;
 let port: number;
-let setup: ReturnType<typeof createTestContext>;
+let daemon: TestDaemon;
+const setup = {
+  get ctx() {
+    return daemon.ctx;
+  },
+};
 let cleanups: Array<() => void>;
 let root: string;
 let log: string;
@@ -31,11 +36,12 @@ beforeEach(async () => {
   cleanups = [r.cleanup, t.cleanup];
   log = path.join(root, "whisper.log");
   const env = { PATH: path.dirname(process.execPath), FAKE_WHISPER_LOG: log, FAKE_WHISPER_TEXT: "spoken {ms}", FAKE_WHISPER_DELAY_MS: "100" };
-  setup = createTestContext(r.repo, root, env);
+  daemon = await createTestDaemon({ root, repos: [r.repo], mockEngines: true, env });
   const model = path.join(root, "ggml-base.bin");
   fs.writeFileSync(model, "m");
   setup.ctx.settings.update({ voice: { whisperBin: FAKE_WHISPER, model } });
   // Shorter partial interval (300 ms of audio) so the test sees partials quickly.
+  await setup.ctx.voice.shutdown();
   setup.ctx.voice = new VoiceService({
     settings: setup.ctx.settings,
     paths: setup.ctx.paths,
@@ -52,10 +58,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const ws of sockets.splice(0)) ws.terminate();
-  await setup.ctx.voice.shutdown();
   await hub.close();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  setup.ctx.store.db.close();
+  await daemon.close();
   for (const c of cleanups) c();
 });
 
@@ -67,7 +72,7 @@ interface TestClient {
 }
 
 function connect(): Promise<TestClient> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?t=${TEST_TOKEN}`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { authorization: `Bearer ${TEST_TOKEN}` } });
   sockets.push(ws);
   const messages: ServerMessage[] = [];
   ws.on("message", (raw) => messages.push(JSON.parse(String(raw)) as ServerMessage));

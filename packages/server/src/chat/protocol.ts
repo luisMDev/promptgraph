@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Claude Code's stream-json protocol (`claude -p --input-format stream-json --output-format stream-json`),
- * verified against Claude Code 2.1.318 (DESIGN §20.1). Only the fields the chat uses are declared; every
+ * verified against Claude Code 2.1.318 (DESIGN §21.1). Only the fields the chat uses are declared; every
  * schema is loose so unknown fields pass through, and unknown line types are ignored by the normaliser.
  */
 

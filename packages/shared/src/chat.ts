@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { RepoIdSchema } from "./repos.js";
 
 /**
- * In-app Claude Code chat (DESIGN §20). The server runs one background `claude -p --input-format
+ * In-app Claude Code chat (DESIGN §21). The server runs one background `claude -p --input-format
  * stream-json` process per active chat session in the repository's main checkout and normalises its
  * structured output into `ChatItem`s; the web UI renders those items and streams text via `chat:delta`.
  */
@@ -205,19 +206,23 @@ export type CreateChatSessionResponse = z.infer<typeof CreateChatSessionResponse
 export const GetChatSessionResponseSchema = ChatSessionDetailSchema;
 export type GetChatSessionResponse = z.infer<typeof GetChatSessionResponseSchema>;
 
-/** DELETE /api/chat/sessions/:id → OkResponse (kills the process; Claude's transcript stays on disk). */
+/** DELETE /api/repos/:repoId/chat/sessions/:id → OkResponse (kills the process; Claude's transcript stays on disk). */
 
 // --- WebSocket payloads (members of the unions in ws.ts) --------------------
+// Every chat message carries its repository: each repository has its own chat sessions (DESIGN §21), the
+// server routes client messages to that repository's ChatManager and server messages to its subscribers.
 
 export const ChatSendMessageSchema = z.object({
   type: z.literal("chat:send"),
+  repoId: RepoIdSchema,
   sessionId: z.string(),
   text: z.string().min(1),
   context: ChatContextSchema,
 });
-export const ChatInterruptMessageSchema = z.object({ type: z.literal("chat:interrupt"), sessionId: z.string() });
+export const ChatInterruptMessageSchema = z.object({ type: z.literal("chat:interrupt"), repoId: RepoIdSchema, sessionId: z.string() });
 export const ChatPermissionMessageSchema = z.object({
   type: z.literal("chat:permission"),
+  repoId: RepoIdSchema,
   sessionId: z.string(),
   requestId: z.string(),
   allow: z.boolean(),
@@ -225,7 +230,7 @@ export const ChatPermissionMessageSchema = z.object({
   message: z.string().optional(),
 });
 
-export const ChatItemMessageSchema = z.object({ type: z.literal("chat:item"), sessionId: z.string(), item: ChatItemSchema });
+export const ChatItemMessageSchema = z.object({ type: z.literal("chat:item"), repoId: RepoIdSchema, sessionId: z.string(), item: ChatItemSchema });
 /**
  * A streamed text_delta chunk of the assistant message `messageId`; the final chat:item replaces the deltas.
  * `offset` is the length of the text streamed before this chunk, so a client that loaded the partial text from
@@ -233,6 +238,7 @@ export const ChatItemMessageSchema = z.object({ type: z.literal("chat:item"), se
  */
 export const ChatDeltaMessageSchema = z.object({
   type: z.literal("chat:delta"),
+  repoId: RepoIdSchema,
   sessionId: z.string(),
   messageId: z.string(),
   text: z.string(),
@@ -240,11 +246,12 @@ export const ChatDeltaMessageSchema = z.object({
 });
 export const ChatStatusMessageSchema = z.object({
   type: z.literal("chat:status"),
+  repoId: RepoIdSchema,
   sessionId: z.string(),
   status: ChatStatusSchema,
   /** e.g. "promptgraph plugin not found: MCP tools only, no skills". */
   warning: z.string().optional(),
 });
 /** A session was created or its metadata changed (title, cost, status, …). */
-export const ChatSessionMessageSchema = z.object({ type: z.literal("chat:session"), session: ChatSessionSummarySchema });
-export const ChatDeletedMessageSchema = z.object({ type: z.literal("chat:deleted"), sessionId: z.string() });
+export const ChatSessionMessageSchema = z.object({ type: z.literal("chat:session"), repoId: RepoIdSchema, session: ChatSessionSummarySchema });
+export const ChatDeletedMessageSchema = z.object({ type: z.literal("chat:deleted"), repoId: RepoIdSchema, sessionId: z.string() });

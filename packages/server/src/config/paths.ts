@@ -1,10 +1,17 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Root of promptgraph's own state. `PG_HOME` overrides `~/.promptgraph` (tests). */
+/**
+ * Root of promptgraph's own state. `PG_HOME` overrides `~/.promptgraph` (tests). Under vitest (`VITEST`
+ * is set, and inherited by every process a test spawns) a missing PG_HOME is an error instead of a
+ * fallback, so a test can never read or migrate the user's real state.
+ */
 export function pgHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PG_HOME ? path.resolve(env.PG_HOME) : path.join(os.homedir(), ".promptgraph");
+  if (env.PG_HOME) return path.resolve(env.PG_HOME);
+  if (env.VITEST ?? process.env.VITEST) throw new Error("PG_HOME must be set under vitest (refusing to fall back to ~/.promptgraph)");
+  return path.join(os.homedir(), ".promptgraph");
 }
 
 export interface PgPaths {
@@ -19,9 +26,9 @@ export interface PgPaths {
   worktreesDir: string;
   /** Installed helper scripts (pg-hook). */
   binDir: string;
-  /** Short-lived private files (voice dictation WAVs, §21.5). */
+  /** Short-lived private files (voice dictation WAVs, §22.5). */
   tmpDir: string;
-  /** Whisper models the user drops in (voice dictation auto-detection, §21.3). */
+  /** Whisper models the user drops in (voice dictation auto-detection, §22.3). */
   modelsDir: string;
 }
 
@@ -51,6 +58,20 @@ export function ptyLogPath(paths: PgPaths, runId: string, ptyId: string): string
 /** hooks.json generated once per run (§7.2). */
 export function hooksSettingsPath(paths: PgPaths, runId: string): string {
   return path.join(runDir(paths, runId), "hooks.json");
+}
+
+/**
+ * Whether the realpath `p` is the worktrees root or inside it (DESIGN §4.2): a lane worktree is never a
+ * repository of its own. Compares against the root as configured and its realpath (PG_HOME may be a link).
+ */
+export function isInWorktreesDir(paths: PgPaths, p: string): boolean {
+  const roots = new Set([path.resolve(paths.worktreesDir)]);
+  try {
+    roots.add(fs.realpathSync(paths.worktreesDir));
+  } catch {
+    // Not created yet: nothing can be inside it but the configured path.
+  }
+  return [...roots].some((root) => p === root || p.startsWith(root + path.sep));
 }
 
 export function worktreePath(paths: PgPaths, repoName: string, runId: string, laneId: string): string {

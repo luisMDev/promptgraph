@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { API, GraphSchema, type Graph } from "@promptgraph/shared";
+import { API, GraphSchema, type Graph, type RepoSummary } from "@promptgraph/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { startServer } from "../src/cli/server.js";
 import { getPaths } from "../src/config/paths.js";
+import { startDaemon } from "../src/daemon/start.js";
 import type { McpEnvironment } from "../src/mcp/connection.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { createTempRepo, fakeClaudeEnv, tempDir } from "./helpers.js";
@@ -32,7 +32,8 @@ const GRAPH = {
 };
 
 /**
- * MCP client ↔ promptgraph MCP server in memory, against a live promptgraph server (fake claude).
+ * MCP client ↔ promptgraph MCP server in memory, against a live promptgraph daemon (fake claude) with the
+ * repository registered.
  * `beforeFetch` runs before each REST call the MCP tools make (to simulate concurrent edits).
  * `cwdOutsideRepo` starts the MCP server outside the repo with PROMPTGRAPH_REPO set.
  */
@@ -41,9 +42,9 @@ async function setup(opts: { beforeFetch?: (url: string, init?: RequestInit) => 
   cleanups.push(cleanup);
   const { dir, cleanup: cleanRoot } = tempDir("pg-mcp-patch-");
   cleanups.push(cleanRoot);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...fakeClaudeEnv(dir) };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...fakeClaudeEnv(dir), PG_DAEMON_SHELL_ENV: "0" };
   delete env.PROMPTGRAPH_REPO;
-  const server = await startServer({ repoPath: repo, port: 0, env });
+  const server = await startDaemon({ port: 0, env });
   cleanups.push(() => server.close());
 
   let cwd = repo;
@@ -57,7 +58,7 @@ async function setup(opts: { beforeFetch?: (url: string, init?: RequestInit) => 
     await opts.beforeFetch?.(String(input), init);
     return fetch(input, init);
   };
-  const mcpEnv: McpEnvironment = { cwd, env, paths: getPaths(env), serverCommand: { command: "false", args: [] }, fetchImpl };
+  const mcpEnv: McpEnvironment = { cwd, env, paths: getPaths(env), serverCommand: [], fetchImpl };
   const mcp = createMcpServer({ mcpEnv, openUrl: async () => {} });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0" });
@@ -76,16 +77,18 @@ async function setup(opts: { beforeFetch?: (url: string, init?: RequestInit) => 
     return { isError: res.isError === true, data, text };
   };
   const rest = async <T>(method: string, p: string, body?: unknown): Promise<T> => {
-    const res = await fetch(`http://127.0.0.1:${server.port}${p}`, {
+    const res = await fetch(`${server.origin}${p}`, {
       method,
-      headers: { authorization: `Bearer ${server.token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${server.ctx.getToken()}`, "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     return (await res.json()) as T;
   };
   const readGraph = (): Graph => GraphSchema.parse(JSON.parse(fs.readFileSync(path.join(repo, ".promptgraph/graphs/flow.json"), "utf8")));
-  await rest("PUT", API.graph("flow"), GRAPH);
-  return { repo, server, client, call, rest, readGraph };
+  const { id: repoId } = await rest<RepoSummary>("POST", API.repos, { path: repo });
+  const repoApi = API.repo(repoId);
+  await rest("PUT", repoApi.graph("flow"), GRAPH);
+  return { repo, repoId, repoApi, server, client, call, rest, readGraph };
 }
 
 describe("patch_graph MCP tool", () => {
@@ -123,7 +126,7 @@ describe("patch_graph MCP tool", () => {
   });
 
   it("save_graph refuses to unlock PRs without approval, but keeps an unlock the user already set", { timeout: 20_000 }, async () => {
-    const { call, rest, readGraph } = await setup();
+    const { call, rest, readGraph, repoApi } = await setup();
     const unlocked = { ...GRAPH, settings: { ...GRAPH.settings, allowPrWithoutApproval: true } };
     const res = await call("save_graph", { graph: unlocked });
     expect(res.isError).toBe(true);
@@ -131,7 +134,7 @@ describe("patch_graph MCP tool", () => {
     expect(readGraph().settings.allowPrWithoutApproval).toBeFalsy();
 
     // Unlocked by the user (REST, like the UI): Claude may save the graph again with the setting kept.
-    await rest("PUT", API.graph("flow"), unlocked);
+    await rest("PUT", repoApi.graph("flow"), unlocked);
     const again = await call("save_graph", { graph: { ...unlocked, name: "Flow 2" } });
     expect(again.isError, again.text).toBe(false);
     expect(readGraph().settings.allowPrWithoutApproval).toBe(true);
@@ -154,16 +157,18 @@ describe("patch_graph MCP tool", () => {
   it("tells Claude to re-read and retry when the graph changed concurrently (409)", { timeout: 20_000 }, async () => {
     let edited = false;
     let rest: (<T>(method: string, p: string, body?: unknown) => Promise<T>) | undefined;
+    let graphPath = "";
     const ctx = await setup({
       beforeFetch: async (_url, init) => {
         // The user saves from the editor between patch_graph's GET and its PUT.
         if (init?.method === "PUT" && !edited && rest) {
           edited = true;
-          await rest("PUT", API.graph("flow"), { ...GRAPH, name: "Renamed in the UI" });
+          await rest("PUT", graphPath, { ...GRAPH, name: "Renamed in the UI" });
         }
       },
     });
     rest = ctx.rest;
+    graphPath = ctx.repoApi.graph("flow");
     const res = await ctx.call("patch_graph", { graphId: "flow", ops: [{ op: "remove_node", id: "lint" }] });
     expect(edited).toBe(true);
     expect(res.isError).toBe(true);
@@ -174,8 +179,8 @@ describe("patch_graph MCP tool", () => {
   });
 
   it("refuses while a run of the graph is active", { timeout: 20_000 }, async () => {
-    const { call, server } = await setup();
-    const engine = server.ctx.engine;
+    const { call, server, repoId } = await setup();
+    const { engine } = await server.ctx.registry.load(repoId);
     const original = engine.activeRunForGraph.bind(engine);
     engine.activeRunForGraph = (id: string) => (id === "flow" ? "run-1" : original(id));
     const res = await call("patch_graph", { graphId: "flow", ops: [{ op: "remove_node", id: "lint" }] });

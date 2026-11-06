@@ -1,5 +1,7 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ServerMessageSchema,
   decodeBase64,
@@ -10,7 +12,9 @@ import {
   type ServerMessage,
 } from "@promptgraph/shared";
 import { WebSocket } from "ws";
-import { startServer, type RunningServer } from "../../src/cli/server.js";
+import { getPaths } from "../../src/config/paths.js";
+import { tokenPath } from "../../src/config/token.js";
+import { startDaemon, type RunningDaemon } from "../../src/daemon/start.js";
 import { createTempRepo, fakeClaudeEnv, tempDir, waitFor } from "../helpers.js";
 
 /** One temp repo + PG_HOME + fake claude, shared by the servers a test starts (restart tests). */
@@ -55,15 +59,83 @@ export function readClaudeLog(world: E2eWorld): FakeClaudeInvocation[] {
     .map((l) => JSON.parse(l) as FakeClaudeInvocation);
 }
 
-/** REST + WS client against an in-process server. */
-export class E2eServer {
-  private constructor(readonly server: RunningServer) {}
+const SERVER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-  static async start(world: E2eWorld): Promise<E2eServer> {
-    const s = new E2eServer(await startServer({ repoPath: world.repo, port: 0, env: world.env }));
+/** A `promptgraph <repo> --foreground` child process (crash tests SIGKILL it). */
+export interface ForegroundCli {
+  child: ChildProcess;
+  origin: string;
+  repoId: string;
+  token: string;
+  /** fetch on the daemon with the Bearer token; repository routes are given relative to `/api/repos/<repoId>`. */
+  fetch(method: string, repoRoute: string): Promise<Response>;
+}
+
+/**
+ * Spawns `src/cli/index.ts <repo> --foreground --no-open --port 0` (tsx as an in-process loader, not its
+ * CLI wrapper, so SIGKILL hits the daemon itself), parses `Open: http://127.0.0.1:<port>/r/<repoId>` and
+ * reads the token from `<PG_HOME>/token`.
+ */
+export async function spawnForegroundCli(world: E2eWorld, onCleanup: (fn: () => void) => void): Promise<ForegroundCli> {
+  const child = spawn(process.execPath, ["--import", "tsx", "--conditions=source", "src/cli/index.ts", world.repo, "--foreground", "--no-open", "--port", "0"], {
+    cwd: SERVER_ROOT,
+    env: world.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  onCleanup(() => void child.kill("SIGKILL"));
+  let output = "";
+  child.stdout!.on("data", (c: Buffer) => (output += c.toString()));
+  child.stderr!.on("data", (c: Buffer) => (output += c.toString()));
+  const match = await waitFor(() => {
+    if (child.exitCode !== null) throw new Error(`promptgraph exited (${child.exitCode}):\n${output}`);
+    return /Open: (http:\/\/127\.0\.0\.1:\d+)\/r\/(\S+)/.exec(output);
+  }, 20_000);
+  if (!/^Listening: http:\/\/127\.0\.0\.1:\d+ \(pid \d+, promptgraph \S+\)$/m.test(output)) throw new Error(`no Listening line:\n${output}`);
+  const origin = match[1]!;
+  const repoId = match[2]!;
+  const token = fs.readFileSync(tokenPath(getPaths(world.env)), "utf8").trim();
+  return {
+    child,
+    origin,
+    repoId,
+    token,
+    fetch: (method, repoRoute) =>
+      fetch(`${origin}/api/repos/${repoId}${repoRoute}`, { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" } }),
+  };
+}
+
+/** Token of the in-process test daemons (in memory: `<PG_HOME>/token` is only read by the CLI-spawned ones). */
+export const E2E_TOKEN = "e2e-token-0123456789";
+
+/** Repository routes a test may write without the `/api/repos/<id>` prefix (`/api/graphs/x` → `/api/repos/<id>/graphs/x`). */
+const REPO_ROUTE = /^\/api\/(graphs|runs|node-runs|ptys|pending|commands|claude-setup)(\/|\?|$)/;
+
+/** REST + WS client against an in-process daemon with one registered repository (the world's repo). */
+export class E2eServer {
+  private constructor(
+    readonly server: RunningDaemon,
+    readonly token: string,
+    readonly repoId: string,
+  ) {}
+
+  static async start(world: E2eWorld, repoPath: string = world.repo): Promise<E2eServer> {
+    const daemon = await startDaemon({ port: 0, env: world.env, token: E2E_TOKEN, warnings: [] });
+    const repoId = (await daemon.ctx.registry.add(repoPath)).id;
+    const s = new E2eServer(daemon, E2E_TOKEN, repoId);
     // Keep tests quiet on machines that have notify-send.
     await s.api("PUT", "/api/settings", { notifications: false });
     return s;
+  }
+
+  /** Registers another repository in the same daemon; a client scoped to it. */
+  async addRepo(repoPath: string): Promise<E2eServer> {
+    const repo = await this.api<{ id: string }>("POST", "/api/repos", { path: repoPath });
+    return new E2eServer(this.server, this.token, repo.id);
+  }
+
+  /** `/api/repos/<repoId>/…` for a repository route given without the prefix; anything else unchanged. */
+  scoped(url: string): string {
+    return REPO_ROUTE.test(url) ? `/api/repos/${encodeURIComponent(this.repoId)}${url.slice("/api".length)}` : url;
   }
 
   get base(): string {
@@ -78,9 +150,9 @@ export class E2eServer {
   }
 
   request(method: string, url: string, body?: unknown): Promise<Response> {
-    return fetch(`${this.base}${url}`, {
+    return fetch(`${this.base}${this.scoped(url)}`, {
       method,
-      headers: { authorization: `Bearer ${this.server.token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   }
@@ -128,10 +200,16 @@ export class E2eServer {
     throw new Error(`node ${nodeId} never reached ${statuses.join("|")}; last: ${last?.status} ${last?.error ?? ""}`);
   }
 
-  async connectWs(): Promise<WsTestClient> {
-    const ws = new WebSocket(`ws://127.0.0.1:${this.server.port}/ws?t=${this.server.token}`);
+  /** A WebSocket (Bearer header) subscribed to this repository (`repo:subscribe`) unless `subscribe` is false. */
+  async connectWs(opts: { subscribe?: boolean } = {}): Promise<WsTestClient> {
+    const ws = new WebSocket(`ws://127.0.0.1:${this.server.port}/ws`, { headers: { authorization: `Bearer ${this.token}` } });
     const client = new WsTestClient(ws);
     await client.waitFor((m) => m.type === "hello");
+    if (opts.subscribe ?? true) {
+      client.send({ type: "repo:subscribe", repoId: this.repoId });
+      client.send({ type: "ping" });
+      await client.waitFor((m) => m.type === "pong");
+    }
     return client;
   }
 

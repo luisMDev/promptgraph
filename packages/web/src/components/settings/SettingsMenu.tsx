@@ -13,8 +13,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { MicIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { setTheme, type Theme, useTheme } from "../../lib/theme";
-import { useAppStore } from "../../store/app-store";
-import { useUiStore } from "../../store/ui-store";
+import { useDaemonStore } from "../../store/daemon-store";
+import { toast } from "../../store/toast-store";
+import { useRepoInfo, useView, useViewUi } from "../../store/view/context";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import { OPEN_VOICE_SETTINGS_EVENT } from "../chat/Dictation";
@@ -26,10 +27,12 @@ import { VoiceSettingsDialog } from "./VoiceSettingsDialog";
  * outside-click dismissal come from Radix. The info text is static content, so it is not focusable.
  */
 export function SettingsMenu() {
-  const open = useUiStore((s) => s.settingsOpen);
-  const settings = useAppStore((s) => s.settings);
-  const repo = useAppStore((s) => s.repo);
-  const notifyAvailable = repo?.notificationsAvailable ?? true;
+  const view = useView();
+  const open = useViewUi((s) => s.settingsOpen);
+  const settings = useDaemonStore((s) => s.settings);
+  const daemon = useDaemonStore((s) => s.info);
+  const repo = useRepoInfo();
+  const notifyAvailable = daemon?.notificationsAvailable ?? true;
   const theme = useTheme();
   const [voiceOpen, setVoiceOpen] = useState(false);
 
@@ -41,15 +44,15 @@ export function SettingsMenu() {
   }, []);
 
   const toggleNotifications = (notifications: boolean) => {
-    useAppStore
+    useDaemonStore
       .getState()
       .updateSettings({ notifications })
-      .catch((err: unknown) => useUiStore.getState().toast("error", `Could not save settings: ${String(err)}`));
+      .catch((err: unknown) => toast("error", `Could not save settings: ${String(err)}`));
   };
 
   return (
     <>
-      <DropdownMenu open={open} onOpenChange={(o) => useUiStore.getState().setSettingsOpen(o)}>
+      <DropdownMenu open={open} onOpenChange={(o) => view.ui.getState().setSettingsOpen(o)}>
         <Tooltip>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -89,7 +92,7 @@ export function SettingsMenu() {
           <DropdownMenuItem onSelect={() => setVoiceOpen(true)}>
             <MicIcon /> Voice dictation…
           </DropdownMenuItem>
-          {repo && (
+          {repo && daemon && (
             <>
               <DropdownMenuSeparator />
               <div className="space-y-1 px-1.5 py-1 text-[11px] text-muted-foreground">
@@ -97,9 +100,9 @@ export function SettingsMenu() {
                   {repo.path}
                 </div>
                 <div>
-                  promptgraph {repo.version} · phase {repo.phase}
+                  promptgraph {daemon.version} · phase {daemon.phase}
                 </div>
-                {repo.warnings.map((w) => (
+                {daemon.warnings.map((w) => (
                   <div key={w} className="text-amber-600/90">
                     {w}
                   </div>

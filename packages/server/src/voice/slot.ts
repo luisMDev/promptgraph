@@ -21,7 +21,7 @@ interface Waiter {
 }
 
 /**
- * Global concurrency of whisper processes (§21.5): one at a time. Partial passes use tryAcquire (skipped when
+ * Global concurrency of whisper processes (§22.5): one at a time. Partial passes use tryAcquire (skipped when
  * taken); final passes wait in a bounded FIFO queue with a timeout, and get SlotBusyError when it is full.
  */
 export class TranscriptionSlot {

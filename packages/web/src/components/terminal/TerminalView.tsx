@@ -1,8 +1,9 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { wsClient } from "../../api/ws";
+import { getDesktopBridge, terminalLinkHandler } from "../../lib/desktop";
 import { keepAlternateScreen } from "../../lib/terminal-replay";
 
 export type PtyState = { phase: "connecting" } | { phase: "live" } | { phase: "replay"; exitCode?: number | null } | { phase: "error"; message: string };
@@ -24,6 +25,11 @@ const THEME = {
  * resizes go to the server while the process is live; otherwise read-only. A live terminal fits its
  * container (and drives the PTY size); a replay renders at the PTY's own cols/rows (from pty:attached),
  * since a full-screen TUI redrawn at another width is garbled, and scrolls inside the container instead.
+ *
+ * Hidden (a hidden tab, a collapsed drawer, another drawer tab; DESIGN §13.4): the terminal keeps its PTY
+ * attachment and receives output, but is never opened or fitted, never focused and sends no `pty:resize`
+ * (a hidden element measures 0×0, and the most recent resize drives a shared PTY's size). It opens on its
+ * first visible render, and refits and catches the PTY up to its size whenever it is shown again.
  */
 export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visible: boolean; onState: (s: PtyState) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -32,11 +38,14 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
   const [fixedSize, setFixedSize] = useState<{ cols: number; rows: number } | null>(null);
   const onStateRef = useRef(onState);
   onStateRef.current = onState;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  /** Live, and the size the PTY has as far as this view knows (from pty:attached and our resizes). */
+  const ptyRef = useRef<{ live: boolean; cols: number; rows: number }>({ live: false, cols: 0, rows: 0 });
   const [term, setTerm] = useState<Terminal | null>(null);
+  const [opened, setOpened] = useState(false);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
     const t = new Terminal({
       theme: THEME,
       fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
@@ -48,23 +57,42 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
     });
     const fit = new FitAddon();
     t.loadAddon(fit);
-    t.loadAddon(new WebLinksAddon());
-    t.open(el);
+    // In the desktop window links go to the system browser (the addon's default window.open is denied).
+    t.loadAddon(new WebLinksAddon(terminalLinkHandler(getDesktopBridge())));
     fitRef.current = fit;
-    safeFit(fit);
     setTerm(t);
     return () => {
       fitRef.current = null;
       t.dispose();
       setTerm(null);
+      setOpened(false);
     };
   }, []);
 
+  /** Live and shown: the PTY takes this view's size. */
+  const syncPtySize = useCallback(() => {
+    const pty = ptyRef.current;
+    if (!term || !visibleRef.current || !pty.live) return;
+    if (term.cols === pty.cols && term.rows === pty.rows) return;
+    pty.cols = term.cols;
+    pty.rows = term.rows;
+    wsClient.resizePty(ptyId, term.cols, term.rows);
+  }, [term, ptyId]);
+
+  // Opened on the first visible render only: xterm measures its container when it opens.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!term || !el || !visible || opened) return;
+    term.open(el);
+    // Fit before the PTY is attached, so the attach carries the real size.
+    if (fitRef.current) safeFit(fitRef.current);
+    setOpened(true);
+  }, [term, visible, opened]);
+
   useEffect(() => {
     if (!term) return;
-    let live = false;
     const setLive = (v: boolean) => {
-      live = v;
+      ptyRef.current.live = v;
       term.options.disableStdin = !v;
       term.options.cursorBlink = v;
     };
@@ -74,10 +102,12 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
       if (msg.type === "pty:attached") {
         term.reset();
         setLive(msg.live);
+        ptyRef.current.cols = msg.cols;
+        ptyRef.current.rows = msg.rows;
         if (msg.live) {
           setFixedSize(null);
-          if (fitRef.current) safeFit(fitRef.current);
-          if (msg.cols !== term.cols || msg.rows !== term.rows) wsClient.resizePty(ptyId, term.cols, term.rows);
+          if (visibleRef.current && fitRef.current) safeFit(fitRef.current);
+          syncPtySize();
         } else {
           setFixedSize({ cols: msg.cols, rows: msg.rows });
           term.resize(msg.cols, msg.rows);
@@ -91,35 +121,39 @@ export function TerminalView({ ptyId, visible, onState }: { ptyId: string; visib
         onStateRef.current({ phase: "error", message: msg.message });
       }
     });
-    const detach = wsClient.attachPty(ptyId, (bytes) => term.write(live ? bytes : keepAlternateScreen(bytes)), { cols: term.cols, rows: term.rows });
+    // A hidden terminal attaches without a size: attaching with one resizes the PTY.
+    const size = visibleRef.current ? { cols: term.cols, rows: term.rows } : undefined;
+    const detach = wsClient.attachPty(ptyId, (bytes) => term.write(ptyRef.current.live ? bytes : keepAlternateScreen(bytes)), size);
     const inputSub = term.onData((data) => {
-      if (live) wsClient.send({ type: "pty:input", ptyId, data });
+      if (ptyRef.current.live && visibleRef.current) wsClient.send({ type: "pty:input", ptyId, data });
     });
-    const resizeSub = term.onResize(({ cols, rows }) => {
-      if (live) wsClient.resizePty(ptyId, cols, rows);
-    });
+    const resizeSub = term.onResize(() => syncPtySize());
     return () => {
       offMsg();
       detach();
       inputSub.dispose();
       resizeSub.dispose();
     };
-  }, [term, ptyId]);
+  }, [term, ptyId, syncPtySize]);
 
+  // Shown: fit (live) and follow the container's size; the PTY catches up with this view's size.
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || !visible || fixedSize) return;
-    const ro = new ResizeObserver(() => {
+    if (!el || !visible || !opened) return;
+    if (fixedSize) return;
+    const refit = () => {
       if (fitRef.current) safeFit(fitRef.current);
-    });
+      syncPtySize();
+    };
+    const ro = new ResizeObserver(refit);
     ro.observe(el);
-    if (fitRef.current) safeFit(fitRef.current);
+    refit();
     return () => ro.disconnect();
-  }, [visible, term, fixedSize]);
+  }, [visible, opened, fixedSize, syncPtySize]);
 
   useEffect(() => {
-    if (visible) term?.focus();
-  }, [visible, term]);
+    if (visible && opened) term?.focus();
+  }, [visible, opened, term]);
 
   return (
     <div className={`h-full w-full ${fixedSize ? "overflow-auto" : ""} ${visible ? "" : "hidden"}`} style={{ backgroundColor: TERMINAL_BG }}>

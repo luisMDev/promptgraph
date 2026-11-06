@@ -39,7 +39,7 @@ async function setup() {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   cleanups.push(() => new Promise<void>((r) => server.close(() => r())));
   const port = (server.address() as AddressInfo).port;
-  const runner = new ClaudeRunner({ ptys, hooks, paths, pgHookPath: installPgHook(paths), endpoint: () => ({ port, token: "t" }), env });
+  const runner = new ClaudeRunner({ ptys: ptys.owned("repo"), hooks, paths, pgHookPath: installPgHook(paths), endpoint: () => ({ port, hookSecret: "t" }), env });
   return { runner, repo: repo.repo, dir: t.dir };
 }
 

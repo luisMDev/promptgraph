@@ -1,15 +1,15 @@
 import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { laneLegend } from "../../lib/lanes";
-import { useRunStore } from "../../store/run-store";
+import { useRun } from "../../store/view/context";
 import { LaneBadge } from "../common/LaneBadge";
 import { Section } from "../common/ui";
 
 /** Run panel legend: one row per lane (colour, id, branch, state, pushed, workspace setup), plan order. */
 export function LaneLegend() {
-  const detail = useRunStore((s) => s.detail);
-  const lanes = useRunStore((s) => s.lanes);
-  const currentByNode = useRunStore((s) => s.currentByNode);
+  const detail = useRun((s) => s.detail);
+  const lanes = useRun((s) => s.lanes);
+  const currentByNode = useRun((s) => s.currentByNode);
   const entries = useMemo(() => (detail ? laneLegend(detail.run.graphSnapshot, lanes, currentByNode) : []), [detail, lanes, currentByNode]);
   if (entries.length === 0) return null;
   return (

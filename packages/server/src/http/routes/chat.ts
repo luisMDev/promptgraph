@@ -5,27 +5,31 @@ import {
   type ListChatSessionsResponse,
   type OkResponse,
 } from "@promptgraph/shared";
-import type { Hono } from "hono";
-import type { AppContext } from "../../app/context.js";
 import { HttpError, readBody } from "../errors.js";
+import { REPO_PREFIX, repoOf, type App } from "../repo-scope.js";
 
-/** GET/POST /api/chat/sessions · GET/DELETE /api/chat/sessions/:id (§20). Messages go over the WebSocket. */
-export function registerChatRoutes(app: Hono, ctx: AppContext): void {
-  app.get("/api/chat/sessions", (c) => c.json<ListChatSessionsResponse>({ sessions: ctx.chat.list() }));
+const P = REPO_PREFIX;
 
-  app.post("/api/chat/sessions", async (c) => {
+/**
+ * Under /api/repos/:repoId (§21): GET/POST …/chat/sessions · GET/DELETE …/chat/sessions/:id, served by
+ * that repository's ChatManager. Messages go over the WebSocket.
+ */
+export function registerChatRoutes(app: App): void {
+  app.get(`${P}/chat/sessions`, (c) => c.json<ListChatSessionsResponse>({ sessions: repoOf(c).chat.list() }));
+
+  app.post(`${P}/chat/sessions`, async (c) => {
     const body = await readBody(c, CreateChatSessionRequestSchema);
-    return c.json<CreateChatSessionResponse>({ session: ctx.chat.create(body) });
+    return c.json<CreateChatSessionResponse>({ session: repoOf(c).chat.create(body) });
   });
 
-  app.get("/api/chat/sessions/:id", (c) => {
-    const detail = ctx.chat.get(c.req.param("id"));
+  app.get(`${P}/chat/sessions/:id`, (c) => {
+    const detail = repoOf(c).chat.get(c.req.param("id"));
     if (!detail) throw notFound(c.req.param("id"));
     return c.json<GetChatSessionResponse>(detail);
   });
 
-  app.delete("/api/chat/sessions/:id", (c) => {
-    if (!ctx.chat.delete(c.req.param("id"))) throw notFound(c.req.param("id"));
+  app.delete(`${P}/chat/sessions/:id`, (c) => {
+    if (!repoOf(c).chat.delete(c.req.param("id"))) throw notFound(c.req.param("id"));
     return c.json<OkResponse>({ ok: true });
   });
 }

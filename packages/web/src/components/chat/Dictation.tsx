@@ -6,12 +6,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { formatElapsed } from "../../lib/voice/pcm";
 import type { Dictation } from "../../lib/voice/use-dictation";
-import { useUiStore } from "../../store/ui-store";
+import { useView } from "../../store/view/context";
 import { useVoiceStore } from "../../store/voice-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
-/** Voice dictation pieces of the chat composer (DESIGN §21.6): mic button, unavailable popover, preview, status. */
+/** Voice dictation pieces of the chat composer (DESIGN §22.6): mic button, unavailable popover, preview, status. */
 
 export const REASON_TEXT: Record<VoiceUnavailableReason, string> = {
   binary_not_found: "whisper.cpp (whisper-cli) was not found.",
@@ -96,6 +96,7 @@ export function MicButton({ dictation, disabled }: { dictation: Dictation; disab
 
 /** Why dictation cannot run and how to set it up (promptgraph never downloads whisper or a model itself). */
 export function VoiceUnavailable() {
+  const view = useView();
   const status = useVoiceStore((s) => s.status);
   const loading = useVoiceStore((s) => s.statusLoading);
   const statusError = useVoiceStore((s) => s.statusError);
@@ -122,7 +123,7 @@ export function VoiceUnavailable() {
           size="sm"
           className="px-1.5 text-xs"
           onClick={() => {
-            useUiStore.getState().setSettingsOpen(false);
+            view.ui.getState().setSettingsOpen(false);
             window.dispatchEvent(new CustomEvent(OPEN_VOICE_SETTINGS_EVENT));
           }}
         >

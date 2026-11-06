@@ -1,4 +1,4 @@
-import { formatCostUsd, isFinalRunStatus } from "@promptgraph/shared";
+import { formatCostUsd, isFinalRunStatus, webRoutes } from "@promptgraph/shared";
 import { Loader2Icon } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -14,24 +14,23 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDateTime } from "../../lib/format";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
-import { cancelRun, resumeRun, startRun } from "../../store/app-actions";
-import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import { Link } from "../../lib/router/Link";
+import { cancelRun, resumeRun, startRun } from "../../store/view/actions";
+import { useEditor, useRepo, useRun, useView } from "../../store/view/context";
 import { Icons } from "../common/icons";
 import { ConfirmDialog } from "../common/PromptDialog";
-import { Button, StatusDot } from "../common/ui";
+import { Button, ButtonLink, StatusDot } from "../common/ui";
 
 /** Run / Cancel, validation summary, and the total cost of the shown run. Floats over the canvas, top right. */
 export function RunControls() {
-  const graph = useEditorStore((s) => s.graph);
-  const errors = useEditorStore((s) => s.validation.errors.length);
-  const warnings = useEditorStore((s) => s.validation.warnings.length);
-  const activeRunId = useEditorStore((s) => s.activeRunId);
-  const detail = useRunStore((s) => s.detail);
-  const activeRun = useRunStore((s) => s.runs.find((r) => r.id === activeRunId) ?? null);
-  const currentByNode = useRunStore((s) => s.currentByNode);
+  const view = useView();
+  const graph = useEditor((s) => s.graph);
+  const errors = useEditor((s) => s.validation.errors.length);
+  const warnings = useEditor((s) => s.validation.warnings.length);
+  const activeRunId = useEditor((s) => s.activeRunId);
+  const detail = useRun((s) => s.detail);
+  const activeRun = useRun((s) => s.runs.find((r) => r.id === activeRunId) ?? null);
+  const currentByNode = useRun((s) => s.currentByNode);
   const [starting, setStarting] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   if (!graph) return null;
@@ -60,7 +59,7 @@ export function RunControls() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => useEditorStore.getState().setSelection([], [])}
+          onClick={() => view.editor.getState().setSelection([], [])}
           title="Show problems in the inspector"
           className={`gap-1 text-xs shadow-soft ring-1 ring-border ${errors ? "bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-700 dark:bg-red-950 dark:hover:bg-red-900" : "bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-700 dark:bg-amber-950 dark:hover:bg-amber-900"}`}
         >
@@ -76,12 +75,12 @@ export function RunControls() {
         </span>
       )}
       {shownRun && (
-        <Button onClick={() => useUiStore.getState().openReport(shownRun.id)} title="Results, changes, commits, cost and where the run stopped">
+        <ButtonLink to={webRoutes.report(view.repoId, shownRun.id)} title="Results, changes, commits, cost and where the run stopped">
           Report
-        </Button>
+        </ButtonLink>
       )}
       {resumable && (
-        <Button variant="primary" onClick={() => void resumeRun(activeRun.id)} title="Continue the paused run">
+        <Button variant="primary" onClick={() => void resumeRun(view, activeRun.id)} title="Continue the paused run">
           <Icons.play /> Resume
         </Button>
       )}
@@ -96,7 +95,7 @@ export function RunControls() {
           title={runTitle}
           onClick={async () => {
             setStarting(true);
-            await startRun();
+            await startRun(view);
             setStarting(false);
           }}
         >
@@ -108,7 +107,7 @@ export function RunControls() {
           title="Cancel run"
           message={`Cancel run${activeRun ? ` #${activeRun.shortId}` : ""}? Running Claude sessions will be asked to exit and unfinished nodes are cancelled.`}
           confirmLabel="Cancel run"
-          onConfirm={() => void cancelRun(activeRunId)}
+          onConfirm={() => void cancelRun(view, activeRunId)}
           onClose={() => setConfirmCancel(false)}
         />
       )}
@@ -121,10 +120,10 @@ export function RunControls() {
  * the last save failed, and nothing once the graph is saved.
  */
 export function SaveIndicator() {
-  const pending = useEditorStore((s) => s.saving || s.dirty);
-  const saveError = useEditorStore((s) => s.saveError);
-  const hasGraph = useEditorStore((s) => s.graph !== null);
-  const runMode = useRunStore((s) => s.selectedRunId !== null);
+  const pending = useEditor((s) => s.saving || s.dirty);
+  const saveError = useEditor((s) => s.saveError);
+  const hasGraph = useEditor((s) => s.graph !== null);
+  const runMode = useRun((s) => s.selectedRunId !== null);
   if (!hasGraph || runMode) return null;
   if (saveError) {
     return (
@@ -146,12 +145,14 @@ export function SaveIndicator() {
 /** Value of the editor entry in the run selector's radio group (run ids are never empty). */
 const EDITOR_VALUE = "";
 
-/** Switch between the editor and live/historical runs of the current graph. */
+/** Switch between the editor and live/historical runs of the current graph; every entry is a link. */
 export function RunSelector() {
-  const runs = useRunStore((s) => s.runs);
-  const selectedRunId = useRunStore((s) => s.selectedRunId);
-  const graph = useEditorStore((s) => s.graph);
-  if (!graph) return null;
+  const view = useView();
+  const runs = useRun((s) => s.runs);
+  const selectedRunId = useRun((s) => s.selectedRunId);
+  const graph = useEditor((s) => s.graph);
+  const graphId = useEditor((s) => s.graphId);
+  if (!graph || !graphId) return null;
   const selected = runs.find((r) => r.id === selectedRunId);
 
   return (
@@ -177,18 +178,22 @@ export function RunSelector() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80">
         <DropdownMenuRadioGroup value={selectedRunId ?? EDITOR_VALUE}>
-          <DropdownMenuRadioItem value={EDITOR_VALUE} className="gap-2 py-1.5 pl-3" onSelect={() => void useRunStore.getState().selectRun(null)}>
-            <Icons.edit className="text-muted-foreground" />
-            <span>Editor</span>
+          <DropdownMenuRadioItem value={EDITOR_VALUE} className="gap-2 py-1.5 pl-3" asChild>
+            <Link to={webRoutes.graph(view.repoId, graphId)}>
+              <Icons.edit className="text-muted-foreground" />
+              <span>Editor</span>
+            </Link>
           </DropdownMenuRadioItem>
           <div className="max-h-80 overflow-y-auto">
             {runs.map((r) => (
-              <DropdownMenuRadioItem key={r.id} value={r.id} className="gap-2 py-1.5 pl-3" onSelect={() => void useRunStore.getState().selectRun(r.id)}>
-                <StatusDot className={RUN_STATUS_STYLE[r.status].dot} />
-                <span className="font-mono text-xs">#{r.shortId}</span>
-                <span className="text-xs text-muted-foreground">{formatDateTime(r.startedAt)}</span>
-                <span className={`text-xs ${RUN_STATUS_STYLE[r.status].text}`}>{isFinalRunStatus(r.status) ? RUN_STATUS_STYLE[r.status].label : "live"}</span>
-                <span className="ml-auto font-mono text-xs text-muted-foreground">{formatCostUsd(r.usage.costUsd)}</span>
+              <DropdownMenuRadioItem key={r.id} value={r.id} className="gap-2 py-1.5 pl-3" asChild>
+                <Link to={webRoutes.run(view.repoId, r.id)}>
+                  <StatusDot className={RUN_STATUS_STYLE[r.status].dot} />
+                  <span className="font-mono text-xs">#{r.shortId}</span>
+                  <span className="text-xs text-muted-foreground">{formatDateTime(r.startedAt)}</span>
+                  <span className={`text-xs ${RUN_STATUS_STYLE[r.status].text}`}>{isFinalRunStatus(r.status) ? RUN_STATUS_STYLE[r.status].label : "live"}</span>
+                  <span className="ml-auto font-mono text-xs text-muted-foreground">{formatCostUsd(r.usage.costUsd)}</span>
+                </Link>
               </DropdownMenuRadioItem>
             ))}
           </div>
@@ -196,7 +201,7 @@ export function RunSelector() {
         {runs.length > 0 && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="px-3 py-1.5 text-xs text-muted-foreground" onSelect={() => useUiStore.getState().setLeftPanel("history")}>
+            <DropdownMenuItem className="px-3 py-1.5 text-xs text-muted-foreground" onSelect={() => view.ui.getState().setLeftPanel("history")}>
               Open run history…
             </DropdownMenuItem>
           </>
@@ -206,10 +211,14 @@ export function RunSelector() {
   );
 }
 
-/** Header counter of approvals waiting across all runs of the repo; click one to review it. */
+/**
+ * Header counter of approvals waiting across all runs of the repo. Each entry links to its node run (DESIGN
+ * §13.2) and, on a plain click, opens the approval dialog there.
+ */
 export function PendingApprovals() {
-  const pending = useAppStore((s) => s.pending);
-  const runs = useAppStore((s) => s.pendingRuns);
+  const view = useView();
+  const pending = useRepo((s) => s.pending);
+  const runs = useRepo((s) => s.pendingRuns);
   const count = pending.length;
   const label = count ? `${count} approval${count > 1 ? "s" : ""} pending` : "No pending approvals";
 
@@ -233,12 +242,19 @@ export function PendingApprovals() {
         {pending.map((nr) => {
           const info = runs[nr.runId];
           return (
-            <DropdownMenuItem key={nr.id} className="gap-2 px-3 py-2" onSelect={() => useUiStore.getState().openApproval(nr.id)}>
-              <StatusDot className="bg-status-waiting-approval" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{info?.nodeLabels[nr.nodeId] ?? nr.nodeId}</span>
-                <span className="block truncate text-[11px] text-muted-foreground">{info ? `${info.graphName} · run #${info.shortId}` : `run ${nr.runId}`}</span>
-              </span>
+            <DropdownMenuItem key={nr.id} className="gap-2 px-3 py-2" asChild>
+              <Link
+                to={webRoutes.nodeRun(view.repoId, nr.runId, nr.id)}
+                onClick={(e) => {
+                  if (!(e.ctrlKey || e.metaKey) && e.button === 0) view.ui.getState().openApproval(nr.id);
+                }}
+              >
+                <StatusDot className="bg-status-waiting-approval" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{info?.nodeLabels[nr.nodeId] ?? nr.nodeId}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{info ? `${info.graphName} · run #${info.shortId}` : `run ${nr.runId}`}</span>
+                </span>
+              </Link>
             </DropdownMenuItem>
           );
         })}

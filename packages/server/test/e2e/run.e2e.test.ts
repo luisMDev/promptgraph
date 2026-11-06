@@ -1,13 +1,12 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ptyLogPath } from "../../src/config/paths.js";
 import { openDatabase, Store } from "../../src/store/store.js";
 import { waitFor } from "../helpers.js";
-import { chainGraph, createWorld, E2eServer, readClaudeLog, until, type E2eWorld } from "./harness.js";
+import { chainGraph, createWorld, E2eServer, readClaudeLog, spawnForegroundCli, until, type E2eWorld } from "./harness.js";
 
-const SERVER_ROOT = path.resolve(import.meta.dirname, "../..");
 
 describe("e2e: real server, fake claude", () => {
   const cleanups: Array<() => void | Promise<void>> = [];
@@ -265,25 +264,15 @@ describe("e2e: real server, fake claude", () => {
     const graph = chainGraph("crash", [{ id: "h", type: "prompt", config: { prompt: "[[hang]] long task" } }]);
     fs.writeFileSync(path.join(graphsDir, "crash.json"), JSON.stringify(graph));
 
-    // First server: a separate process we can SIGKILL mid-run.
-    // tsx as an in-process loader (not its CLI wrapper), so SIGKILL hits the server process itself.
-    const child = spawn(process.execPath, ["--import", "tsx", "--conditions=source", "src/cli/index.ts", w.repo, "--port", "0", "--no-open"], {
-      cwd: SERVER_ROOT,
-      env: w.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    cleanups.push(() => void child.kill("SIGKILL"));
-    let stdout = "";
-    child.stdout.on("data", (c: Buffer) => (stdout += c.toString()));
-    const url = new URL(await waitFor(() => /Open: (\S+)/.exec(stdout)?.[1], 20_000));
-    const base = `${url.protocol}//${url.host}`;
-    const auth = { authorization: `Bearer ${url.searchParams.get("t")}` };
-    const started = (await (await fetch(`${base}/api/graphs/crash/runs`, { method: "POST", headers: auth })).json()) as {
+    // First daemon: a separate `--foreground` process we can SIGKILL mid-run.
+    const cli = await spawnForegroundCli(w, (fn) => cleanups.push(fn));
+    const child = cli.child;
+    const started = (await (await cli.fetch("POST", "/graphs/crash/runs")).json()) as {
       run: { id: string };
     };
     const runId = started.run.id;
     const readNode = async () =>
-      ((await (await fetch(`${base}/api/runs/${runId}`, { headers: auth })).json()) as { nodeRuns: { status: string; sessionId: string | null }[] })
+      ((await (await cli.fetch("GET", `/runs/${runId}`)).json()) as { nodeRuns: { status: string; sessionId: string | null }[] })
         .nodeRuns[0]!;
     let before = await readNode();
     const end = Date.now() + 15_000;

@@ -29,7 +29,7 @@ export interface ChatSpawnSpec {
 
 export type ChatSpawner = (spec: ChatSpawnSpec) => ChatChild;
 
-/** Real spawner: child_process with pipes, no PTY (DESIGN §20.1). */
+/** Real spawner: child_process with pipes, no PTY (DESIGN §21.1). */
 export const spawnChatProcess: ChatSpawner = (spec) => {
   const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ["pipe", "pipe", "pipe"] });
   let stdinOpen = true;

@@ -1,7 +1,8 @@
+import { webRoutes } from "@promptgraph/shared";
 import { MessageSquareIcon } from "lucide-react";
-import { useAppStore } from "../../store/app-store";
+import { Link } from "../../lib/router/Link";
 import { toggleChatPanel } from "../../store/chat-actions";
-import { useUiStore } from "../../store/ui-store";
+import { useRepoInfo, useView, useViewUi } from "../../store/view/context";
 import { Button } from "../common/ui";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Separator } from "../ui/separator";
@@ -10,29 +11,29 @@ import { SettingsMenu } from "../settings/SettingsMenu";
 import { GraphSelector } from "./GraphSelector";
 import { PendingApprovals, RunSelector } from "./RunControls";
 
-/** Top bar (§13): logo, graph selector, run selector, pending approvals, settings. Run/Cancel and the save state float over the canvas. */
+/**
+ * Top bar (§13): logo and repository name (both link to Home), graph selector, run selector, pending approvals,
+ * settings. Run/Cancel and the save state float over the canvas.
+ */
 export function Header() {
-  const repo = useAppStore((s) => s.repo);
-  const connected = useAppStore((s) => s.connected);
-  const sessionExpired = useAppStore((s) => s.sessionExpired);
+  const repo = useRepoInfo();
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card/80 px-3 backdrop-blur">
       <div className="flex items-center gap-2 pr-1">
-        <Logo />
-        <span className="text-[15px] font-semibold tracking-tight text-foreground">promptgraph</span>
-        {repo && <span className="hidden max-w-40 truncate text-xs text-muted-foreground lg:inline" title={repo.path}>{repo.name}</span>}
+        <Link to={webRoutes.home()} className="flex items-center gap-2" aria-label="promptgraph Home">
+          <Logo />
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">promptgraph</span>
+        </Link>
+        {repo && (
+          <Link to={webRoutes.home()} className="hidden max-w-40 truncate text-xs text-muted-foreground hover:text-foreground hover:underline lg:inline" title={`${repo.path} — all repositories`}>
+            {repo.name}
+          </Link>
+        )}
       </div>
       <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
       <GraphSelector />
       <RunSelector />
       <div className="ml-auto flex items-center gap-2">
-        {sessionExpired ? (
-          <span role="alert" className="rounded bg-red-500/10 px-2 py-1 text-xs text-red-700">
-            The promptgraph server was restarted: open the new URL it printed in your terminal.
-          </span>
-        ) : (
-          !connected && <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-700">Reconnecting…</span>
-        )}
         <PendingApprovals />
         <ChatToggle />
         <ClaudeSetupButton />
@@ -42,14 +43,15 @@ export function Header() {
   );
 }
 
-/** Opens / closes the chat panel (§20). */
+/** Opens / closes the view's chat panel (§21). */
 export function ChatToggle() {
-  const open = useUiStore((s) => s.chatOpen);
+  const view = useView();
+  const open = useViewUi((s) => s.chatOpen);
   const label = open ? "Close chat" : "Chat with Claude";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant={open ? "secondary" : "ghost"} size="sm" aria-label={label} aria-pressed={open} className="gap-1.5" onClick={toggleChatPanel}>
+        <Button variant={open ? "secondary" : "ghost"} size="sm" aria-label={label} aria-pressed={open} className="gap-1.5" onClick={() => toggleChatPanel(view)}>
           <MessageSquareIcon /> <span className="hidden lg:inline">Chat</span>
         </Button>
       </TooltipTrigger>
@@ -59,7 +61,7 @@ export function ChatToggle() {
 }
 
 /** App logo: a staircase of three joined nodes on a white tile (source artwork in docs/assets/logo.png). */
-function Logo() {
+export function Logo() {
   return (
     <svg viewBox="0 0 100 100" width="24" height="24" aria-hidden="true" className="rounded-[5px] shadow-soft ring-1 ring-border">
       <rect width="100" height="100" rx="20" fill="#fff" />

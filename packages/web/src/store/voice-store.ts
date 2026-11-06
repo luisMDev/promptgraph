@@ -10,13 +10,13 @@ import {
   type VoiceStatus,
 } from "@promptgraph/shared";
 import { create } from "zustand";
-import { api, errorMessage } from "../api/rest";
+import { daemonApi, errorMessage } from "../api/rest";
 import { wsClient } from "../api/ws";
 import { micErrorFrom, startMicCapture, type CaptureHandle, type StartCapture } from "../lib/voice/capture";
 import { SPEECH_RMS_THRESHOLD } from "../lib/voice/pcm";
 
 /**
- * Voice dictation in the chat composer (DESIGN §21): the status from GET /api/voice and the state machine of one
+ * Voice dictation in the chat composer (DESIGN §22): the status from GET /api/voice and the state machine of one
  * recording. Audio goes to the server as binary WS frames; voice:partial / voice:final / voice:error come back
  * through handleServerMessage. One recording at a time (the server allows one per WS client too).
  *
@@ -53,7 +53,7 @@ export interface VoiceDeps {
 }
 
 let deps: VoiceDeps = {
-  getStatus: (refresh) => api.voiceStatus(refresh),
+  getStatus: (refresh) => daemonApi.voiceStatus(refresh),
   send: (msg) => {
     if (!wsClient.isOpen()) return false;
     wsClient.send(msg);

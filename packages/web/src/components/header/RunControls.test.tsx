@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
 import type { RunSummary } from "@promptgraph/shared";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linearGraph, nodeRunOf, runDetailOf } from "../../test-fixtures";
-import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import { createTestView, type TestView } from "../../store/view/test-view";
 import { PendingApprovals, RunSelector } from "./RunControls";
 
 const graph = linearGraph();
@@ -17,29 +14,21 @@ function runSummary(id: string, shortId: string, status: RunSummary["status"]): 
   return { ...run, shortId, status };
 }
 
-const original = {
-  selectRun: useRunStore.getState().selectRun,
-  setLeftPanel: useUiStore.getState().setLeftPanel,
-  openApproval: useUiStore.getState().openApproval,
-};
+let view: TestView;
+const render = (ui: Parameters<TestView["render"]>[0]) => view.render(ui);
+const R = "/r/repo-0123abcd";
 
-afterEach(() => {
-  cleanup();
-  useRunStore.setState({ selectRun: original.selectRun, runs: [], selectedRunId: null });
-  useUiStore.setState({ setLeftPanel: original.setLeftPanel, openApproval: original.openApproval });
-  useAppStore.setState({ pending: [], pendingRuns: {} });
-});
+afterEach(cleanup);
 
 describe("RunSelector menu", () => {
-  const selectRun = vi.fn(async () => {});
   const setLeftPanel = vi.fn();
 
   beforeEach(() => {
-    selectRun.mockClear();
     setLeftPanel.mockClear();
-    useEditorStore.setState({ graph });
-    useRunStore.setState({ runs: [runSummary("r1", "ab12", "succeeded"), runSummary("r2", "cd34", "running")], selectedRunId: null, selectRun });
-    useUiStore.setState({ setLeftPanel });
+    view = createTestView({ graphId: "g1", path: `${R}/graphs/g1` });
+    view.editor.setState({ graph, loading: false });
+    view.run.setState({ runs: [runSummary("r1", "ab12", "succeeded"), runSummary("r2", "cd34", "running")], selectedRunId: null });
+    view.ui.setState({ setLeftPanel });
   });
 
   it("opens from the keyboard, moves focus between items and closes on Escape back to the trigger", async () => {
@@ -64,22 +53,23 @@ describe("RunSelector menu", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(trigger);
-    expect(selectRun).not.toHaveBeenCalled();
+    expect(view.location.navigations).toEqual([]);
   });
 
-  it("selecting a run, the editor or the history entry calls the right action", async () => {
+  it("runs and the editor are links; the history entry opens the panel", async () => {
     const user = userEvent.setup();
     render(<RunSelector />);
     const trigger = screen.getByRole("button", { name: /Editor/ });
 
     await user.click(trigger);
+    expect(screen.getByRole("menuitemradio", { name: /#cd34/ }).getAttribute("href")).toBe(`${R}/runs/r2`);
     await user.click(screen.getByRole("menuitemradio", { name: /#cd34/ }));
-    expect(selectRun).toHaveBeenLastCalledWith("r2");
+    expect(view.location.navigations.at(-1)).toEqual({ path: `${R}/runs/r2`, replace: false });
     expect(screen.queryByRole("menu")).toBeNull();
 
     await user.click(trigger);
     await user.click(screen.getByRole("menuitemradio", { name: /Editor/ }));
-    expect(selectRun).toHaveBeenLastCalledWith(null);
+    expect(view.location.navigations.at(-1)?.path).toBe(`${R}/graphs/g1`);
 
     await user.click(trigger);
     await user.click(screen.getByRole("menuitem", { name: "Open run history…" }));
@@ -94,16 +84,16 @@ describe("RunSelector menu", () => {
     await user.keyboard("{Enter}");
     await screen.findByRole("menu");
     await user.keyboard("{ArrowDown}{Enter}");
-    expect(selectRun).toHaveBeenCalledWith("r1");
+    expect(view.location.navigations.at(-1)?.path).toBe(`${R}/runs/r1`);
 
-    useRunStore.setState({ selectedRunId: "r1" });
+    view.run.setState({ selectedRunId: "r1" });
     rerender(<RunSelector />);
     expect(screen.getByRole("button", { name: /Run #ab12/ })).toBeTruthy();
   });
 
   it("hides the history entry when there are no runs", async () => {
     const user = userEvent.setup();
-    useRunStore.setState({ runs: [] });
+    view.run.setState({ runs: [] });
     render(<RunSelector />);
     await user.click(screen.getByRole("button", { name: /Editor/ }));
     expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
@@ -116,8 +106,9 @@ describe("PendingApprovals menu", () => {
 
   beforeEach(() => {
     openApproval.mockClear();
-    useUiStore.setState({ openApproval });
-    useAppStore.setState({
+    view = createTestView({ path: `${R}/graphs/g1` });
+    view.ui.setState({ openApproval });
+    view.cache.setState({
       pending: [
         nodeRunOf({ id: "nr1", nodeId: "a", status: "waiting_approval" }),
         nodeRunOf({ id: "nr2", nodeId: "b", runId: "r9", status: "waiting_approval" }),
@@ -151,18 +142,30 @@ describe("PendingApprovals menu", () => {
     expect(openApproval).not.toHaveBeenCalled();
   });
 
-  it("selecting an approval opens it and closes the menu", async () => {
+  it("selecting an approval goes to its node run, opens the dialog and closes the menu", async () => {
     const user = userEvent.setup();
     render(<PendingApprovals />);
     await user.click(screen.getByRole("button", { name: "2 approvals pending" }));
     await user.click(screen.getByRole("menuitem", { name: /run r9/ }));
+    expect(view.location.navigations.at(-1)?.path).toBe(`${R}/runs/r9/nodes/nr2`);
     expect(openApproval).toHaveBeenCalledWith("nr2");
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("Ctrl-click on an approval opens its node run in a background tab, without the dialog here", async () => {
+    const user = userEvent.setup();
+    render(<PendingApprovals />);
+    await user.click(screen.getByRole("button", { name: "2 approvals pending" }));
+    await user.keyboard("{Control>}");
+    await user.click(screen.getByRole("menuitem", { name: /run r9/ }));
+    await user.keyboard("{/Control}");
+    expect(view.location.newTabs).toEqual([{ path: `${R}/runs/r9/nodes/nr2`, activate: false }]);
+    expect(openApproval).not.toHaveBeenCalled();
+  });
+
   it("with nothing pending, shows a note that is not a selectable item", async () => {
     const user = userEvent.setup();
-    useAppStore.setState({ pending: [], pendingRuns: {} });
+    view.cache.setState({ pending: [], pendingRuns: {} });
     render(<PendingApprovals />);
     const trigger = screen.getByRole("button", { name: "No pending approvals" });
     await user.click(trigger);

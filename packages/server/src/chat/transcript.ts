@@ -49,7 +49,7 @@ interface TranscriptLine {
 const SYNTHETIC_USER_TEXT = /^\s*<(command-name|command-message|local-command-stdout|local-command-stderr|local-command-caveat)>/;
 
 /**
- * Chat items rebuilt from a Claude transcript JSONL (after a server restart, §20.8): user messages
+ * Chat items rebuilt from a Claude transcript JSONL (after a server restart, §21.8): user messages
  * (context block stripped), assistant text, tool uses and tool results. Permission prompts, results
  * and notices are not in the transcript. Missing or unreadable file → [].
  */

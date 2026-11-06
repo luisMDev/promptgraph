@@ -1,12 +1,12 @@
 import type { VoiceMode } from "@promptgraph/shared";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type MouseEvent, type RefObject } from "react";
-import { useEditorStore } from "../../store/editor-store";
+import { useView } from "../../store/view/context";
 import { isDictationActive, useVoiceStore, type DictationState } from "../../store/voice-store";
 import { dictationKeyterms } from "./keyterms";
 import { insertTranscript } from "./pcm";
 
 /**
- * Composer side of voice dictation (DESIGN §21.6), with Claude Code's /voice UX:
+ * Composer side of voice dictation (DESIGN §22.6), with Claude Code's /voice UX:
  * - Space on an empty composer: hold mode = hold while speaking, release ends; tap mode = press to start and stop.
  * - Alt+Space at any time (also with text): same, in the configured mode.
  * - Mic button: press and hold = hold, click = tap toggle.
@@ -65,6 +65,7 @@ function isSpace(e: KeyboardEvent): boolean {
 }
 
 export function useDictation({ inputRef, value, setValue, submit, disabled }: UseDictationOptions): Dictation {
+  const { editor } = useView();
   const state = useVoiceStore((s) => s.state);
   const partial = useVoiceStore((s) => s.partial);
   const level = useVoiceStore((s) => s.level);
@@ -147,7 +148,7 @@ export function useDictation({ inputRef, value, setValue, submit, disabled }: Us
       setInsertion(at);
       const started = await useVoiceStore.getState().start({
         mode: recordMode,
-        keyterms: dictationKeyterms(useEditorStore.getState().graph),
+        keyterms: dictationKeyterms(editor.getState().graph),
         onFinal: (text, result) => {
           setInsertion(null);
           if (!text) return;

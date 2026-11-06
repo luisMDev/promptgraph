@@ -69,14 +69,17 @@ describe("chat schemas", () => {
   });
 
   it("extends the WS unions with chat messages", () => {
+    const REPO = "promptgraph-0123abcd";
     expect(
-      ClientMessageSchema.parse({ type: "chat:send", sessionId: "s", text: "x", context: EMPTY_CHAT_CONTEXT }).type,
+      ClientMessageSchema.parse({ type: "chat:send", repoId: REPO, sessionId: "s", text: "x", context: EMPTY_CHAT_CONTEXT }).type,
     ).toBe("chat:send");
-    expect(ClientMessageSchema.parse({ type: "chat:permission", sessionId: "s", requestId: "r", allow: false, message: "no" }).type).toBe(
+    expect(ClientMessageSchema.parse({ type: "chat:permission", repoId: REPO, sessionId: "s", requestId: "r", allow: false, message: "no" }).type).toBe(
       "chat:permission",
     );
-    expect(ClientMessageSchema.safeParse({ type: "chat:send", sessionId: "s", text: "", context: EMPTY_CHAT_CONTEXT }).success).toBe(false);
-    expect(ServerMessageSchema.parse({ type: "chat:delta", sessionId: "s", messageId: "m", text: "he", offset: 0 }).type).toBe("chat:delta");
-    expect(ServerMessageSchema.parse({ type: "chat:status", sessionId: "s", status: "thinking" }).type).toBe("chat:status");
+    expect(ClientMessageSchema.safeParse({ type: "chat:send", repoId: REPO, sessionId: "s", text: "", context: EMPTY_CHAT_CONTEXT }).success).toBe(false);
+    expect(ServerMessageSchema.parse({ type: "chat:delta", repoId: REPO, sessionId: "s", messageId: "m", text: "he", offset: 0 }).type).toBe("chat:delta");
+    expect(ServerMessageSchema.parse({ type: "chat:status", repoId: REPO, sessionId: "s", status: "thinking" }).type).toBe("chat:status");
+    // Chat messages are routed per repository: without one they are invalid.
+    expect(ClientMessageSchema.safeParse({ type: "chat:interrupt", sessionId: "s" }).success).toBe(false);
   });
 });

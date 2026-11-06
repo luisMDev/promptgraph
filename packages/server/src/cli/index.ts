@@ -1,30 +1,52 @@
 #!/usr/bin/env node
-import open from "open";
-import { VERSION } from "../config/version.js";
-import { resolveRepoRoot } from "../git/repo.js";
-import { parseCliArgs, USAGE } from "./args.js";
-import { checkPrereqs } from "./prereqs.js";
-import { startServer } from "./server.js";
+import { errorMessage } from "../util/text.js";
+import { parseCliArgs, USAGE, UsageError, type CliOptions } from "./args.js";
+import { runDaemon, runForeground } from "./commands/daemon.js";
+import { runDesktopInstall, runDesktopShim } from "./commands/desktop.js";
+import { runLs } from "./commands/ls.js";
+import { runOpenRepo } from "./commands/open-repo.js";
+import { runOpen } from "./commands/open.js";
+import { runRm } from "./commands/rm.js";
+import { runSessions, runSessionsRevoke } from "./commands/sessions.js";
+import { runStop } from "./commands/stop.js";
+import { runTokenRotate } from "./commands/token.js";
+import { defaultDeps, type CliDeps } from "./deps.js";
+
+const COMMANDS: Record<Exclude<CliOptions["command"], "mcp">, (opts: CliOptions, deps: CliDeps) => Promise<number>> = {
+  "open-repo": (opts, deps) => (opts.foreground ? runForeground(opts, deps) : runOpenRepo(opts, deps)),
+  daemon: runDaemon,
+  ls: runLs,
+  open: runOpen,
+  rm: runRm,
+  stop: runStop,
+  "token-rotate": runTokenRotate,
+  sessions: runSessions,
+  "sessions-revoke": runSessionsRevoke,
+  "desktop-install": runDesktopInstall,
+  "desktop-shim": runDesktopShim,
+};
 
 /**
- * `promptgraph` bin (§4). `promptgraph mcp` runs the MCP server instead (§19.2). Otherwise: parseCliArgs → resolveRepoRoot → checkPrereqs (errors exit 1, warnings
- * printed) → startServer → print + open (unless --no-open) the URL. SIGINT/SIGTERM → server.close()
- * (graceful /exit of Claude PTYs, ≤5s) → exit 0; a second SIGINT force-exits.
+ * `promptgraph` bin (DESIGN §4). Exit codes: 0 ok, 1 error (also "not running" and a version mismatch),
+ * 2 usage, 3 (`daemon` only) another daemon holds the lock, 4 (`open --json --on-version-mismatch auto`)
+ * a daemon of another version runs and the caller must decide.
  */
-export async function main(argv: readonly string[]): Promise<number> {
-  let opts;
+export async function main(argv: readonly string[], makeDeps: () => CliDeps = () => defaultDeps()): Promise<number> {
+  let opts: CliOptions;
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
-    console.error(`${(err as Error).message}\n${USAGE}`);
+    process.stderr.write(`${err instanceof UsageError ? err.message : errorMessage(err)}\n${USAGE}\n`);
     return 2;
   }
   if (opts.help) {
-    console.log(USAGE);
+    process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // --version is global: checked before `mcp`, which would otherwise start the stdio server and block.
   if (opts.version) {
-    console.log(VERSION);
+    const deps = makeDeps();
+    deps.stdout(deps.version);
     return 0;
   }
   if (opts.command === "mcp") {
@@ -33,51 +55,13 @@ export async function main(argv: readonly string[]): Promise<number> {
     await runMcpStdio();
     return 0;
   }
-
-  const prereqs = await checkPrereqs();
-  for (const e of prereqs.errors) console.error(`error: ${e}`);
-  if (prereqs.errors.length > 0) return 1;
-  for (const w of prereqs.warnings) console.warn(`warning: ${w}`);
-
-  let repoPath: string;
-  try {
-    repoPath = await resolveRepoRoot(opts.repoDir);
-  } catch {
-    console.error(`error: ${opts.repoDir} is not inside a git repository`);
-    return 1;
-  }
-
-  const server = await startServer({ repoPath, port: opts.port, warnings: prereqs.warnings });
-  console.log(`promptgraph ${VERSION} serving ${repoPath}`);
-  console.log(`Open: ${server.url}`);
-  if (opts.open) open(server.url).catch(() => console.warn("warning: could not open a browser; open the URL above"));
-
-  return new Promise<number>((resolve) => {
-    let stopping = false;
-    const stop = (signal: NodeJS.Signals) => {
-      if (stopping) {
-        if (signal === "SIGINT") process.exit(130);
-        return;
-      }
-      stopping = true;
-      console.log("\nStopping: asking running sessions to exit (up to 5s)…");
-      server.close().then(
-        () => resolve(0),
-        (err: unknown) => {
-          console.error(err instanceof Error ? err.message : err);
-          resolve(1);
-        },
-      );
-    };
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
-  });
+  return COMMANDS[opts.command](opts, makeDeps());
 }
 
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
-    console.error(err instanceof Error ? err.message : err);
+    console.error(errorMessage(err));
     process.exit(1);
   },
 );

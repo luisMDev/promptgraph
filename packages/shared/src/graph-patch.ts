@@ -21,7 +21,7 @@ import { deriveEdgeId, edgeIdSet, LAYOUT_DX, LAYOUT_DY, layeredLayout } from "./
 import { buildTopology, topologicalOrder } from "./topology.js";
 
 /**
- * Incremental edits of a graph (DESIGN §20.7), used by the `patch_graph` MCP tool so Claude can change
+ * Incremental edits of a graph (DESIGN §21.7), used by the `patch_graph` MCP tool so Claude can change
  * the graph on screen without rewriting it. Existing nodes keep their ids and positions; only the
  * nodes and edges named by the ops change. `applyGraphPatch` is pure.
  */

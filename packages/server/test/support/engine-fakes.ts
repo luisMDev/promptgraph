@@ -14,7 +14,7 @@ import { getPaths } from "../../src/config/paths.js";
 import { Engine } from "../../src/engine/engine.js";
 import { EventBus, type BusEvents } from "../../src/events/bus.js";
 import { GraphStore } from "../../src/graphs/graph-store.js";
-import type { PtyManager } from "../../src/pty/pty-manager.js";
+import type { OwnedPtys } from "../../src/pty/pty-manager.js";
 import type { ClaudeRunner } from "../../src/runners/claude/claude-runner.js";
 import type { NodeExecution, Runner, RunnerContext, RunnerRegistry, RunnerResult } from "../../src/runners/types.js";
 import { openDatabase, Store } from "../../src/store/store.js";
@@ -142,7 +142,7 @@ export interface Setup {
   graphs: GraphStore;
   bus: EventBus;
   lanes: FakeLanes;
-  ptys: { killAll: ReturnType<typeof vi.fn> };
+  ptys: { killOwned: ReturnType<typeof vi.fn> };
   claude: { reopen: ReturnType<typeof vi.fn>; isSessionActive: ReturnType<typeof vi.fn> };
   events: Array<{ name: keyof BusEvents; payload: unknown }>;
   attention: Array<BusEvents["attention"]>;
@@ -158,21 +158,22 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2 } = {}): Se
   for (const name of ["run:update", "node:update", "lane:update"] as const) bus.on(name, (payload) => events.push({ name, payload }));
   bus.on("attention", (a) => attention.push(a));
   const store = new Store(openDatabase(":memory:"));
-  const graphs = new GraphStore(t.dir, bus);
+  const repoId = "repo-0123abcd";
+  const graphs = new GraphStore(t.dir, bus, repoId);
   const lanes = new FakeLanes(store, bus, path.join(t.dir, "wt"));
-  const ptys = { killAll: vi.fn(async () => {}) };
+  const ptys = { owner: repoId, killOwned: vi.fn(async () => {}) };
   const claude = { reopen: vi.fn(async () => ({ ptyId: "reopen-x", notice: null })), isSessionActive: vi.fn(() => false) };
   const makeEngine = (r: RunnerRegistry) =>
     new Engine({
       store,
       graphs,
       lanes: lanes as unknown as LaneManager,
-      ptys: ptys as unknown as PtyManager,
+      ptys: ptys as unknown as OwnedPtys,
       runners: r,
       claude: claude as unknown as ClaudeRunner,
       bus,
       paths: getPaths({ PG_HOME: path.join(t.dir, "pg-home") }),
-      repo: { path: t.dir, name: path.basename(t.dir) },
+      repo: { id: repoId, path: t.dir, name: path.basename(t.dir) },
       phase: opts.phase ?? 1,
       env: {},
       stopTimeoutMs: 500,

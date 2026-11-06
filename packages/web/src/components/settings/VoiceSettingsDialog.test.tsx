@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 import type { AppSettings } from "@promptgraph/shared";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { voiceStatusOf } from "../../test-fixtures";
-import { useAppStore } from "../../store/app-store";
+import { useDaemonStore } from "../../store/daemon-store";
 import { resetVoiceStore, setVoiceDeps } from "../../store/voice-store";
-import { useUiStore } from "../../store/ui-store";
+import { createTestView, type TestView } from "../../store/view/test-view";
 import { SettingsMenu } from "./SettingsMenu";
 import { VoiceSettingsDialog, draftToVoiceSettings } from "./VoiceSettingsDialog";
 
 describe("voice settings", () => {
-  const originalUpdate = useAppStore.getState().updateSettings;
+  const originalUpdate = useDaemonStore.getState().updateSettings;
+  let view: TestView;
   const updateSettings = vi.fn(async (_patch: Partial<AppSettings>) => undefined);
   const getStatus = vi.fn(async () => voiceStatusOf({ mode: "tap", defaultsFrom: { mode: "claude", language: "fallback", autoSubmit: "fallback" } }));
 
@@ -20,17 +21,17 @@ describe("voice settings", () => {
     updateSettings.mockClear();
     getStatus.mockClear();
     setVoiceDeps({ getStatus });
-    useAppStore.setState({ settings: { notifications: true }, repo: null, updateSettings });
+    useDaemonStore.setState({ settings: { notifications: true }, updateSettings });
+    view = createTestView();
   });
   afterEach(() => {
     cleanup();
-    useAppStore.setState({ settings: null, updateSettings: originalUpdate });
-    useUiStore.getState().setSettingsOpen(false);
+    useDaemonStore.setState({ settings: null, updateSettings: originalUpdate });
   });
 
   it("opens from the settings menu and shows the detected status and the defaults' source", async () => {
     const user = userEvent.setup();
-    render(<SettingsMenu />);
+    view.render(<SettingsMenu />);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(await screen.findByRole("menuitem", { name: /Voice dictation/ }));
     const dialog = await screen.findByRole("dialog", { name: "Voice dictation" });
@@ -43,8 +44,8 @@ describe("voice settings", () => {
   it("saves the voice object as a whole and rechecks the status", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    useAppStore.setState({ settings: { notifications: true, voice: { language: "es" } } });
-    render(<VoiceSettingsDialog onClose={onClose} />);
+    useDaemonStore.setState({ settings: { notifications: true, voice: { language: "es" } } });
+    view.render(<VoiceSettingsDialog onClose={onClose} />);
     await user.type(screen.getByRole("textbox", { name: /whisper-cli binary/ }), "/opt/whisper/whisper-cli");
     await user.selectOptions(screen.getByRole("combobox", { name: /Mode/ }), "hold");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -55,7 +56,7 @@ describe("voice settings", () => {
 
   it("rejects relative paths", async () => {
     const user = userEvent.setup();
-    render(<VoiceSettingsDialog onClose={() => {}} />);
+    view.render(<VoiceSettingsDialog onClose={() => {}} />);
     await user.type(screen.getByRole("textbox", { name: /Model/ }), "~/models/ggml-small.bin");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/model: Expected an absolute path/);

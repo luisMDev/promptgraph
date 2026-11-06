@@ -58,9 +58,9 @@ export const MCP_TOOL_GROUPS: readonly McpToolGroup[] = [
   {
     title: "Server",
     tools: [
-      { name: "server_status", summary: "Whether a server runs for the repository, with its repo info." },
-      { name: "start_server", summary: "Starts promptgraph in the background (no browser)." },
-      { name: "open_ui", summary: "Opens this canvas in the browser, already signed in." },
+      { name: "server_status", summary: "Whether the daemon runs (pid, version, port) and this repository is registered, with its counters." },
+      { name: "start_server", summary: "Starts the daemon if needed (it keeps running; promptgraph stop stops it) and registers the repository." },
+      { name: "open_ui", summary: "Opens this repository in the browser, already signed in." },
     ],
   },
   {
@@ -104,7 +104,7 @@ export const MCP_TOOL_GROUPS: readonly McpToolGroup[] = [
 /** Every tool name in MCP_TOOL_GROUPS (the registered tools must match this list exactly). */
 export const MCP_TOOL_NAMES: readonly string[] = MCP_TOOL_GROUPS.flatMap((g) => g.tools.map((t) => t.name));
 
-/** GET /api/claude-setup: everything the setup wizard needs, computed from the running server. */
+/** GET /api/repos/:repoId/claude-setup: everything the setup wizard needs, computed from the running daemon. */
 export const ClaudeSetupResponseSchema = z.object({
   /** promptgraph's own version and the repository it serves. */
   version: z.string(),
@@ -114,8 +114,9 @@ export const ClaudeSetupResponseSchema = z.object({
   /** `claude mcp add` line that registers the MCP server alone (no skills). */
   mcpAddCommand: z.string(),
   plugin: z.object({
-    /** The plugin is bundled with this checkout (the marketplace file exists). */
+    /** The plugin can be added: from this checkout (the marketplace file exists) or, for a desktop runtime, from GitHub. */
     available: z.boolean(),
+    /** The checkout that bundles the plugin; null when it comes from GitHub or is unavailable. */
     marketplacePath: z.string().nullable(),
     addMarketplaceCommand: z.string().nullable(),
     installCommand: z.string(),
@@ -125,7 +126,7 @@ export const ClaudeSetupResponseSchema = z.object({
 });
 export type ClaudeSetupResponse = z.infer<typeof ClaudeSetupResponseSchema>;
 
-/** POST /api/claude-setup/check: runs `claude mcp list` on this machine. */
+/** POST /api/repos/:repoId/claude-setup/check: runs `claude mcp get promptgraph` in the repository (local and project scopes depend on the directory). */
 export const ClaudeCheckResponseSchema = z.object({
   /** The `claude` command ran. */
   claudeFound: z.boolean(),

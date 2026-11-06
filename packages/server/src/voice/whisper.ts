@@ -43,7 +43,7 @@ export interface WhisperRun {
 /** Runs one transcription pass. Injectable for tests (VoiceService `runner`). */
 export type WhisperRunner = (opts: WhisperPassOptions) => WhisperRun;
 
-/** `-m <model> -f <wav> -l <lang> -nt -np [-t <threads>] [--prompt <p>]` (§21.5). */
+/** `-m <model> -f <wav> -l <lang> -nt -np [-t <threads>] [--prompt <p>]` (§22.5). */
 export function whisperArgs(opts: Pick<WhisperPassOptions, "model" | "wavPath" | "language" | "threads" | "prompt">): string[] {
   const args = ["-m", opts.model, "-f", opts.wavPath, "-l", opts.language, "-nt", "-np"];
   if (opts.threads !== undefined) args.push("-t", String(opts.threads));

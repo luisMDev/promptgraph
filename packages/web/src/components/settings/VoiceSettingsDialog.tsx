@@ -10,7 +10,7 @@ import {
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "../../api/rest";
-import { useAppStore } from "../../store/app-store";
+import { useDaemonStore } from "../../store/daemon-store";
 import { useVoiceStore } from "../../store/voice-store";
 import { REASON_TEXT, SetupLines } from "../chat/Dictation";
 import { OptionalNumber, OptionalText, Select } from "../common/fields";
@@ -18,7 +18,7 @@ import { Icons } from "../common/icons";
 import { Button, Field, Modal } from "../common/ui";
 
 /**
- * "Voice dictation" settings (DESIGN §21.3): whisper binary and model paths, mode, language, auto-submit and
+ * "Voice dictation" settings (DESIGN §22.3): whisper binary and model paths, mode, language, auto-submit and
  * threads, saved as AppSettings.voice (PUT /api/settings replaces the object as a whole). Empty fields mean "use the
  * default" (promptgraph setting > Claude Code's ~/.claude/settings.json > built-in fallback), shown with its source.
  */
@@ -66,7 +66,7 @@ export function draftToVoiceSettings(d: Draft): VoiceSettings {
 }
 
 export function VoiceSettingsDialog({ onClose }: { onClose: () => void }) {
-  const saved = useAppStore((s) => s.settings?.voice);
+  const saved = useDaemonStore((s) => s.settings?.voice);
   const status = useVoiceStore((s) => s.status);
   const loading = useVoiceStore((s) => s.statusLoading);
   const [draft, setDraft] = useState<Draft>(() => toDraft(saved));
@@ -87,7 +87,7 @@ export function VoiceSettingsDialog({ onClose }: { onClose: () => void }) {
     setErrors([]);
     setSaving(true);
     try {
-      await useAppStore.getState().updateSettings({ voice: parsed.data });
+      await useDaemonStore.getState().updateSettings({ voice: parsed.data });
       await useVoiceStore.getState().loadStatus(true);
       onClose();
     } catch (err) {

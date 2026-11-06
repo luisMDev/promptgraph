@@ -1,30 +1,50 @@
 import { EventEmitter } from "node:events";
 import type { Lane, NodeRun, RunSummary, ServerMessageOf } from "@promptgraph/shared";
 
-/** Chat panel messages (§20.6), broadcast as-is by the WsHub. */
+/** Chat panel messages (§21.6), broadcast as-is by the WsHub. */
 export type ChatServerMessage = ServerMessageOf<"chat:item" | "chat:delta" | "chat:status" | "chat:session" | "chat:deleted">;
 
 /** Status that makes a node need the user (desktop notification, header counter). */
 export type AttentionKind = "waiting_input" | "waiting_approval" | "idle";
 
 /**
- * In-process events. Producers: engine (run/node/lane/attention), PtyManager (pty:*), GraphStore
- * (graphs:changed), ChatManager (chat). Consumers: WsHub (all but attention), Notifier (attention).
+ * In-process events. Producers: engine (run/node/lane/attention/repo:changed), PtyManager (pty:*),
+ * GraphStore (graphs:changed), ChatManager (chat), the repository registry and sessions (repo:*,
+ * session:revoked, token:rotated).
+ * Consumers: WsHub (all but attention), Notifier (attention).
  */
 export interface BusEvents {
   /** After every persisted change to a run or to the counters/usage derived from its node runs. */
-  "run:update": { run: RunSummary };
+  "run:update": { repoId: string; run: RunSummary };
   /** After every persisted change to a node run. */
   "node:update": { nodeRun: NodeRun };
   "lane:update": { lane: Lane };
   /** Raw PTY output chunk (already appended to the ring buffer). */
   "pty:data": { ptyId: string; data: Buffer };
   "pty:exit": { ptyId: string; code: number | null };
-  "graphs:changed": { graphId: string };
-  /** Chat panel (§20): every chat:* server message. */
+  "graphs:changed": { repoId: string; graphId: string };
+  /** Chat panel (§21): every chat:* server message (each carries its repoId). */
   chat: { message: ChatServerMessage };
   /** A node entered an attention status (emitted once per transition). */
-  attention: { kind: AttentionKind; nodeRun: NodeRun; nodeLabel: string; graphName: string; message: string | null };
+  attention: {
+    kind: AttentionKind;
+    nodeRun: NodeRun;
+    nodeLabel: string;
+    graphName: string;
+    message: string | null;
+    repo: { id: string; name: string };
+  };
+  /**
+   * A repository's Home counters or state may have changed: a run was created, a run or node run
+   * changed status, or it was added/activated/failed to activate. The hub debounces it into repo:status.
+   */
+  "repo:changed": { repoId: string };
+  /** A repository was removed from the registry. */
+  "repo:removed": { repoId: string };
+  /** Browser sessions were revoked (or every session, on token rotation): their sockets are closed. */
+  "session:revoked": { idHashes: string[] };
+  /** The token was rotated: every socket is closed (Bearer ones included), DESIGN §14. */
+  "token:rotated": Record<string, never>;
 }
 
 export type BusEventName = keyof BusEvents;

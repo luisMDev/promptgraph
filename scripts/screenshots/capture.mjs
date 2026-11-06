@@ -2,7 +2,7 @@
 // Regenerates the UI screenshots of docs/screenshots (dark theme) against a throwaway demo repository,
 // the fake claude CLI and the fake gh CLI. See README.md next to this file.
 //
-//   node scripts/screenshots/capture.mjs <out-dir> [--keep] [--scene add-feature,ship-feature,test-fix]
+//   node scripts/screenshots/capture.mjs <out-dir> [--keep] [--scene add-feature,ship-feature,test-fix,home]
 //   node scripts/screenshots/capture.mjs <out-dir> --real-claude   (m2-real-claude-replay.png, real Claude Code)
 //
 // Never touches the user's ~/.promptgraph, ~/.claude.json or real repositories: everything lives in a temp dir.
@@ -18,6 +18,7 @@ import {
   DEFAULT_CHROME,
   FAKE_CLAUDE,
   freePort,
+  git,
   loadPlaywright,
   removeCredentials,
   SERVER_CLI,
@@ -29,7 +30,7 @@ import {
 } from "./demo-env.mjs";
 
 const VIEWPORT = { width: 1600, height: 900 };
-const SCENES = ["add-feature", "ship-feature", "test-fix"];
+const SCENES = ["add-feature", "ship-feature", "test-fix", "home"];
 /** Opt-in scene (--real-claude): a real Claude Code session with haiku and minimal prompts. */
 const REAL_SCENE = "real-claude";
 
@@ -244,7 +245,7 @@ const GRAPHS = {
 
 // ---------------------------------------------------------------------------- scenes
 
-function makeScenes({ api, page, outDir }) {
+function makeScenes({ api, page, outDir, server, root, env }) {
   const shot = async (name) => {
     await sleep(400); // Let transitions (fitView, dialogs, toasts) settle.
     await page.screenshot({ path: path.join(outDir, name) });
@@ -260,18 +261,19 @@ function makeScenes({ api, page, outDir }) {
   const clickPane = async () => page.locator(".react-flow__pane").click({ position: { x: 40, y: 40 } });
 
   async function openGraph(id) {
-    await page.evaluate((g) => localStorage.setItem("pg_last_graph", g), id);
-    await page.reload();
+    // Every view has a URL (DESIGN §13.2); the session cookie from the login keeps the page signed in.
+    await page.goto(`${server.base}/r/${encodeURIComponent(server.repoId)}/graphs/${encodeURIComponent(id)}`);
     await page.getByRole("tab", { name: "Nodes" }).click();
     await blur();
     await node(GRAPHS[id].nodes[0].id).waitFor();
-    await page.getByText("Saved").or(page.getByText("No problems found.")).first().waitFor();
+    // Validation has run: either no problems, or the problems button ("1 warning", "2 errors").
+    await page.getByText("No problems found.").or(page.getByRole("button", { name: /^\d+ (warning|error)/ })).first().waitFor();
   }
 
   async function startRun(graphId) {
     await page.getByRole("button", { name: "Run", exact: true }).click();
     const { runs } = await until("the run to start", async () => {
-      const r = await api("GET", `/api/runs?graph=${graphId}&limit=1`);
+      const r = await api("GET", `/runs?graph=${graphId}&limit=1`);
       return r.runs.length && r.runs[0].status !== "succeeded" ? r : null;
     });
     return runs[0].id;
@@ -280,14 +282,14 @@ function makeScenes({ api, page, outDir }) {
   async function waitNode(runId, nodeId, statuses, iteration) {
     const want = [statuses].flat();
     return until(`${nodeId} to be ${want.join("|")}`, async () => {
-      const nr = currentNodeRun(await api("GET", `/api/runs/${runId}`), nodeId, iteration);
+      const nr = currentNodeRun(await api("GET", `/runs/${runId}`), nodeId, iteration);
       return nr && want.includes(nr.status) ? nr : null;
     });
   }
 
   async function waitRun(runId, status = "succeeded") {
     return until(`run ${runId} to be ${status}`, async () => {
-      const d = await api("GET", `/api/runs/${runId}`);
+      const d = await api("GET", `/runs/${runId}`);
       if (["failed", "cancelled"].includes(d.run.status) && status !== d.run.status) throw new Error(`Run ${runId} ${d.run.status}: ${d.run.error}`);
       return d.run.status === status ? d : null;
     }, 120_000);
@@ -297,14 +299,14 @@ function makeScenes({ api, page, outDir }) {
   const cardShows = (id, text) => node(id).getByText(text, { exact: true }).first().waitFor({ timeout: WAIT_MS });
 
   async function openRunFromHistory(runId) {
-    const { run } = await api("GET", `/api/runs/${runId}`);
+    const { run } = await api("GET", `/runs/${runId}`);
     // A run that finishes while shown opens its report: close it to get the canvas back.
-    const closeReport = page.getByRole("button", { name: "Close report" });
+    const closeReport = page.getByRole("link", { name: "Close report" });
     await closeReport.waitFor({ timeout: 3000 }).catch(() => {});
     if (await closeReport.isVisible()) await closeReport.click();
     await page.getByRole("tab", { name: /^Runs/ }).click();
-    await page.getByRole("button", { name: new RegExp(`^Open run #${run.shortId}`) }).click();
-    await page.getByRole("button", { name: "Back to editor" }).waitFor();
+    await page.getByRole("link", { name: new RegExp(`^Open run #${run.shortId}`) }).click();
+    await page.getByRole("link", { name: "Back to editor" }).waitFor();
     return run;
   }
 
@@ -408,11 +410,11 @@ function makeScenes({ api, page, outDir }) {
       await page.getByText("acme/demo-app#42").first().waitFor();
       await shot("m4-history.png");
 
-      await page.getByRole("button", { name: "Report", exact: true }).first().click();
+      await page.getByRole("link", { name: "Report", exact: true }).first().click();
       await page.getByText("Run report").waitFor();
       await page.getByText("Lanes", { exact: true }).waitFor();
       await shot("run-report.png");
-      await page.getByRole("button", { name: "Close report" }).click();
+      await page.getByRole("link", { name: "Close report" }).click();
 
       await page.getByRole("button", { name: /Clean up/ }).click();
       await page.getByText("Worktrees cleaned up.").waitFor();
@@ -440,8 +442,10 @@ function makeScenes({ api, page, outDir }) {
       await shot("m6-run-finished.png");
 
       await clickNode("test");
-      await page.getByRole("tablist", { name: "Loop iterations" }).waitFor();
-      await page.getByRole("tab", { name: "#1" }).click();
+      const iterations = page.getByRole("tablist", { name: "Loop iterations" });
+      await iterations.waitFor();
+      // Scoped: the app's tab strip has tabs too ("<graph> #<shortId>").
+      await iterations.getByRole("tab", { name: "#1" }).click();
       await page.getByText("Previous iteration: read-only.").waitFor();
       await page.getByText(/Run tests #1/).first().waitFor();
       await shot("m6-iteration-selector.png");
@@ -449,6 +453,23 @@ function makeScenes({ api, page, outDir }) {
       await clickNode("green");
       await page.getByText("Exit code 0 equals 0.").first().waitFor();
       await shot("m6-condition-result.png");
+    },
+
+    async home() {
+      // A second repository, so Home lists more than one (registered like `promptgraph <dir>` does).
+      const other = path.join(root, "docs-site");
+      fs.mkdirSync(other);
+      git(other, env, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(other, "README.md"), "# docs-site\n");
+      git(other, env, "add", "-A");
+      git(other, env, "commit", "-qm", "Initial commit");
+      await api("POST", "/api/repos", { path: other });
+      // Opening "/" activates the window's Home tab (or opens one); the earlier scenes' tabs stay in the strip.
+      await page.goto(`${server.base}/`);
+      await page.getByRole("heading", { name: "Repositories" }).waitFor();
+      await page.getByRole("listitem", { name: "demo-app" }).waitFor();
+      await page.getByRole("listitem", { name: "docs-site" }).waitFor();
+      await shot("home.png");
     },
   };
 }
@@ -485,17 +506,17 @@ async function main() {
     const api = apiClient(server);
     // No desktop notifications from the demo runs.
     await api("PUT", "/api/settings", { ...(await api("GET", "/api/settings")), notifications: false });
-    for (const id of opts.scenes) await api("PUT", `/api/graphs/${id}`, GRAPHS[id]);
+    for (const id of opts.scenes) if (GRAPHS[id]) await api("PUT", `/graphs/${id}`, GRAPHS[id]);
 
     browser = await chromium.launch({ executablePath: chrome, headless: true });
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: "dark" });
     await context.addInitScript(() => localStorage.setItem("pg-theme", "dark"));
     const page = await context.newPage();
     page.on("pageerror", (e) => log("page error:", e.message));
-    await page.goto(server.url);
+    await page.goto(await server.loginUrl());
     await page.getByRole("button", { name: "Settings" }).waitFor();
 
-    const scenes = makeScenes({ api, page, outDir });
+    const scenes = makeScenes({ api, page, outDir, server, root, env });
     for (const id of opts.scenes) {
       log("scene", id);
       await scenes[id]();

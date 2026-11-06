@@ -1,4 +1,4 @@
-// AudioWorklet processor of voice dictation (DESIGN §21). Plain JavaScript on purpose: it is loaded with
+// AudioWorklet processor of voice dictation (DESIGN §22). Plain JavaScript on purpose: it is loaded with
 // `audioWorklet.addModule(new URL("./pcm-capture.worklet.js", import.meta.url))`, which Vite emits as a static
 // asset (it is not transpiled). It only mixes the input to mono and posts Float32 blocks of ~50 ms at the context's
 // sample rate; resampling to 16 kHz Int16, chunking and the level meter happen on the main thread (pcm.ts, tested).

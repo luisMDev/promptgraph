@@ -1,63 +1,39 @@
-import path from "node:path";
-import {
-  UpdateAppSettingsRequestSchema,
-  type AppSettings,
-  type ListCommandsResponse,
-  type RepoInfoResponse,
-  type UpdateAppSettingsRequest,
-} from "@promptgraph/shared";
-import type { Hono } from "hono";
-import type { AppContext } from "../../app/context.js";
-import { SUPPORTED_PHASE, VERSION } from "../../config/version.js";
+import { UpdateAppSettingsRequestSchema, type AppSettings, type ListCommandsResponse, type UpdateAppSettingsRequest } from "@promptgraph/shared";
 import { listSlashCommands } from "../../commands/discover.js";
-import { currentBranch, listBranches } from "../../git/repo.js";
+import type { DaemonContext } from "../../daemon/context.js";
+import { buildClaudeSetup, checkClaudeSetup, cliCommandFor, currentCliEntry, pluginMarketplace } from "../../mcp/setup.js";
 import { readJson } from "../errors.js";
-import { buildClaudeSetup, bundledMarketplaceRoot, checkClaudeSetup, currentCliEntry } from "../../mcp/setup.js";
+import { REPO_PREFIX, repoOf, type App } from "../repo-scope.js";
 
-/** GET /api/repo · GET/PUT /api/settings · GET /api/commands · GET /api/claude-setup · POST /api/claude-setup/check */
-export function registerMiscRoutes(app: Hono, ctx: AppContext): void {
-  app.get("/api/repo", async (c) => {
-    const [branch, branches, notifyPlatform] = await Promise.all([
-      currentBranch(ctx.repo.path),
-      listBranches(ctx.repo.path),
-      ctx.notifier.detectPlatform(),
-    ]);
-    return c.json<RepoInfoResponse>({
-      path: ctx.repo.path,
-      name: ctx.repo.name || path.basename(ctx.repo.path),
-      currentBranch: branch,
-      branches,
-      version: VERSION,
-      phase: SUPPORTED_PHASE,
-      warnings: ctx.warnings,
-      supportedNodeTypes: ctx.engine.supportedNodeTypes(),
-      notificationsAvailable: notifyPlatform !== "none",
-    });
-  });
+const P = REPO_PREFIX;
 
-  app.get("/api/settings", (c) => c.json<AppSettings>(ctx.settings.get()));
+/** GET/PUT /api/settings (global to the daemon). */
+export function registerSettingsRoutes(app: App, daemon: DaemonContext): void {
+  app.get("/api/settings", (c) => c.json<AppSettings>(daemon.settings.get()));
   app.put("/api/settings", async (c) => {
     // Validate, but pass the raw patch on: parsing fills defaults for keys the client did not send.
     const raw = await readJson(c);
     UpdateAppSettingsRequestSchema.parse(raw);
-    return c.json<AppSettings>(ctx.settings.update(raw as UpdateAppSettingsRequest));
+    return c.json<AppSettings>(daemon.settings.update(raw as UpdateAppSettingsRequest));
   });
+}
+
+/** Under /api/repos/:repoId: GET …/commands · GET …/claude-setup · POST …/claude-setup/check */
+export function registerRepoMiscRoutes(app: App, daemon: DaemonContext): void {
+  app.get(`${P}/commands`, async (c) =>
+    c.json<ListCommandsResponse>({ commands: await listSlashCommands(repoOf(c).repo.path, daemon.env) }),
+  );
 
   /** Claude Code setup guide for the web wizard (DESIGN §19.5). */
-  app.get("/api/claude-setup", (c) =>
+  app.get(`${P}/claude-setup`, (c) =>
     c.json(
       buildClaudeSetup({
-        repoPath: ctx.repo.path,
-        cliEntry: currentCliEntry(),
-        nodePath: process.execPath,
-        marketplaceRoot: bundledMarketplaceRoot(),
+        repoPath: repoOf(c).repo.path,
+        cliCommand: cliCommandFor({ nodePath: process.execPath, cliEntry: currentCliEntry() }),
+        marketplace: pluginMarketplace(),
       }),
     ),
   );
-  /** Runs `claude mcp list` on this machine to see whether promptgraph is registered. */
-  app.post("/api/claude-setup/check", async (c) => c.json(await checkClaudeSetup(ctx.env)));
-
-  app.get("/api/commands", async (c) =>
-    c.json<ListCommandsResponse>({ commands: await listSlashCommands(ctx.repo.path, ctx.env) }),
-  );
+  /** Runs `claude mcp get` in the repository: local and project scopes depend on the directory. */
+  app.post(`${P}/claude-setup/check`, async (c) => c.json(await checkClaudeSetup({ env: daemon.env, cwd: repoOf(c).repo.path })));
 }

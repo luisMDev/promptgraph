@@ -1,45 +1,47 @@
+import { webRoutes } from "@promptgraph/shared";
 import type { ReactNode } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useEditorStore } from "../../store/editor-store";
-import { useRunStore } from "../../store/run-store";
+import { useEditor, useRun, useView } from "../../store/view/context";
 import { Icons } from "./icons";
-import { Button } from "./ui";
+import { Button, ButtonLink } from "./ui";
 
 /** Contextual banners under the header: modified-outside warning (§14), disk conflicts, read-only states. */
 export function Banners() {
-  const modifiedOutside = useEditorStore((s) => s.modifiedOutside);
-  const externalChange = useEditorStore((s) => s.externalChange);
-  const canUndoExternal = useEditorStore((s) => s.externalUndo !== null && s.externalUndo.graphId === s.graph?.id && s.activeRunId === null);
-  const saving = useEditorStore((s) => s.saving);
-  const activeRunId = useEditorStore((s) => s.activeRunId);
-  const hasGraph = useEditorStore((s) => s.graph !== null);
-  const selectedRunId = useRunStore((s) => s.selectedRunId);
-  const run = useRunStore((s) => s.detail?.run);
+  const view = useView();
+  const modifiedOutside = useEditor((s) => s.modifiedOutside);
+  const externalChange = useEditor((s) => s.externalChange);
+  const canUndoExternal = useEditor((s) => s.externalUndo !== null && s.activeRunId === null);
+  const saving = useEditor((s) => s.saving);
+  const activeRunId = useEditor((s) => s.activeRunId);
+  const hasGraph = useEditor((s) => s.graph !== null);
+  const selectedRunId = useRun((s) => s.selectedRunId);
+  const run = useRun((s) => s.detail?.run);
   const runMode = selectedRunId !== null;
+  const editor = view.editor.getState();
 
   return (
     <>
       {hasGraph && modifiedOutside && (
-        <Banner tone="warning" onDismiss={() => useEditorStore.getState().dismissModifiedOutside()}>
+        <Banner tone="warning" onDismiss={() => editor.dismissModifiedOutside()}>
           This graph file was modified outside promptgraph since its last run. Review it — especially shell commands — before running.
         </Banner>
       )}
       {externalChange && (
         <Banner tone="warning">
           The graph file changed on disk while you have unsaved edits.
-          <Button size="sm" className="ml-3" onClick={() => void useEditorStore.getState().reloadFromDisk()}>
+          <Button size="sm" className="ml-3" onClick={() => void editor.reloadFromDisk()}>
             Reload from disk
           </Button>
-          <Button size="sm" variant="ghost" className="ml-1" onClick={() => useEditorStore.getState().keepLocalChanges()}>
+          <Button size="sm" variant="ghost" className="ml-1" onClick={() => editor.keepLocalChanges()}>
             Keep my edits
           </Button>
         </Banner>
       )}
       {!runMode && canUndoExternal && (
-        <Banner tone="info" onDismiss={() => useEditorStore.getState().dismissExternalUndo()}>
+        <Banner tone="info" onDismiss={() => view.editor.getState().dismissExternalUndo()}>
           Graph updated outside the editor.
-          <Button size="sm" className="ml-3" disabled={saving} onClick={() => void useEditorStore.getState().undoExternalChange()}>
+          <Button size="sm" className="ml-3" disabled={saving} onClick={() => void view.editor.getState().undoExternalChange()}>
             Undo
           </Button>
         </Banner>
@@ -47,17 +49,17 @@ export function Banners() {
       {!runMode && activeRunId && (
         <Banner tone="info">
           A run of this graph is active, so the graph is read-only.
-          <Button size="sm" className="ml-3" onClick={() => void useRunStore.getState().selectRun(activeRunId)}>
+          <ButtonLink size="sm" className="ml-3" to={webRoutes.run(view.repoId, activeRunId)}>
             View live run
-          </Button>
+          </ButtonLink>
         </Banner>
       )}
       {runMode && run && run.id !== activeRunId && (
         <Banner tone="info">
           Viewing run #{run.shortId} (read-only snapshot of the graph at run start).
-          <Button size="sm" className="ml-3" onClick={() => void useRunStore.getState().selectRun(null)}>
+          <ButtonLink size="sm" className="ml-3" to={webRoutes.graph(view.repoId, run.graphId)}>
             Back to editor
-          </Button>
+          </ButtonLink>
         </Banner>
       )}
     </>

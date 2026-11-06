@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyGraph, GraphSchema } from "@promptgraph/shared";
 import { graphsDir } from "../src/config/paths.js";
 import { EventBus } from "../src/events/bus.js";
@@ -15,9 +16,13 @@ function setup() {
   cleanups.push(t.cleanup);
   const bus = new EventBus();
   const changed: string[] = [];
-  bus.on("graphs:changed", (e) => changed.push(e.graphId));
-  const store = new GraphStore(t.dir, bus);
-  return { repo: t.dir, dir: graphsDir(t.dir), store, changed };
+  const repoIds = new Set<string>();
+  bus.on("graphs:changed", (e) => {
+    changed.push(e.graphId);
+    repoIds.add(e.repoId);
+  });
+  const store = new GraphStore(t.dir, bus, "repo-0123abcd");
+  return { repo: t.dir, dir: graphsDir(t.dir), store, changed, repoIds };
 }
 
 const sample = () =>
@@ -131,10 +136,58 @@ describe("GraphStore", () => {
     store.delete("demo");
   });
 
+  it("an emitted watcher 'error' does not throw: the watcher stops and reports it", () => {
+    const { store } = setup();
+    const fake = Object.assign(new EventEmitter(), { close: vi.fn() });
+    const spy = vi.spyOn(fs, "watch").mockReturnValue(fake as unknown as fs.FSWatcher);
+    cleanups.push(() => spy.mockRestore());
+    const errors: Error[] = [];
+    const watch = store.watch({ onError: (e) => errors.push(e) });
+    expect(watch.error).toBeNull();
+    const err = Object.assign(new Error("watch failed"), { code: "EIO" });
+    expect(() => fake.emit("error", err)).not.toThrow();
+    expect(watch.error).toBe(err);
+    expect(fake.close).toHaveBeenCalledTimes(1);
+    expect(errors).toEqual([err]);
+    // A second error event is ignored (already stopped); stop() stays safe.
+    expect(() => fake.emit("error", new Error("again"))).not.toThrow();
+    expect(errors).toHaveLength(1);
+    watch.stop();
+  });
+
+  it("an inotify limit at watch() start is returned as an error state instead of thrown", () => {
+    const { store } = setup();
+    const err = Object.assign(new Error("ENOSPC: System limit for number of file watchers reached"), { code: "ENOSPC" });
+    const spy = vi.spyOn(fs, "watch").mockImplementation(() => {
+      throw err;
+    });
+    cleanups.push(() => spy.mockRestore());
+    const errors: Error[] = [];
+    const watch = store.watch({ onError: (e) => errors.push(e) });
+    expect(watch.error).toBe(err);
+    expect(errors).toEqual([err]);
+    expect(() => watch.stop()).not.toThrow();
+    // Saving still works without a watcher.
+    expect(store.save(sample()).graph.id).toBe("demo");
+    // Other failures are not swallowed.
+    spy.mockImplementation(() => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    });
+    expect(() => store.watch({ onError: () => undefined })).toThrow("EACCES");
+  });
+
+  it("graphs:changed carries the repository id", () => {
+    const { store, repoIds } = setup();
+    store.save(sample());
+    store.delete("demo");
+    expect([...repoIds]).toEqual(["repo-0123abcd"]);
+  });
+
   it("watch() reports external changes but not its own writes", async () => {
     const { store, dir, changed } = setup();
-    const stop = store.watch();
-    cleanups.push(stop);
+    const watch = store.watch();
+    cleanups.push(() => watch.stop());
+    expect(watch.error).toBeNull();
     store.save(sample());
     await new Promise((r) => setTimeout(r, 250));
     expect(changed).toEqual(["demo"]);

@@ -4,12 +4,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "assets"
+  ],
   "bin": {
     "promptgraph": "./dist/cli/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli/index.js",
-    "dev": "tsx watch --conditions=source src/cli/index.ts",
+    "dev": "tsx watch --conditions=source src/cli/index.ts daemon",
     "start": "node dist/cli/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --root ../.. --passWithNoTests packages/server/"

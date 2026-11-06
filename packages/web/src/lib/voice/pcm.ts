@@ -1,7 +1,7 @@
 import { VOICE_BYTES_PER_SAMPLE, VOICE_CHUNK_MS, VOICE_SAMPLE_RATE } from "@promptgraph/shared";
 
 /**
- * Pure audio helpers of voice dictation (DESIGN §21): resampling the microphone to 16 kHz, Float32 → Int16 and the
+ * Pure audio helpers of voice dictation (DESIGN §22): resampling the microphone to 16 kHz, Float32 → Int16 and the
  * little-endian byte layout of the binary WS frames, ~100 ms chunking and the RMS level used by the meter and the
  * silence detection. No DOM or Web Audio here, so they are unit-tested directly.
  */

@@ -1,11 +1,20 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { ClientMessageSchema, type ClientMessage, type ClientMessageOf, type ServerMessage } from "@promptgraph/shared";
+import {
+  ClientMessageSchema,
+  SESSION_COOKIE,
+  WS_CLOSE_SIGNED_OUT,
+  type ClientMessage,
+  type ClientMessageOf,
+  type ServerMessage,
+} from "@promptgraph/shared";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { AppContext } from "../app/context.js";
 import { ChatError } from "../chat/chat-manager.js";
+import type { DaemonContext } from "../daemon/context.js";
 import { VERSION } from "../config/version.js";
-import { isAuthorized, isLocalRequest } from "../http/auth.js";
+import { isLocalRequest } from "../http/auth.js";
+import { authenticate, cookieValue, type Credential } from "../http/credentials.js";
+import { isCrossSiteCookieRequest } from "../http/fetch-metadata.js";
 import { errorMessage } from "../util/text.js";
 import type { VoiceSession } from "../voice/voice-session.js";
 
@@ -17,52 +26,81 @@ export const REPLAY_CHUNK_BYTES = 64 * 1024;
  */
 export const MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 const HEARTBEAT_MS = 30_000;
+/** repo:changed bursts (one per node transition) are coalesced into one repo:status per repository. */
+export const REPO_STATUS_DEBOUNCE_MS = 250;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+/** A signed-out peer that does not finish the closing handshake within this is terminated. */
+export const SIGN_OUT_TERMINATE_MS = 1000;
 
 interface Client {
   ws: WebSocket;
+  /** Repositories subscribed with repo:subscribe (the daemon scopes run:update / graphs:changed by them). */
+  repos: Set<string>;
   runs: Set<string>;
   ptys: Set<string>;
   alive: boolean;
-  /** Active voice recording (§21): binary frames go here. At most one per client. */
+  /** SHA-256 of the session cookie it connected with; null for a Bearer client. */
+  sessionHash: string | null;
+  /** Active voice recording (§22): binary frames go here. At most one per client. */
   voice: VoiceSession | null;
+  /** Tail of this client's chat messages: each waits for the previous one, so their order is kept. */
+  chat: Promise<void>;
 }
 
 /**
- * WebSocket hub on /ws (§12.2, protocol in shared/ws.ts). Upgrade requires localhost Host/Origin and
- * isAuthorized(). On connect sends `hello`. Bus → clients: run:update and graphs:changed to all;
- * node:update/lane:update to subscribers of the run; pty:data (base64) / pty:exit to attached clients.
- * Client messages are validated with ClientMessageSchema; pty:attach replies pty:attached + replay;
- * pty:input → PtyManager.userInput (live only, else pty:error). Chat (§20): bus `chat` messages are
- * broadcast to all; chat:send / chat:interrupt / chat:permission go to the ChatManager (failures → error).
- * Voice (§21): voice:start opens the client's single recording (cancelling a previous one), binary frames
- * (PCM) are routed to it — ignored when there is none — and voice:stop/cancel end it; closing the socket
- * cancels it. voice:* replies go only to that client. Binary frames are accepted for nothing else.
+ * WebSocket hub on /ws (DESIGN §12.2, protocol in shared/ws.ts), one per daemon. Upgrade requires
+ * localhost Host/Origin and the Bearer token or a live session cookie (with the Fetch Metadata rule of
+ * HTTP; the URL carries no credential). On connect sends `hello`. `session:revoked` closes the sockets
+ * of those sessions and `token:rotated` every socket, with 4401 (WS_CLOSE_SIGNED_OUT).
+ * Bus → clients: run:update, graphs:changed and chat:* (§21) to clients subscribed to their repository
+ * (`repo:subscribe`, which also activates it); repo:changed debounced per repository into repo:status
+ * (RepoSummary) to every client; repo:removed to every client; node:update/lane:update to subscribers
+ * of the run; pty:data (base64) / pty:exit to attached clients. Client messages are validated with
+ * ClientMessageSchema; pty:attach replies pty:attached + replay; pty:input → PtyManager.userInput (live
+ * only, else pty:error). chat:send / chat:interrupt / chat:permission activate their repository and go
+ * to its ChatManager (failures → error).
+ * Voice (§22, daemon-wide): voice:start opens the client's single recording (cancelling a previous one),
+ * binary frames (PCM) are routed to it — ignored when there is none — and voice:stop/cancel end it;
+ * closing the socket cancels it. voice:* replies go only to that client. Binary frames are accepted for
+ * nothing else.
  */
 export class WsHub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   private readonly clients = new Set<Client>();
   private readonly unsubscribe: Array<() => void> = [];
   private heartbeat: NodeJS.Timeout | null = null;
+  private readonly statusTimers = new Map<string, NodeJS.Timeout>();
   private server: Server | null = null;
   private readonly onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => this.upgrade(req, socket, head);
 
-  constructor(private readonly ctx: AppContext) {}
+  constructor(private readonly ctx: DaemonContext) {}
 
   attach(server: Server): void {
     this.server = server;
     server.on("upgrade", this.onUpgrade);
     const { bus } = this.ctx;
     this.unsubscribe.push(
-      bus.on("run:update", ({ run }) => this.broadcast({ type: "run:update", run }, () => true)),
-      bus.on("graphs:changed", ({ graphId }) => this.broadcast({ type: "graphs:changed", graphId }, () => true)),
-      bus.on("chat", ({ message }) => this.broadcast(message, () => true)),
+      bus.on("run:update", ({ repoId, run }) => this.broadcast({ type: "run:update", repoId, run }, (c) => c.repos.has(repoId))),
+      bus.on("graphs:changed", ({ repoId, graphId }) => this.broadcast({ type: "graphs:changed", repoId, graphId }, (c) => c.repos.has(repoId))),
+      bus.on("chat", ({ message }) => this.broadcast(message, (c) => c.repos.has(message.repoId))),
+      bus.on("repo:changed", ({ repoId }) => this.scheduleStatus(repoId)),
+      bus.on("repo:removed", ({ repoId }) => {
+        clearTimeout(this.statusTimers.get(repoId));
+        this.statusTimers.delete(repoId);
+        for (const c of this.clients) c.repos.delete(repoId);
+        this.broadcast({ type: "repo:removed", repoId }, () => true);
+      }),
       bus.on("node:update", ({ nodeRun }) => this.broadcast({ type: "node:update", nodeRun }, (c) => c.runs.has(nodeRun.runId))),
       bus.on("lane:update", ({ lane }) => this.broadcast({ type: "lane:update", lane }, (c) => c.runs.has(lane.runId))),
       bus.on("pty:data", ({ ptyId, data }) =>
         this.broadcast({ type: "pty:data", ptyId, data: data.toString("base64") }, (c) => c.ptys.has(ptyId)),
       ),
       bus.on("pty:exit", ({ ptyId, code }) => this.broadcast({ type: "pty:exit", ptyId, code }, (c) => c.ptys.has(ptyId))),
+      bus.on("session:revoked", ({ idHashes }) => {
+        const revoked = new Set(idHashes);
+        this.signOut((c) => c.sessionHash !== null && revoked.has(c.sessionHash));
+      }),
+      bus.on("token:rotated", () => this.signOut(() => true)),
     );
     this.heartbeat = setInterval(() => this.checkAlive(), HEARTBEAT_MS);
     this.heartbeat.unref();
@@ -74,6 +112,8 @@ export class WsHub {
     for (const off of this.unsubscribe.splice(0)) off();
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    for (const t of this.statusTimers.values()) clearTimeout(t);
+    this.statusTimers.clear();
     for (const c of this.clients) c.ws.terminate();
     this.clients.clear();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
@@ -83,12 +123,42 @@ export class WsHub {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     if (pathname !== "/ws") return void rejectUpgrade(socket, 404, "Not Found");
     if (!isLocalRequest(req.headers.host, req.headers.origin, this.ctx.port)) return void rejectUpgrade(socket, 403, "Forbidden");
-    if (!isAuthorized(this.ctx.token, req)) return void rejectUpgrade(socket, 401, "Unauthorized");
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.connect(ws));
+    const header = (name: string): string | undefined => {
+      const v = req.headers[name];
+      return Array.isArray(v) ? v[0] : v;
+    };
+    const authorization = header("authorization");
+    const cookie = header("cookie");
+    if (!authorization && cookieValue(cookie, SESSION_COOKIE) !== null && isCrossSiteCookieRequest(pathname, header)) {
+      return void rejectUpgrade(socket, 403, "Forbidden");
+    }
+    const credential = authenticate({ getToken: () => this.ctx.getToken(), sessions: this.ctx.sessions }, { authorization, cookie });
+    if (!credential) return void rejectUpgrade(socket, 401, "Unauthorized");
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.connect(ws, credential));
   }
 
-  private connect(ws: WebSocket): void {
-    const client: Client = { ws, runs: new Set(), ptys: new Set(), alive: true, voice: null };
+  /**
+   * Closes the matching sockets with 4401: their client stops reconnecting and shows "Signed out".
+   * The client is unregistered first, so `receive` ignores anything it sends while the closing
+   * handshake runs; a peer that never answers the close frame is terminated after a short grace
+   * period instead of holding the socket for the full `ws` close timeout. Its voice recording is cancelled.
+   */
+  private signOut(match: (c: Client) => boolean): void {
+    for (const c of [...this.clients]) {
+      if (!match(c)) continue;
+      this.clients.delete(c);
+      c.voice?.cancel();
+      c.voice = null;
+      c.ws.close(WS_CLOSE_SIGNED_OUT, "signed out");
+      const kill = setTimeout(() => c.ws.terminate(), SIGN_OUT_TERMINATE_MS);
+      kill.unref();
+      c.ws.once("close", () => clearTimeout(kill));
+    }
+  }
+
+  private connect(ws: WebSocket, credential: Credential): void {
+    const sessionHash = credential.kind === "session" ? credential.session.idHash : null;
+    const client: Client = { ws, repos: new Set(), runs: new Set(), ptys: new Set(), alive: true, sessionHash, voice: null, chat: Promise.resolve() };
     this.clients.add(client);
     ws.on("pong", () => (client.alive = true));
     ws.on("message", (raw, isBinary) => this.receive(client, raw, isBinary));
@@ -102,7 +172,10 @@ export class WsHub {
   }
 
   private receive(client: Client, raw: RawData, isBinary: boolean): void {
-    // Binary = voice audio for the active recording; without one it is ignored (§21.4).
+    // A signed-out (revoked, rotated) or closing socket must not act on the daemon: `ws` still emits
+    // 'message' while CLOSING.
+    if (!this.clients.has(client) || client.ws.readyState !== WebSocket.OPEN) return;
+    // Binary = voice audio for the active recording; without one it is ignored (§22.4).
     if (isBinary) return void client.voice?.pushAudio(rawToBuffer(raw));
     let data: unknown;
     try {
@@ -118,6 +191,16 @@ export class WsHub {
   private handle(client: Client, msg: ClientMessage): void {
     const { ptys } = this.ctx;
     switch (msg.type) {
+      case "repo:subscribe":
+        client.repos.add(msg.repoId);
+        // Activation failures are reported in the repository's status (repo:status), not here.
+        this.ctx.registry.activate(msg.repoId).catch((err: unknown) => {
+          if (client.repos.has(msg.repoId)) this.send(client, { type: "error", message: errorMessage(err) });
+        });
+        return;
+      case "repo:unsubscribe":
+        client.repos.delete(msg.repoId);
+        return;
       case "subscribe":
         client.runs.add(msg.runId);
         return;
@@ -156,7 +239,7 @@ export class WsHub {
     }
   }
 
-  /** A new voice:start silently cancels the client's previous recording (§21.4). */
+  /** A new voice:start silently cancels the client's previous recording (§22.4). */
   private startVoice(client: Client, msg: ClientMessageOf<"voice:start">): void {
     client.voice?.cancel();
     const session = this.ctx.voice.start({
@@ -171,17 +254,21 @@ export class WsHub {
     client.voice = session.ended ? null : session;
   }
 
+  /** Activates the message's repository (as repo:subscribe does) and hands it to that repository's ChatManager. */
   private handleChat(client: Client, msg: ClientMessageOf<"chat:send" | "chat:interrupt" | "chat:permission">): void {
-    const { chat } = this.ctx;
-    try {
-      if (msg.type === "chat:send") chat.send(msg.sessionId, msg.text, msg.context);
-      else if (msg.type === "chat:interrupt") chat.interrupt(msg.sessionId);
-      else chat.answerPermission(msg.sessionId, msg.requestId, msg.allow, msg.message);
-    } catch (err) {
-      if (!(err instanceof ChatError)) console.error(err);
-      this.send(client, { type: "error", message: errorMessage(err) });
-    }
+    client.chat = client.chat
+      .then(() => this.ctx.registry.activate(msg.repoId))
+      .then(({ chat }) => {
+        if (msg.type === "chat:send") chat.send(msg.sessionId, msg.text, msg.context);
+        else if (msg.type === "chat:interrupt") chat.interrupt(msg.sessionId);
+        else chat.answerPermission(msg.sessionId, msg.requestId, msg.allow, msg.message);
+      })
+      .catch((err: unknown) => {
+        if (!(err instanceof ChatError)) console.error(err);
+        if (this.clients.has(client)) this.send(client, { type: "error", message: errorMessage(err) });
+      });
   }
+
 
   /**
    * Synchronous on purpose: PtyManager.attach snapshots the ring buffer and the client joins the pty's
@@ -200,6 +287,17 @@ export class WsHub {
       const chunk = result.replay.subarray(off, off + REPLAY_CHUNK_BYTES);
       this.send(client, { type: "pty:data", ptyId, data: chunk.toString("base64") });
     }
+  }
+
+  private scheduleStatus(repoId: string): void {
+    if (this.statusTimers.has(repoId)) return;
+    const timer = setTimeout(() => {
+      this.statusTimers.delete(repoId);
+      const repo = this.ctx.registry.summary(repoId);
+      if (repo) this.broadcast({ type: "repo:status", repo }, () => true);
+    }, REPO_STATUS_DEBOUNCE_MS);
+    timer.unref();
+    this.statusTimers.set(repoId, timer);
   }
 
   private broadcast(msg: ServerMessage, to: (c: Client) => boolean): void {

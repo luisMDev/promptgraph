@@ -9,13 +9,15 @@ import type {
   CreateChatSessionRequest,
   ServerMessage,
 } from "@promptgraph/shared";
-import { create } from "zustand";
-import { api, errorMessage } from "../api/rest";
+import { useStore } from "zustand";
+import { createStore, type StoreApi } from "zustand/vanilla";
+import { errorMessage, repoApi } from "../api/rest";
 import { wsClient } from "../api/ws";
 
 /**
- * In-app Claude Code chat (DESIGN §20): session list, the items of the sessions opened in the panel, streamed text
- * and the pending permission prompts. Items come from GET /api/chat/sessions/:id and then from chat:* WS messages.
+ * In-app Claude Code chat (DESIGN §21), one store per repository (each repository has its own sessions): session
+ * list, the items of the sessions opened in the panel, streamed text and the pending permission prompts. Items come
+ * from GET /api/repos/:repoId/chat/sessions/:id and then from chat:* WS messages of that repository.
  */
 
 /** One session as shown in the panel. */
@@ -51,6 +53,7 @@ export interface ChatState {
 }
 
 export interface ChatStore extends ChatState {
+  repoId: string;
   loadSessions(): Promise<void>;
   /** Shows a session (fetching its detail once), or none. */
   selectSession(id: string | null): Promise<void>;
@@ -66,7 +69,7 @@ export interface ChatStore extends ChatState {
    * The shown view stays on screen meanwhile, so the conversation, its permission card and Stop do not disappear.
    */
   resync(): Promise<void>;
-  /** Routes a chat:* server message; other messages are ignored. */
+  /** Routes a chat:* server message of this repository; other messages are ignored. */
   applyServerMessage(msg: ServerMessage): void;
 }
 
@@ -79,37 +82,46 @@ export interface ChatDeps {
   send(msg: ClientMessage): boolean;
 }
 
-let deps: ChatDeps = {
-  listSessions: () => api.listChatSessions(),
-  createSession: (req) => api.createChatSession(req),
-  getSession: (id) => api.getChatSession(id),
-  deleteSession: (id) => api.deleteChatSession(id),
-  send: (msg) => {
-    if (!wsClient.isOpen()) return false;
-    wsClient.send(msg);
-    return true;
-  },
-};
-
-/** Test seam. */
-export function setChatDeps(d: Partial<ChatDeps>): void {
-  deps = { ...deps, ...d };
+/** The repository's REST routes and the page's socket. */
+export function repoChatDeps(repoId: string): ChatDeps {
+  const api = repoApi(repoId);
+  return {
+    listSessions: () => api.listChatSessions(),
+    createSession: (req) => api.createChatSession(req),
+    getSession: (id) => api.getChatSession(id),
+    deleteSession: (id) => api.deleteChatSession(id),
+    send: (msg) => {
+      if (!wsClient.isOpen()) return false;
+      wsClient.send(msg);
+      return true;
+    },
+  };
 }
 
-const LAST_SESSION_KEY = "pg_last_chat";
+let depsOverride: Partial<ChatDeps> = {};
 
-function rememberSession(id: string | null): void {
+/** Test seam: overrides the deps of the stores created from now on. */
+export function setChatDeps(d: Partial<ChatDeps>): void {
+  depsOverride = { ...depsOverride, ...d };
+}
+
+function lastSessionKey(repoId: string): string {
+  return `pg_last_chat:${repoId}`;
+}
+
+function rememberSession(repoId: string, id: string | null): void {
   try {
-    if (id) localStorage.setItem(LAST_SESSION_KEY, id);
-    else localStorage.removeItem(LAST_SESSION_KEY);
+    if (id) localStorage.setItem(lastSessionKey(repoId), id);
+    else localStorage.removeItem(lastSessionKey(repoId));
   } catch {
     // Per-browser convenience only.
   }
 }
 
-export function lastChatSessionId(): string | null {
+/** The session last shown in this repository's chat panel (per browser). */
+export function lastChatSessionId(repoId: string): string | null {
   try {
-    return localStorage.getItem(LAST_SESSION_KEY);
+    return localStorage.getItem(lastSessionKey(repoId));
   } catch {
     return null;
   }
@@ -220,7 +232,11 @@ export function mergeDetail(detail: ChatSessionDetail, live: ChatSessionView | u
   return view;
 }
 
-export const useChatStore = create<ChatStore>()((set, get) => {
+export type ChatStoreApi = StoreApi<ChatStore>;
+
+/** The chat store of one repository (not cached: use getChatStore). */
+export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDeps(repoId), ...depsOverride }): ChatStoreApi {
+  return createStore<ChatStore>()((set, get) => {
   function patchView(sessionId: string, fn: (v: ChatSessionView) => ChatSessionView): void {
     const views = get().views;
     const cur = views[sessionId];
@@ -252,6 +268,7 @@ export const useChatStore = create<ChatStore>()((set, get) => {
   }
 
   return {
+    repoId,
     sessions: [],
     sessionsLoaded: false,
     activeSessionId: null,
@@ -269,7 +286,7 @@ export const useChatStore = create<ChatStore>()((set, get) => {
 
     async selectSession(id) {
       set({ activeSessionId: id });
-      rememberSession(id);
+      rememberSession(repoId, id);
       if (!id) return;
       const view = get().views[id];
       if (!view || view.loadError) await fetchDetail(id);
@@ -284,7 +301,7 @@ export const useChatStore = create<ChatStore>()((set, get) => {
           activeSessionId: session.id,
           error: null,
         });
-        rememberSession(session.id);
+        rememberSession(repoId, session.id);
         return session.id;
       } catch (err) {
         set({ error: `Could not start a chat: ${errorMessage(err)}` });
@@ -303,18 +320,18 @@ export const useChatStore = create<ChatStore>()((set, get) => {
     },
 
     send(sessionId, text, context) {
-      const ok = deps.send({ type: "chat:send", sessionId, text, context });
+      const ok = deps.send({ type: "chat:send", repoId, sessionId, text, context });
       // Optimistic: the server confirms with chat:status (starting → thinking) right away.
       if (ok) patchView(sessionId, (v) => (v.status === "idle" || v.status === "exited" || v.status === "error" ? { ...v, status: "thinking", liveStatus: true } : v));
       return ok;
     },
 
     interrupt(sessionId) {
-      deps.send({ type: "chat:interrupt", sessionId });
+      deps.send({ type: "chat:interrupt", repoId, sessionId });
     },
 
     answerPermission(sessionId, requestId, allow, message) {
-      const ok = deps.send({ type: "chat:permission", sessionId, requestId, allow, ...(message ? { message } : {}) });
+      const ok = deps.send({ type: "chat:permission", repoId, sessionId, requestId, allow, ...(message ? { message } : {}) });
       // The card disappears at once (the next prompt, if any, shows); the server's permission_resolved item records the answer.
       if (ok) {
         patchView(sessionId, (v) => {
@@ -340,6 +357,7 @@ export const useChatStore = create<ChatStore>()((set, get) => {
     },
 
     applyServerMessage(msg) {
+      if (!("repoId" in msg) || msg.repoId !== repoId) return;
       switch (msg.type) {
         case "chat:item":
           patchView(msg.sessionId, (v) => applyItem(v, msg.item));
@@ -369,9 +387,47 @@ export const useChatStore = create<ChatStore>()((set, get) => {
     const sessions = s.sessions.filter((x) => x.id !== id);
     const activeSessionId = s.activeSessionId === id ? null : s.activeSessionId;
     set({ sessions, views, activeSessionId });
-    if (s.activeSessionId === id) rememberSession(null);
+    if (s.activeSessionId === id) rememberSession(repoId, null);
   }
-});
+  });
+}
+
+// --- One store per repository ---------------------------------------------------------------------------
+
+const stores = new Map<string, ChatStoreApi>();
+
+/** The chat store of a repository, created on first use. */
+export function getChatStore(repoId: string): ChatStoreApi {
+  let store = stores.get(repoId);
+  if (!store) {
+    store = createChatStore(repoId);
+    stores.set(repoId, store);
+  }
+  return store;
+}
+
+/** The store if something already created it. */
+export function peekChatStore(repoId: string): ChatStoreApi | undefined {
+  return stores.get(repoId);
+}
+
+/** `repo:removed`: forgets the repository's chat state. */
+export function dropChatStore(repoId: string): void {
+  stores.delete(repoId);
+}
+
+export function liveChatStores(): ChatStoreApi[] {
+  return [...stores.values()];
+}
+
+/** Tests: forgets every store. */
+export function clearChatStores(): void {
+  stores.clear();
+}
+
+export function useRepoChat<T>(repoId: string, selector: (s: ChatStore) => T): T {
+  return useStore(getChatStore(repoId), selector);
+}
 
 /** Total cost of a session in USD, formatted for the panel ("$0.042"). */
 export function formatCost(usd: number): string {

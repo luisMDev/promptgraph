@@ -4,7 +4,7 @@ import { PROMPTGRAPH_MCP_TOOL_PREFIXES } from "@promptgraph/shared";
 import { shellQuote } from "../mcp/setup.js";
 
 /**
- * How the chat's Claude Code process is started (DESIGN §20.2): the system prompt, the pre-allowed
+ * How the chat's Claude Code process is started (DESIGN §21.2): the system prompt, the pre-allowed
  * tools, how the promptgraph MCP server is connected and the argument list.
  */
 
@@ -157,7 +157,7 @@ export interface ChatArgsInput {
   systemPrompt?: string;
 }
 
-/** `claude` arguments for a chat process (DESIGN §20.2). Never bypassPermissions (invariant 5). */
+/** `claude` arguments for a chat process (DESIGN §21.2). Never bypassPermissions (invariant 5). */
 export function buildChatArgs(input: ChatArgsInput): string[] {
   const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
   args.push(input.resume ? "--resume" : "--session-id", input.sessionId);

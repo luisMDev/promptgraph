@@ -8,6 +8,7 @@ import {
   type GraphDefaults,
   type PermissionMode,
 } from "@promptgraph/shared";
+import { useId } from "react";
 import { LinesInput, OptionalNumber, OptionalText, Select } from "../common/fields";
 import { Field } from "../common/ui";
 
@@ -52,6 +53,7 @@ export function ClaudeOptions({
   onChange: (patch: Partial<ClaudeOptionsValue>) => void;
   disabled: boolean;
 }) {
+  const modelsListId = useId();
   return (
     <div className="space-y-3">
       <Field label="Context">
@@ -61,7 +63,7 @@ export function ClaudeOptions({
         <Field label="Model">
           <OptionalText
             value={value.model}
-            list="pg-models"
+            list={modelsListId}
             placeholder={defaults.model ? `Default (${defaults.model})` : "Default"}
             disabled={disabled}
             onChange={(model) => onChange({ model })}
@@ -90,7 +92,7 @@ export function ClaudeOptions({
         />
       </Field>
       <CompletionEditor value={value.completion} inherited={defaults.completion} disabled={disabled} onChange={(completion) => onChange({ completion })} />
-      <datalist id="pg-models">
+      <datalist id={modelsListId}>
         {MODEL_SUGGESTIONS.map((m) => (
           <option key={m} value={m} />
         ))}

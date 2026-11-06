@@ -1,8 +1,11 @@
-import type { ChatItem, ChatSessionDetail, ClientMessage } from "@promptgraph/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatItem, ChatSessionDetail, ClientMessage, ServerMessage } from "@promptgraph/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatSessionOf } from "../test-fixtures";
-import { handleServerMessage } from "./app-actions";
-import { applyDelta, applyItem, emptyView, formatCost, mergeDetail, setChatDeps, useChatStore } from "./chat-store";
+import { applyDelta, applyItem, clearChatStores, createChatStore, emptyView, formatCost, getChatStore, mergeDetail, setChatDeps, type ChatDeps, type ChatStoreApi } from "./chat-store";
+import { createDispatcher } from "./dispatcher";
+
+const REPO = "repo-0123abcd";
+const OTHER = "other-89abcdef";
 
 const sessionOf = chatSessionOf;
 
@@ -112,6 +115,8 @@ describe("chat store", () => {
   const createSession = vi.fn(async () => sessionOf({ id: "new", updatedAt: 99 }));
   const deleteSession = vi.fn(async () => undefined);
   let connected = true;
+  let deps: ChatDeps;
+  let store: ChatStoreApi;
 
   beforeEach(() => {
     sent.length = 0;
@@ -119,7 +124,7 @@ describe("chat store", () => {
     getSession.mockClear();
     createSession.mockClear();
     deleteSession.mockClear();
-    setChatDeps({
+    deps = {
       listSessions: async () => ({ sessions: [sessionOf({ id: "old", updatedAt: 1 }), sessionOf({ id: "recent", updatedAt: 5 })] }),
       getSession,
       createSession,
@@ -128,142 +133,145 @@ describe("chat store", () => {
         if (connected) sent.push(msg);
         return connected;
       },
-    });
-    useChatStore.setState({ sessions: [], sessionsLoaded: false, activeSessionId: null, views: {}, error: null });
+    };
+    store = createChatStore(REPO, deps);
   });
 
+  /** A chat:* server message, as the dispatcher hands it to the repository's store. */
+  const handleServerMessage = (msg: ServerMessage) => store.getState().applyServerMessage(msg);
+
   it("lists sessions most recent first and loads a session's detail once", async () => {
-    await useChatStore.getState().loadSessions();
-    expect(useChatStore.getState().sessions.map((s) => s.id)).toEqual(["recent", "old"]);
-    await useChatStore.getState().selectSession("old");
-    await useChatStore.getState().selectSession("recent");
-    await useChatStore.getState().selectSession("old");
+    await store.getState().loadSessions();
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(["recent", "old"]);
+    await store.getState().selectSession("old");
+    await store.getState().selectSession("recent");
+    await store.getState().selectSession("old");
     expect(getSession).toHaveBeenCalledTimes(2);
-    expect(useChatStore.getState().views.old?.items).toHaveLength(1);
+    expect(store.getState().views.old?.items).toHaveLength(1);
   });
 
   it("creates a session, sends with the context and answers permissions on the socket", async () => {
-    const id = await useChatStore.getState().newSession();
+    const id = await store.getState().newSession();
     expect(id).toBe("new");
-    expect(useChatStore.getState().activeSessionId).toBe("new");
+    expect(store.getState().activeSessionId).toBe("new");
     const ctx = { graphId: "g1", selectedNodeIds: ["a"], selectedEdgeIds: [], runId: null, readOnly: false };
-    expect(useChatStore.getState().send("new", "hi", ctx)).toBe(true);
-    expect(useChatStore.getState().views.new?.status).toBe("thinking");
+    expect(store.getState().send("new", "hi", ctx)).toBe(true);
+    expect(store.getState().views.new?.status).toBe("thinking");
 
-    handleServerMessage({ type: "chat:item", sessionId: "new", item: permission });
-    handleServerMessage({ type: "chat:status", sessionId: "new", status: "waiting_permission" });
-    expect(useChatStore.getState().views.new?.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
-    useChatStore.getState().answerPermission("new", "r1", true);
-    useChatStore.getState().interrupt("new");
+    handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "new", item: permission });
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "new", status: "waiting_permission" });
+    expect(store.getState().views.new?.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
+    store.getState().answerPermission("new", "r1", true);
+    store.getState().interrupt("new");
     expect(sent).toEqual([
-      { type: "chat:send", sessionId: "new", text: "hi", context: ctx },
-      { type: "chat:permission", sessionId: "new", requestId: "r1", allow: true },
-      { type: "chat:interrupt", sessionId: "new" },
+      { type: "chat:send", repoId: REPO, sessionId: "new", text: "hi", context: ctx },
+      { type: "chat:permission", repoId: REPO, sessionId: "new", requestId: "r1", allow: true },
+      { type: "chat:interrupt", repoId: REPO, sessionId: "new" },
     ]);
-    expect(useChatStore.getState().views.new?.pendingPermissions).toEqual([]);
+    expect(store.getState().views.new?.pendingPermissions).toEqual([]);
   });
 
   it("reports a send while disconnected", async () => {
-    await useChatStore.getState().newSession();
+    await store.getState().newSession();
     connected = false;
-    expect(useChatStore.getState().send("new", "hi", { graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: null, readOnly: true })).toBe(false);
-    expect(useChatStore.getState().views.new?.status).toBe("idle");
+    expect(store.getState().send("new", "hi", { graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: null, readOnly: true })).toBe(false);
+    expect(store.getState().views.new?.status).toBe("idle");
   });
 
   it("routes chat:* WS messages: deltas, status, sessions and deletion", async () => {
-    await useChatStore.getState().loadSessions();
-    await useChatStore.getState().selectSession("old");
-    handleServerMessage({ type: "chat:delta", sessionId: "old", messageId: "m1", text: "Hi", offset: 0 });
-    handleServerMessage({ type: "chat:status", sessionId: "old", status: "thinking", warning: "no skills" });
+    await store.getState().loadSessions();
+    await store.getState().selectSession("old");
+    handleServerMessage({ type: "chat:delta", repoId: REPO, sessionId: "old", messageId: "m1", text: "Hi", offset: 0 });
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "old", status: "thinking", warning: "no skills" });
     // Messages for sessions not opened in the panel only update the list.
-    handleServerMessage({ type: "chat:delta", sessionId: "recent", messageId: "m9", text: "x", offset: 0 });
-    let s = useChatStore.getState();
+    handleServerMessage({ type: "chat:delta", repoId: REPO, sessionId: "recent", messageId: "m9", text: "x", offset: 0 });
+    let s = store.getState();
     expect(s.views.old).toMatchObject({ streaming: { m1: "Hi" }, status: "thinking", warning: "no skills" });
     expect(s.views.recent).toBeUndefined();
     expect(s.sessions.find((x) => x.id === "old")?.status).toBe("thinking");
 
-    handleServerMessage({ type: "chat:session", session: sessionOf({ id: "old", title: "Landing page", updatedAt: 10, totalCostUsd: 0.2 }) });
-    s = useChatStore.getState();
+    handleServerMessage({ type: "chat:session", repoId: REPO, session: sessionOf({ id: "old", title: "Landing page", updatedAt: 10, totalCostUsd: 0.2 }) });
+    s = store.getState();
     expect(s.sessions.map((x) => x.id)).toEqual(["old", "recent"]);
     expect(s.sessions[0]?.title).toBe("Landing page");
 
-    handleServerMessage({ type: "chat:deleted", sessionId: "old" });
-    s = useChatStore.getState();
+    handleServerMessage({ type: "chat:deleted", repoId: REPO, sessionId: "old" });
+    s = store.getState();
     expect(s.activeSessionId).toBeNull();
     expect(s.views.old).toBeUndefined();
     expect(s.sessions.map((x) => x.id)).toEqual(["recent"]);
   });
 
   it("drops the permission card when the turn ends without a resolution", async () => {
-    await useChatStore.getState().newSession();
-    handleServerMessage({ type: "chat:item", sessionId: "new", item: permission });
-    handleServerMessage({ type: "chat:status", sessionId: "new", status: "exited" });
-    expect(useChatStore.getState().views.new?.pendingPermissions).toEqual([]);
+    await store.getState().newSession();
+    handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "new", item: permission });
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "new", status: "exited" });
+    expect(store.getState().views.new?.pendingPermissions).toEqual([]);
   });
 
   it("deletes a session through the API", async () => {
-    await useChatStore.getState().loadSessions();
-    await useChatStore.getState().selectSession("recent");
-    await useChatStore.getState().deleteSession("recent");
+    await store.getState().loadSessions();
+    await store.getState().selectSession("recent");
+    await store.getState().deleteSession("recent");
     expect(deleteSession).toHaveBeenCalledWith("recent");
-    expect(useChatStore.getState().activeSessionId).toBeNull();
+    expect(store.getState().activeSessionId).toBeNull();
   });
 
   it("resyncs the shown session after a reconnect", async () => {
-    await useChatStore.getState().loadSessions();
-    await useChatStore.getState().selectSession("old");
-    await useChatStore.getState().selectSession("recent");
-    await useChatStore.getState().resync();
+    await store.getState().loadSessions();
+    await store.getState().selectSession("old");
+    await store.getState().selectSession("recent");
+    await store.getState().resync();
     expect(getSession).toHaveBeenCalledTimes(3);
-    expect(Object.keys(useChatStore.getState().views)).toEqual(["recent"]);
+    expect(Object.keys(store.getState().views)).toEqual(["recent"]);
   });
 
   it("answers concurrent permission prompts one at a time", async () => {
-    await useChatStore.getState().newSession();
-    handleServerMessage({ type: "chat:item", sessionId: "new", item: permission });
-    handleServerMessage({ type: "chat:item", sessionId: "new", item: permission2 });
-    handleServerMessage({ type: "chat:status", sessionId: "new", status: "waiting_permission" });
-    useChatStore.getState().answerPermission("new", "r2", true);
-    let v = useChatStore.getState().views.new!;
+    await store.getState().newSession();
+    handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "new", item: permission });
+    handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "new", item: permission2 });
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "new", status: "waiting_permission" });
+    store.getState().answerPermission("new", "r2", true);
+    let v = store.getState().views.new!;
     expect(v.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
     expect(v.status).toBe("waiting_permission");
     // The server confirms: r1 is still open.
-    handleServerMessage({ type: "chat:status", sessionId: "new", status: "waiting_permission" });
-    expect(useChatStore.getState().views.new!.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
-    useChatStore.getState().answerPermission("new", "r1", false);
-    v = useChatStore.getState().views.new!;
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "new", status: "waiting_permission" });
+    expect(store.getState().views.new!.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
+    store.getState().answerPermission("new", "r1", false);
+    v = store.getState().views.new!;
     expect(v).toMatchObject({ pendingPermissions: [], status: "thinking" });
   });
 
   it("a turn that ends while the detail is in flight does not leave the panel busy", async () => {
-    await useChatStore.getState().loadSessions();
+    await store.getState().loadSessions();
     const pending = deferred<ChatSessionDetail>();
     getSession.mockImplementationOnce(() => pending.promise);
-    const selecting = useChatStore.getState().selectSession("old");
+    const selecting = store.getState().selectSession("old");
     // The server built the detail while thinking; the end of the turn arrives on the WS first.
-    handleServerMessage({ type: "chat:item", sessionId: "old", item: { id: "res", ts: 3, kind: "result", subtype: "success", isError: false } });
-    handleServerMessage({ type: "chat:status", sessionId: "old", status: "idle" });
+    handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "old", item: { id: "res", ts: 3, kind: "result", subtype: "success", isError: false } });
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "old", status: "idle" });
     pending.resolve(detailOf({ session: sessionOf({ id: "old", status: "thinking" }), items: [user("u1", "hi")] }));
     await selecting;
-    const v = useChatStore.getState().views.old!;
+    const v = store.getState().views.old!;
     expect(v.status).toBe("idle");
     expect(v.items.map((i) => i.id)).toEqual(["u1", "res"]);
   });
 
   it("keeps the shown conversation on screen during a resync and applies live messages meanwhile", async () => {
-    await useChatStore.getState().loadSessions();
-    await useChatStore.getState().selectSession("old");
-    handleServerMessage({ type: "chat:item", sessionId: "old", item: permission });
-    handleServerMessage({ type: "chat:status", sessionId: "old", status: "waiting_permission" });
+    await store.getState().loadSessions();
+    await store.getState().selectSession("old");
+    handleServerMessage({ type: "chat:item", repoId: REPO, sessionId: "old", item: permission });
+    handleServerMessage({ type: "chat:status", repoId: REPO, sessionId: "old", status: "waiting_permission" });
     const list = deferred<{ sessions: ReturnType<typeof sessionOf>[] }>();
-    setChatDeps({ listSessions: () => list.promise });
-    const resyncing = useChatStore.getState().resync();
-    let v = useChatStore.getState().views.old!;
+    deps.listSessions = () => list.promise;
+    const resyncing = store.getState().resync();
+    let v = store.getState().views.old!;
     expect(v).toMatchObject({ loading: true, status: "waiting_permission" });
     expect(v.items.map((i) => i.id)).toEqual(["u1", "p1"]);
     expect(v.pendingPermissions).toHaveLength(1);
-    handleServerMessage({ type: "chat:delta", sessionId: "old", messageId: "m1", text: "Hi", offset: 0 });
-    expect(useChatStore.getState().views.old!.streaming.m1).toBe("Hi");
+    handleServerMessage({ type: "chat:delta", repoId: REPO, sessionId: "old", messageId: "m1", text: "Hi", offset: 0 });
+    expect(store.getState().views.old!.streaming.m1).toBe("Hi");
     getSession.mockImplementationOnce(async () =>
       detailOf({
         session: sessionOf({ id: "old", status: "waiting_permission" }),
@@ -274,23 +282,59 @@ describe("chat store", () => {
     );
     list.resolve({ sessions: [sessionOf({ id: "old", updatedAt: 1 })] });
     await resyncing;
-    v = useChatStore.getState().views.old!;
+    v = store.getState().views.old!;
     expect(v).toMatchObject({ loading: false, status: "waiting_permission", streaming: { m1: "Hi there" } });
     expect(v.pendingPermissions.map((p) => p.requestId)).toEqual(["r1"]);
   });
 
   it("resyncs the session picked during the reconnect, not the one shown before", async () => {
-    await useChatStore.getState().loadSessions();
-    await useChatStore.getState().selectSession("old");
+    await store.getState().loadSessions();
+    await store.getState().selectSession("old");
     const list = deferred<{ sessions: ReturnType<typeof sessionOf>[] }>();
-    setChatDeps({ listSessions: () => list.promise });
-    const resyncing = useChatStore.getState().resync();
-    void useChatStore.getState().selectSession("recent");
+    deps.listSessions = () => list.promise;
+    const resyncing = store.getState().resync();
+    void store.getState().selectSession("recent");
     getSession.mockClear();
     list.resolve({ sessions: [sessionOf({ id: "old", updatedAt: 1 }), sessionOf({ id: "recent", updatedAt: 5 })] });
     await resyncing;
-    expect(useChatStore.getState().activeSessionId).toBe("recent");
+    expect(store.getState().activeSessionId).toBe("recent");
     expect(getSession.mock.calls.map((c) => c[0])).toContain("recent");
     expect(getSession.mock.calls.map((c) => c[0])).not.toContain("old");
+  });
+});
+
+describe("chat stores per repository", () => {
+  afterEach(() => {
+    clearChatStores();
+    setChatDeps({});
+  });
+
+  it("ignores chat messages of another repository", async () => {
+    const store = createChatStore(REPO, {
+      listSessions: async () => ({ sessions: [sessionOf({ id: "s1" })] }),
+      getSession: async (id) => detailOf({ session: sessionOf({ id }) }),
+      createSession: async () => sessionOf({ id: "s1" }),
+      deleteSession: async () => undefined,
+      send: () => true,
+    });
+    await store.getState().loadSessions();
+    await store.getState().selectSession("s1");
+    store.getState().applyServerMessage({ type: "chat:delta", repoId: OTHER, sessionId: "s1", messageId: "m1", text: "x", offset: 0 });
+    store.getState().applyServerMessage({ type: "chat:deleted", repoId: OTHER, sessionId: "s1" });
+    expect(store.getState().views.s1?.streaming).toEqual({});
+    expect(store.getState().activeSessionId).toBe("s1");
+  });
+
+  it("the dispatcher routes chat:* to the store of the message's repository", () => {
+    setChatDeps({ listSessions: async () => ({ sessions: [] }) });
+    const mine = getChatStore(REPO);
+    const other = getChatStore(OTHER);
+    const dispatcher = createDispatcher();
+    dispatcher.handle({ type: "chat:session", repoId: REPO, session: sessionOf({ id: "s1", title: "Mine" }) });
+    expect(mine.getState().sessions.map((x) => x.id)).toEqual(["s1"]);
+    expect(other.getState().sessions).toEqual([]);
+    dispatcher.handle({ type: "chat:session", repoId: OTHER, session: sessionOf({ id: "s2" }) });
+    expect(other.getState().sessions.map((x) => x.id)).toEqual(["s2"]);
+    expect(mine.getState().sessions.map((x) => x.id)).toEqual(["s1"]);
   });
 });

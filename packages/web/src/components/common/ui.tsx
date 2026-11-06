@@ -4,6 +4,8 @@ import { Checkbox as UiCheckbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { Link, type LinkProps } from "../../lib/router/Link";
+import { useTabContext } from "../tabs/tab-context";
 import { Icons } from "./icons";
 
 /**
@@ -39,10 +41,22 @@ export function Button({
   return <UiButton type={type} variant={VARIANTS[variant]} size={SIZES[size]} {...props} />;
 }
 
+/** An in-app link (`<Link>`, so modified clicks open a tab) styled as a Button. */
+export function ButtonLink({ variant = "secondary", size = "md", className, ...props }: LinkProps & { variant?: Variant; size?: Size }) {
+  return (
+    <UiButton asChild variant={VARIANTS[variant]} size={SIZES[size]} className={className}>
+      <Link {...props} />
+    </UiButton>
+  );
+}
+
 /**
  * Always-open modal dialog; unmount it (or call `onClose`) to close. Built on Radix Dialog via shadcn: focus
  * moves into the dialog and is trapped there, returns to the opener on close, the page behind is inert and
  * does not scroll, Escape / a click outside close only the topmost dialog, and the title names the dialog.
+ * Inside a hidden tab (DESIGN §13.4) the dialog is not shown: Radix portals it to `document.body`, outside the
+ * view's `hidden` + `inert` wrapper, and its focus trap and pointer lock would cover the visible tab. It shows
+ * again (its content remounted) when the tab is activated.
  */
 export function Modal({
   title,
@@ -60,14 +74,15 @@ export function Modal({
   // The dialog has no DialogTrigger (it is mounted open), so Radix has no trigger to refocus on close: remember
   // what had focus when it mounted and return focus there, whether it closes via Escape/outside/X or unmounts.
   const [opener] = useState(() => (typeof document === "undefined" ? null : focusReturnTarget(document.activeElement)));
+  const active = useTabContext()?.active ?? true;
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={active} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
         onCloseAutoFocus={(e) => {
           e.preventDefault();
-          if (opener?.isConnected) opener.focus();
+          if (active && opener?.isConnected) opener.focus();
         }}
         className={cn("flex max-h-[calc(100%-3rem)] flex-col gap-0 overflow-hidden p-0", wide ? "sm:max-w-5xl" : "sm:max-w-md")}
       >

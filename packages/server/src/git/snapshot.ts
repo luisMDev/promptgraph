@@ -46,7 +46,7 @@ export async function snapshotWorktree(cwd: string, ref: string, message: string
 
 /** Run ids that have snapshot refs in the repository. */
 export async function snapshotRunIds(repoPath: string): Promise<string[]> {
-  const res = await git(repoPath, ["for-each-ref", "--format=%(refname)", SNAPSHOT_REF_PREFIX]);
+  const res = await git(repoPath, ["for-each-ref", "--format=%(refname)", SNAPSHOT_REF_PREFIX], { readOnly: true });
   if (res.code !== 0) return [];
   const ids = new Set<string>();
   for (const ref of res.stdout.split("\n")) {

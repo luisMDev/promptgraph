@@ -94,7 +94,7 @@ export function attentionText(e: Attention): { title: string; body: string } {
     e.kind === "waiting_input" ? "needs your input" : e.kind === "waiting_approval" ? "is waiting for approval" : "finished a turn";
   const fallback =
     e.kind === "waiting_input" ? "Answer in its terminal." : e.kind === "waiting_approval" ? "Review and approve or reject." : "Click Done when it is finished.";
-  return { title: `promptgraph: ${label} ${what}`, body: `${e.graphName}: ${e.message || fallback}` };
+  return { title: `promptgraph · ${e.repo.name}: ${label} ${what}`, body: `${e.graphName}: ${e.message || fallback}` };
 }
 
 export interface NotifierDeps {

@@ -1,0 +1,269 @@
+import { spawn } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  API,
+  DaemonHelloResponseSchema,
+  EXIT_DAEMON_LOCKED,
+  LoginCodeResponseSchema,
+  loginUrl,
+  type DaemonInfo,
+  type LoginCodeRequest,
+  type RepoSummary,
+} from "@promptgraph/shared";
+import { daemonLogPath, readDaemonInfo, rotateDaemonLog } from "../config/daemon-info.js";
+import { DaemonLock } from "../config/instance-lock.js";
+import type { PgPaths } from "../config/paths.js";
+import { helloProof, tokenPath } from "../config/token.js";
+import { PromptgraphClient } from "../mcp/client.js";
+import { tailLines } from "../util/text.js";
+import { daemonEnv } from "./daemon-env.js";
+
+/** A daemon of another version is running (DESIGN §4.1 item 4). */
+export class DaemonVersionMismatch extends Error {
+  constructor(
+    readonly running: string,
+    readonly client: string,
+  ) {
+    super(`promptgraph ${running} is running (this is ${client}); run promptgraph stop, then retry`);
+  }
+}
+
+/** A verified daemon: its record, the token and a Bearer client on its origin. */
+export interface DaemonConnection {
+  info: DaemonInfo;
+  /** Version the daemon reported in its verified hello (the record's copy is informational). */
+  serverVersion: string;
+  token: string;
+  /** http://127.0.0.1:<port> */
+  origin: string;
+  client: PromptgraphClient;
+}
+
+export interface FindDaemonOptions {
+  /** The client's version: a daemon of another version throws DaemonVersionMismatch. Omitted: any version. */
+  version?: string;
+  fetchImpl?: typeof fetch;
+  /** Hello timeout. Default 3000 ms. */
+  timeoutMs?: number;
+}
+
+const HELLO_TIMEOUT_MS = 3000;
+
+function readToken(paths: PgPaths): string | null {
+  try {
+    return fs.readFileSync(tokenPath(paths), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function sameString(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+/**
+ * The running daemon, verified before any credential is sent (DESIGN §4.1 item 3): reads the record
+ * (pid alive with its recorded start time) and the token file, calls `GET /api/daemon/hello?nonce=` with
+ * no Authorization header and checks the proof and the pid. Null when there is no record, no token or
+ * the check fails (a stale record, or something else listening on the recorded port). Re-read on every
+ * call: a restarted daemon or a rotated token is picked up.
+ * @throws DaemonVersionMismatch when `version` is given and differs from the daemon's.
+ */
+export async function findDaemon(paths: PgPaths, opts: FindDaemonOptions = {}): Promise<DaemonConnection | null> {
+  const info = readDaemonInfo(paths);
+  if (!info) return null;
+  const token = readToken(paths);
+  if (!token) return null;
+  const origin = `http://127.0.0.1:${info.port}`;
+  const nonce = randomBytes(16).toString("base64url");
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  let hello;
+  try {
+    const res = await fetchImpl(`${origin}${API.hello(nonce)}`, {
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(opts.timeoutMs ?? HELLO_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    hello = DaemonHelloResponseSchema.safeParse(await res.json());
+  } catch {
+    return null;
+  }
+  if (!hello.success || hello.data.pid !== info.pid || !sameString(hello.data.proof, helloProof(token, nonce))) return null;
+  if (opts.version !== undefined && hello.data.serverVersion !== opts.version) {
+    throw new DaemonVersionMismatch(hello.data.serverVersion, opts.version);
+  }
+  return { info, serverVersion: hello.data.serverVersion, token, origin, client: new PromptgraphClient(origin, token, opts.fetchImpl) };
+}
+
+export interface EnsureDaemonOptions {
+  paths: PgPaths;
+  /** argv that runs the promptgraph CLI: [node, ...execArgv, cli entry]. `daemon [--port p]` is appended. */
+  serverCommand: readonly string[];
+  /** Only when the user gave one: the daemon keeps its port fallback otherwise. */
+  port?: number;
+  /** The caller's environment (sanitised with daemonEnv before it reaches the daemon). */
+  env?: NodeJS.ProcessEnv;
+  version?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  /** Poll interval. Default 150 ms. */
+  pollMs?: number;
+}
+
+export interface EnsuredDaemon extends DaemonConnection {
+  /** This call spawned it. */
+  started: boolean;
+  /** The detached daemon's log. */
+  logFile: string;
+}
+
+/**
+ * A verified running daemon, or a new detached one (DESIGN §4.1 item 4): spawns `<serverCommand> daemon
+ * [--port p]` with cwd PG_HOME, the sanitised daemonEnv and its output appended to logs/daemon.log
+ * (rotated first when above 5 MB), then polls findDaemon. A child exiting with code 3 lost the lock to
+ * another daemon: polling goes on while the lock stays held (a daemon starting, or one stopping that has
+ * already removed its record); once it is free and still no daemon answers, a new child is spawned within
+ * the same deadline. Any other early exit, or the timeout, throws with the log's last 20 lines.
+ */
+export async function ensureDaemon(opts: EnsureDaemonOptions): Promise<EnsuredDaemon> {
+  const { paths } = opts;
+  const find = () => findDaemon(paths, { version: opts.version, fetchImpl: opts.fetchImpl });
+  const logFile = daemonLogPath(paths);
+  const existing = await find();
+  if (existing) return { ...existing, started: false, logFile };
+
+  const env = await daemonEnv({ caller: { ...(opts.env ?? process.env), PG_HOME: paths.home } });
+  fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  rotateDaemonLog(paths);
+  const logStart = fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
+  const [command, ...args] = opts.serverCommand;
+  if (!command) throw new Error("ensureDaemon: empty serverCommand");
+  /** Spawns one detached `daemon` child; the returned object gets its exit code. */
+  const spawnChild = (): { exited: { code: number | null } | null } => {
+    const state: { exited: { code: number | null } | null } = { exited: null };
+    const fd = fs.openSync(logFile, "a", 0o600);
+    try {
+      const child = spawn(command, [...args, "daemon", ...(opts.port !== undefined ? ["--port", String(opts.port)] : [])], {
+        cwd: paths.home,
+        detached: true,
+        stdio: ["ignore", fd, fd],
+        env,
+      });
+      child.once("exit", (code) => {
+        state.exited = { code };
+      });
+      child.once("error", (err) => {
+        state.exited = { code: null };
+        fs.appendFileSync(logFile, `spawn failed: ${err.message}\n`);
+      });
+      child.unref();
+    } finally {
+      fs.closeSync(fd);
+    }
+    return state;
+  };
+  let child = spawnChild();
+
+  const deadline = Date.now() + (opts.timeoutMs ?? 20_000);
+  const pollMs = opts.pollMs ?? 150;
+  for (;;) {
+    const conn = await find();
+    const ended = child.exited;
+    // A child that exited with 3 lost the lock to another daemon: this one is not ours.
+    if (conn) return { ...conn, started: ended?.code !== EXIT_DAEMON_LOCKED, logFile };
+    if (ended && ended.code !== EXIT_DAEMON_LOCKED) {
+      throw new Error(`the promptgraph daemon exited before it was ready (code ${ended.code}). Log (${logFile}):\n${tailOf(logFile, logStart)}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`the promptgraph daemon did not become ready in time. Log (${logFile}):\n${tailOf(logFile, logStart)}`);
+    }
+    if (ended && !(await DaemonLock.isHeld(paths))) {
+      // The daemon that held it (one stopping) is gone and none took its place: start one.
+      child = spawnChild();
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
+function tailOf(file: string, offset: number): string {
+  try {
+    return tailLines(fs.readFileSync(file).subarray(offset).toString("utf8").trim(), 20);
+  } catch {
+    return "";
+  }
+}
+
+/** POST /api/repos (idempotent): registers and activates the repository. */
+export function registerRepo(client: PromptgraphClient, repoPath: string): Promise<RepoSummary> {
+  return client.post<RepoSummary>(API.repos, { path: repoPath });
+}
+
+export interface MintLoginUrlOptions {
+  /** Build the URL on `http://127.0.0.1:<webPort>` (the vite dev server, DESIGN §14 Development). */
+  webPort?: number;
+  /** The session it creates is labelled "promptgraph desktop". */
+  desktop?: boolean;
+}
+
+/**
+ * A one-time login URL (DESIGN §14): mints a code over Bearer (`POST /api/daemon/login-codes`) and
+ * returns `<origin>/login?code=<code>&next=<next>`. The URL holds no token; it signs one browser in
+ * once, within 30 s. Never put it in a tool result or a log.
+ */
+export async function mintLoginUrl(conn: DaemonConnection, next: string, opts: MintLoginUrlOptions = {}): Promise<string> {
+  const body: LoginCodeRequest = opts.desktop ? { desktop: true } : {};
+  const { code } = LoginCodeResponseSchema.parse(await conn.client.post(API.loginCodes, body));
+  const origin = opts.webPort !== undefined ? `http://127.0.0.1:${opts.webPort}` : conn.origin;
+  return loginUrl(origin, code, next);
+}
+
+/** Node flags whose value is a module specifier resolved against the cwd (`--flag value` or `--flag=value`). */
+const LOADER_FLAGS = new Set(["--import", "--require", "-r", "--loader", "--experimental-loader"]);
+
+/**
+ * `execArgv` with the specifiers of --import, --require/-r and --loader made absolute, resolved from `cwd`
+ * (the detached daemon runs with cwd PG_HOME, where a bare `tsx` or a relative `./loader.mjs` resolves to
+ * nothing): a file URL for the ESM flags, a path for --require. URLs (`file:`, `data:`, `node:`), absolute
+ * paths and specifiers that do not resolve are kept as they are.
+ */
+export function absoluteExecArgv(execArgv: readonly string[], cwd: string = process.cwd()): string[] {
+  const require = createRequire(path.join(cwd, "noop.js"));
+  const absolute = (flag: string, spec: string): string => {
+    if (path.isAbsolute(spec) || /^[a-z][a-z0-9+.-]+:/i.test(spec)) return spec;
+    let resolved: string;
+    try {
+      resolved = require.resolve(spec);
+    } catch {
+      return spec;
+    }
+    return flag === "--require" || flag === "-r" ? resolved : pathToFileURL(resolved).href;
+  };
+  const out: string[] = [];
+  for (let i = 0; i < execArgv.length; i++) {
+    const arg = execArgv[i]!;
+    const eq = arg.indexOf("=");
+    const flag = eq === -1 ? arg : arg.slice(0, eq);
+    if (!LOADER_FLAGS.has(flag)) out.push(arg);
+    else if (eq !== -1) out.push(`${flag}=${absolute(flag, arg.slice(eq + 1))}`);
+    else if (i + 1 < execArgv.length) out.push(arg, absolute(flag, execArgv[++i]!));
+    else out.push(arg);
+  }
+  return out;
+}
+
+/**
+ * argv that re-runs this promptgraph CLI ([node, ...execArgv, entry]): what ensureDaemon spawns as
+ * `<argv> daemon`. Works from dist and from a loader in development (`node --import tsx …` or the tsx
+ * CLI): the detached daemon runs with cwd PG_HOME, so the entry and the loader specifiers in execArgv are
+ * made absolute (absoluteExecArgv).
+ */
+export function currentCliCommand(): string[] {
+  return [process.execPath, ...absoluteExecArgv(process.execArgv), path.resolve(process.argv[1] ?? "promptgraph")];
+}

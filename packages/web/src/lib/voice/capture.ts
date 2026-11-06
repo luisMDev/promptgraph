@@ -1,7 +1,7 @@
 import { PcmChunker, PcmResampler, rms } from "./pcm";
 
 /**
- * Microphone capture of voice dictation (DESIGN §21): getUserMedia → AudioContext → the `pg-pcm-capture` worklet,
+ * Microphone capture of voice dictation (DESIGN §22): getUserMedia → AudioContext → the `pg-pcm-capture` worklet,
  * whose Float32 blocks are resampled to 16 kHz Int16 and grouped into ~100 ms little-endian frames for the WS.
  */
 

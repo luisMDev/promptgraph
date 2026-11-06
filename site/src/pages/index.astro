@@ -45,33 +45,51 @@ const installTabs = [
   { label: 'Claude Code plugin', command: 'claude mcp add promptgraph -- promptgraph mcp' },
 ];
 
+// Every view of the app has its own URL (/r/<repo-id>/…); the frame bar shows the one of the screenshot.
+const demoRepo = '127.0.0.1:4777/r/demo-app-3f9a1c2e';
 const views = [
   {
     id: 'run',
     label: 'Fan-out run',
+    path: `${demoRepo}/runs/k3v9q2m7x1ab`,
     src: fanout,
     alt: 'promptgraph canvas during a run: a planning step fans out into three parallel Claude Code steps that merge, then commit, review and open a pull request',
   },
   {
     id: 'terminal',
     label: 'Live terminal',
+    path: `${demoRepo}/runs/p8d2w6n4c0tz/nodes/h5r1y7f3b9qe`,
     src: terminal,
     alt: 'The interactive Claude Code terminal of a step, opened from the promptgraph canvas',
   },
   {
     id: 'editor',
     label: 'Graph editor',
+    path: `${demoRepo}/graphs/test-fix`,
     src: editor,
     alt: 'The graph editor with the node palette and the inspector',
   },
   {
     id: 'approval',
     label: 'Approvals',
+    path: `${demoRepo}/runs/k3v9q2m7x1ab/nodes/s2j8l4x6v0mg`,
     src: prDialog,
     alt: 'Pull request approval dialog showing the diff, title and body before anything is pushed',
   },
-  { id: 'loop', label: 'Loops', src: loop, alt: 'A test-fix loop on the canvas with its iteration counter' },
-  { id: 'report', label: 'Run report', src: report, alt: 'Run report of a fan-out run that opened a pull request' },
+  {
+    id: 'loop',
+    label: 'Loops',
+    path: `${demoRepo}/runs/u6c0e2k8z4wa`,
+    src: loop,
+    alt: 'A test-fix loop on the canvas with its iteration counter',
+  },
+  {
+    id: 'report',
+    label: 'Run report',
+    path: `${demoRepo}/runs/k3v9q2m7x1ab/report`,
+    src: report,
+    alt: 'Run report of a fan-out run that opened a pull request',
+  },
 ];
 
 const readme = [
@@ -105,7 +123,7 @@ const faqs = [
   },
   {
     q: 'Is my code sent anywhere?',
-    a: 'promptgraph runs on your machine and its server listens on 127.0.0.1 only, behind a per-start token. Your prompts go to Claude Code exactly as they would if you typed them. Nothing is pushed to a remote without an approval step you accept.',
+    a: 'promptgraph runs on your machine: one background daemon listens on 127.0.0.1 only, and every request needs its local token or a browser session signed in with a one-time code. Your prompts go to Claude Code exactly as they would if you typed them. Nothing is pushed to a remote without an approval step you accept.',
   },
   {
     q: 'Can Claude run in parallel without the sessions stepping on each other?',
@@ -117,7 +135,7 @@ const faqs = [
   },
   {
     q: 'Which platforms are supported?',
-    a: 'Linux and WSL, with Node.js 22 or newer, git and a logged-in Claude Code. The GitHub CLI is optional and only needed for pull-request steps.',
+    a: 'Linux and WSL, with Node.js 22 or newer, git and a logged-in Claude Code. The GitHub CLI is optional and only needed for pull-request steps. The UI runs in your browser, or in an optional Linux desktop window that you build with Rust.',
   },
   {
     q: 'Can Claude Code drive promptgraph itself?',
@@ -215,11 +233,11 @@ const jsonLd = [
           <div class="frame">
             <div class="frame-bar" aria-hidden="true">
               <span></span><span></span><span></span>
-              <em>127.0.0.1:4777</em>
+              <em data-frame-url>{views[0]?.path}</em>
             </div>
             {
               views.map((v, i) => (
-                <figure data-panel={v.id} hidden={i !== 0}>
+                <figure data-panel={v.id} data-path={v.path} hidden={i !== 0}>
                   <Image
                     src={v.src}
                     alt={v.alt}
@@ -334,7 +352,7 @@ const jsonLd = [
               body; nothing is pushed until you click approve.
             </p>
             <ul class="checks">
-              <li>Server bound to <code>127.0.0.1</code>, every request needs a per-start token</li>
+              <li>Daemon bound to <code>127.0.0.1</code>; the token never appears in a URL, and browsers sign in with one-time codes</li>
               <li><code>bypassPermissions</code> is never offered; the default is <code>acceptEdits</code></li>
               <li>Checkpoint commits before every fork and merge, so no work is lost</li>
             </ul>
@@ -481,9 +499,13 @@ claude mcp add promptgraph -- promptgraph mcp</code></pre>
   if (viewer) {
     const tabs = [...viewer.querySelectorAll<HTMLButtonElement>('[data-view]')];
     const panels = [...viewer.querySelectorAll<HTMLElement>('[data-panel]')];
+    const frameUrl = viewer.querySelector<HTMLElement>('[data-frame-url]');
     const show = (id: string) => {
       for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.view === id));
-      for (const p of panels) p.hidden = p.dataset.panel !== id;
+      for (const p of panels) {
+        p.hidden = p.dataset.panel !== id;
+        if (!p.hidden && frameUrl) frameUrl.textContent = p.dataset.path ?? '';
+      }
     };
     for (const t of tabs) t.addEventListener('click', () => show(t.dataset.view!));
     document.addEventListener('keydown', (e) => {
@@ -701,6 +723,10 @@ claude mcp add promptgraph -- promptgraph mcp</code></pre>
     font-family: var(--mono);
     font-size: 11.5px;
     color: var(--muted);
+    max-width: calc(100% - 140px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .frame figure {
     margin: 0;

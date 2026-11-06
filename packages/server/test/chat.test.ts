@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { MCP_TOOL_GROUPS, MCP_TOOL_NAMES, type ChatContext, type ChatItem } from "@promptgraph/shared";
+import { API, MCP_TOOL_GROUPS, MCP_TOOL_NAMES, type ChatContext, type ChatItem } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatError, ChatManager, chatTitle, type ChatManagerOptions } from "../src/chat/chat-manager.js";
 import { buildChatArgs, CHAT_PREALLOWED_MCP_TOOLS, CHAT_SYSTEM_PROMPT, chatAllowedTools, resolveChatMcp, type ChatMcpLaunch } from "../src/chat/launch.js";
@@ -11,11 +11,14 @@ import { chatItemsFromTranscript, findChatTranscript, projectDirName } from "../
 import { EventBus, type ChatServerMessage } from "../src/events/bus.js";
 import { createHttpApp } from "../src/http/app.js";
 import { openDatabase, Store } from "../src/store/store.js";
-import { tempDir } from "./helpers.js";
+import { createTempRepo, tempDir } from "./helpers.js";
 import { fakeSpawner, initLine, resultLine, streamEvent, textTurn, type FakeChatChild } from "./support/fake-chat-child.js";
-import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
+import { createTestDaemon, TEST_TOKEN, type TestDaemon } from "./support/test-daemon.js";
 
 const PLUGIN_PREFIX = "mcp__plugin_promptgraph_promptgraph__";
+/** repoId stamped on every chat:* message of the managers under test. */
+const REPO_ID = "my-repo-0123abcd";
+
 const MCP: ChatMcpLaunch = {
   pluginDir: "/opt/pg/plugins/promptgraph",
   mcpConfig: null,
@@ -293,7 +296,7 @@ describe("ChatManager", () => {
   const repoPath = "/work/my repo";
 
   function makeManager(extra: Partial<ChatManagerOptions> = {}): ChatManager {
-    return new ChatManager({ store, bus, repoPath, env, mcp: () => MCP, spawner: fake.spawner, newSessionId: () => "sess-1", ...extra });
+    return new ChatManager({ store, bus, repoId: REPO_ID, repoPath, env, mcp: () => MCP, spawner: fake.spawner, newSessionId: () => "sess-1", ...extra });
   }
 
   beforeEach(() => {
@@ -320,7 +323,7 @@ describe("ChatManager", () => {
   it("creates sessions in the store and lists them", () => {
     const s = manager.create({ model: "opus" });
     expect(s).toMatchObject({ id: "sess-1", title: "New chat", status: "idle", totalCostUsd: 0, model: "opus" });
-    expect(messages).toEqual([{ type: "chat:session", session: s }]);
+    expect(messages).toEqual([{ type: "chat:session", repoId: REPO_ID, session: s }]);
     expect(manager.list()).toEqual([s]);
     expect(store.getChatSession("sess-1")).toMatchObject({ repoPath, model: "opus", title: null, started: false });
     expect(manager.get("nope")).toBeUndefined();
@@ -346,8 +349,8 @@ describe("ChatManager", () => {
 
     child.emit(initLine("sess-1"), ...textTurn("msg_1", ["Sure", ", done."]), resultLine("success", 0.02));
     expect(messages.filter((m) => m.type === "chat:delta")).toEqual([
-      { type: "chat:delta", sessionId: "sess-1", messageId: "msg_1#0", text: "Sure", offset: 0 },
-      { type: "chat:delta", sessionId: "sess-1", messageId: "msg_1#0", text: ", done.", offset: 4 },
+      { type: "chat:delta", repoId: REPO_ID, sessionId: "sess-1", messageId: "msg_1#0", text: "Sure", offset: 0 },
+      { type: "chat:delta", repoId: REPO_ID, sessionId: "sess-1", messageId: "msg_1#0", text: ", done.", offset: 4 },
     ]);
     expect(kinds()).toEqual(["user", "assistant", "result"]);
     expect(items()[0]).toMatchObject({ kind: "user", text: "Build a landing page" });
@@ -633,7 +636,7 @@ describe("ChatManager", () => {
     expect(child.signals).toEqual(["SIGTERM"]);
     expect(child.stdinOpen).toBe(false);
     expect(store.getChatSession("sess-1")).toBeUndefined();
-    expect(messages.at(-1)).toEqual({ type: "chat:deleted", sessionId: "sess-1" });
+    expect(messages.at(-1)).toEqual({ type: "chat:deleted", repoId: REPO_ID, sessionId: "sess-1" });
     const count = messages.length;
     child.exit({ code: null, signal: "SIGTERM" });
     expect(messages).toHaveLength(count);
@@ -689,42 +692,45 @@ describe("ChatManager", () => {
 
 describe("chat routes", () => {
   const HEADERS = { host: "127.0.0.1:4777", authorization: `Bearer ${TEST_TOKEN}`, "content-type": "application/json" };
-  let cleanup: () => void;
-  let setup: ReturnType<typeof createTestContext>;
+  let cleanups: Array<() => void>;
+  let daemon: TestDaemon;
   let fake: ReturnType<typeof fakeSpawner>;
+  let api: ReturnType<typeof API.repo>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const t = tempDir();
-    cleanup = t.cleanup;
+    const r = createTempRepo();
+    cleanups = [r.cleanup, t.cleanup];
     fake = fakeSpawner();
-    setup = createTestContext(t.dir, t.dir, { CLAUDE_CONFIG_DIR: path.join(t.dir, "claude") }, fake.spawner);
+    daemon = await createTestDaemon({ root: t.dir, repos: [r.repo], mockEngines: true, env: { CLAUDE_CONFIG_DIR: path.join(t.dir, "claude") }, chatSpawner: fake.spawner });
+    api = API.repo(daemon.repoIds[0]!);
   });
-  afterEach(() => {
-    setup.ctx.store.db.close();
-    cleanup();
+  afterEach(async () => {
+    await daemon.close();
+    for (const c of cleanups) c();
   });
 
   it("creates, lists, reads and deletes sessions behind the token", async () => {
-    const app = createHttpApp(setup.ctx);
-    expect((await app.request("/api/chat/sessions", { headers: { host: HEADERS.host } })).status).toBe(401);
+    const app = createHttpApp(daemon.ctx);
+    expect((await app.request(api.chatSessions, { headers: { host: HEADERS.host } })).status).toBe(401);
 
-    const created = await app.request("/api/chat/sessions", { method: "POST", headers: HEADERS, body: JSON.stringify({ model: "opus" }) });
+    const created = await app.request(api.chatSessions, { method: "POST", headers: HEADERS, body: JSON.stringify({ model: "opus" }) });
     expect(created.status).toBe(200);
     const { session } = (await created.json()) as { session: { id: string; model: string } };
     expect(session.model).toBe("opus");
-    expect((await app.request("/api/chat/sessions", { method: "POST", headers: HEADERS, body: JSON.stringify({ model: "" }) })).status).toBe(400);
+    expect((await app.request(api.chatSessions, { method: "POST", headers: HEADERS, body: JSON.stringify({ model: "" }) })).status).toBe(400);
 
-    const list = (await (await app.request("/api/chat/sessions", { headers: HEADERS })).json()) as { sessions: unknown[] };
+    const list = (await (await app.request(api.chatSessions, { headers: HEADERS })).json()) as { sessions: unknown[] };
     expect(list.sessions).toHaveLength(1);
 
-    setup.ctx.chat.send(session.id, "hello", CONTEXT);
-    const detail = (await (await app.request(`/api/chat/sessions/${session.id}`, { headers: HEADERS })).json()) as { items: ChatItem[] };
+    (await daemon.repo(daemon.repoIds[0]!)).chat.send(session.id, "hello", CONTEXT);
+    const detail = (await (await app.request(api.chatSession(session.id), { headers: HEADERS })).json()) as { items: ChatItem[] };
     expect(detail.items).toMatchObject([{ kind: "user", text: "hello" }]);
 
-    expect((await app.request(`/api/chat/sessions/${session.id}`, { method: "DELETE", headers: HEADERS })).status).toBe(200);
+    expect((await app.request(api.chatSession(session.id), { method: "DELETE", headers: HEADERS })).status).toBe(200);
     expect(fake.last().signals).toEqual(["SIGTERM"]);
-    expect((await app.request(`/api/chat/sessions/${session.id}`, { headers: HEADERS })).status).toBe(404);
-    expect((await app.request(`/api/chat/sessions/${session.id}`, { method: "DELETE", headers: HEADERS })).status).toBe(404);
+    expect((await app.request(api.chatSession(session.id), { headers: HEADERS })).status).toBe(404);
+    expect((await app.request(api.chatSession(session.id), { method: "DELETE", headers: HEADERS })).status).toBe(404);
   });
 });
 
@@ -757,7 +763,7 @@ rl.on("close", () => process.exit(0));
       { mode: 0o755 },
     );
     const store = new Store(openDatabase(":memory:"));
-    const manager = new ChatManager({ store, bus: new EventBus(), repoPath: dir, env: { ...process.env, PG_CLAUDE_BIN: script }, mcp: () => MCP, shutdownGraceMs: 200 });
+    const manager = new ChatManager({ store, bus: new EventBus(), repoId: REPO_ID, repoPath: dir, env: { ...process.env, PG_CLAUDE_BIN: script }, mcp: () => MCP, shutdownGraceMs: 200 });
     const { id } = manager.create();
     const texts = () => manager.get(id)!.items.filter((i) => i.kind === "assistant").map((i) => (i as { text: string }).text);
     manager.send(id, "one", CONTEXT);
@@ -772,7 +778,7 @@ rl.on("close", () => process.exit(0));
 
   it("reports a missing binary", async () => {
     const store = new Store(openDatabase(":memory:"));
-    const manager = new ChatManager({ store, bus: new EventBus(), repoPath: dir, env: { PATH: "", PG_CLAUDE_BIN: path.join(dir, "missing") }, mcp: () => MCP });
+    const manager = new ChatManager({ store, bus: new EventBus(), repoId: REPO_ID, repoPath: dir, env: { PATH: "", PG_CLAUDE_BIN: path.join(dir, "missing") }, mcp: () => MCP });
     const { id } = manager.create();
     manager.send(id, "hi", CONTEXT);
     await vi.waitFor(() => expect(manager.get(id)!.session.status).toBe("error"), { timeout: 5000 });

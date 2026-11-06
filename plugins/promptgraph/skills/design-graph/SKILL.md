@@ -14,8 +14,10 @@ The tools come from the `promptgraph` MCP server.
 
 ## Steps
 
-1. **Connect.** Call `server_status`. If nothing is running, tell the user and call `start_server`
-   (it starts promptgraph in the background without opening a browser).
+1. **Connect.** Call `server_status`. If the daemon is not running, tell the user and call
+   `start_server` (it starts the promptgraph daemon in the background without opening a browser and
+   registers this repository). If it reports a version mismatch, ask the user to run `promptgraph stop`
+   in a terminal; do not stop the daemon yourself.
 2. **Learn the format.** Call `graph_reference` once per session. Use `list_commands` before you put a
    slash command in a `command` node, and use only commands it lists.
 3. **Understand the work.** Read the code involved and ask the user what is unclear: the goal, the
@@ -28,7 +30,8 @@ The tools come from the `promptgraph` MCP server.
 6. **Save** with `save_graph`. You can leave out positions and edge ids. If `runnable` is false, fix
    every item in `validation.errors` and save again. Mention any warnings to the user.
 7. **Hand off.** Tell the user the file path (`.promptgraph/graphs/<id>.json`, which they can commit)
-   and offer to open it with `open_ui` or to run it (see the run-graph skill). Do not start a run
+   and offer to open it with `open_ui` (it opens the user's browser, signed in, and returns only the
+   plain page address) or to run it (see the run-graph skill). Do not start a run
    unless the user asks for one.
 
 ## Design rules

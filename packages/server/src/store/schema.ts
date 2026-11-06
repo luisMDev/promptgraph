@@ -83,7 +83,7 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE node_runs ADD COLUMN snapshot_start TEXT;
   ALTER TABLE node_runs ADD COLUMN snapshot_end TEXT;
   `,
-  // §20.8 chat panel sessions; the history itself lives in the Claude transcript.
+  // §21.8 chat panel sessions; the history itself lives in the Claude transcript.
   `
   CREATE TABLE chat_sessions (
     id TEXT PRIMARY KEY,                 -- = Claude session id
@@ -96,5 +96,36 @@ export const MIGRATIONS: readonly string[] = [
     updated_at INTEGER NOT NULL
   );
   CREATE INDEX chat_sessions_repo ON chat_sessions (repo_path, updated_at DESC);
+  `,
+  // M7 daemon (DESIGN §4.2, §4.4, §11.2, §14): registered repositories, browser sessions, one-time steps.
+  // The chat migration above and this one were developed in parallel and both shipped as version 3→4, so
+  // this one is idempotent and also creates chat_sessions: a database that took either one ends up with both.
+  `
+  CREATE TABLE IF NOT EXISTS repos (
+    id TEXT PRIMARY KEY,                 -- repoId, <slug>-<hash8>
+    path TEXT NOT NULL UNIQUE,           -- realpath of the git top level; = runs.repo_path
+    name TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    last_opened_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    id_hash TEXT PRIMARY KEY,            -- SHA-256 hex of the cookie value (the value is never stored)
+    label TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS chat_sessions (
+    id TEXT PRIMARY KEY,
+    repo_path TEXT NOT NULL,
+    title TEXT,
+    model TEXT,
+    total_cost_usd REAL NOT NULL DEFAULT 0,
+    started INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS chat_sessions_repo ON chat_sessions (repo_path, updated_at DESC);
   `,
 ];

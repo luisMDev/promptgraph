@@ -37,7 +37,7 @@ function setup() {
   cleanups.push(() => void db.close());
   const store = new Store(db);
   const bus = new EventBus();
-  const lanes = new LaneManager({ store, bus, paths, repo: { path: repo, name: path.basename(repo) } });
+  const lanes = new LaneManager({ store, bus, paths, repo: { id: "repo-00000000", path: repo, name: path.basename(repo) } });
   const ptys = new PtyManager(bus, () => null);
   cleanups.push(() => ptys.killAll());
   const run = store.insertRun({ id: "run1", repoPath: repo, graph: createEmptyGraph("demo", "Demo"), graphHash: "h", shortId: "ab12", startedAt: 1 });
@@ -73,7 +73,7 @@ const neverClaude: Runner = {
 function startMerge(s: Setup, target: Lane, mergeSources: Lane[], config: Record<string, unknown>, claude: Runner = neverClaude, paths: PgPaths = s.paths) {
   const run: Run = { ...makeRun({ nodes: [{ id: "m", type: "merge", label: "Merge", config } as never] }), id: s.run.id };
   const ctx = makeCtx({ run, node: run.graphSnapshot.nodes[0]!, lane: target, mergeSources, nodeRunId: "nr-m" });
-  const exec = new MergeRunner({ lanes: s.lanes, ptys: s.ptys, claude, paths, env: { ...process.env, SHELL: "/bin/sh" } }).start(ctx);
+  const exec = new MergeRunner({ lanes: s.lanes, ptys: s.ptys.owned("repo"), claude, paths, env: { ...process.env, SHELL: "/bin/sh" } }).start(ctx);
   return { ctx, exec };
 }
 
@@ -312,7 +312,7 @@ describe("MergeRunner + ClaudeRunner (fake claude)", () => {
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     cleanups.push(() => new Promise<void>((r) => server.close(() => r())));
     const port = (server.address() as AddressInfo).port;
-    const claude = new ClaudeRunner({ ptys: s.ptys, hooks, paths, pgHookPath: installPgHook(paths), endpoint: () => ({ port, token: "tok" }), env });
+    const claude = new ClaudeRunner({ ptys: s.ptys.owned("repo"), hooks, paths, pgHookPath: installPgHook(paths), endpoint: () => ({ port, hookSecret: "tok" }), env });
 
     const { ctx, exec } = startMerge(s, main, [l2], { onConflict: "claude" }, claude, paths);
     // makeRun's default completion is auto with a grace period; Done ends it right after the turn.

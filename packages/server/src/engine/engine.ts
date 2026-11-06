@@ -37,7 +37,7 @@ import { childEnv } from "../config/child-env.js";
 import { ptyLogPath, type PgPaths } from "../config/paths.js";
 import type { EventBus } from "../events/bus.js";
 import { GraphLoadError, GraphNotFoundError, type GraphStore } from "../graphs/graph-store.js";
-import type { PtyManager } from "../pty/pty-manager.js";
+import type { OwnedPtys } from "../pty/pty-manager.js";
 import type { ClaudeRunner } from "../runners/claude/claude-runner.js";
 import type { NodeControls, PredecessorOutput, RunnerContext, RunnerRegistry, RunnerResult } from "../runners/types.js";
 import type { NodeRunPatch, Store } from "../store/store.js";
@@ -55,7 +55,8 @@ export interface EngineDeps {
   store: Store;
   graphs: GraphStore;
   lanes: LaneManager;
-  ptys: PtyManager;
+  /** This repository's PTYs (PtyManager.owned(repo.id)): shutdown kills only these. */
+  ptys: OwnedPtys;
   runners: RunnerRegistry;
   /** For reopenSession. */
   claude: ClaudeRunner;
@@ -234,6 +235,7 @@ export class Engine {
     });
     const live = this.createLive(run, plan, tracker);
     this.emitRun(runId);
+    this.emitRepoChanged();
     for (const nr of store.listNodeRuns(runId)) this.deps.bus.emit("node:update", { nodeRun: nr });
 
     try {
@@ -525,11 +527,24 @@ export class Engine {
     exec?.controls?.userInput?.();
   }
 
-  /** Startup: markInterrupted + LaneManager.prune. */
+  /**
+   * Standalone startup (tests, one repository): markInterrupted for this repository + prune. The daemon
+   * marks every repository's runs interrupted once at start and calls prune() on activation (§4.2).
+   */
   async recover(): Promise<void> {
-    markInterrupted(this.deps.store, { repoPath: this.deps.repo.path }, this.now());
+    if (markInterrupted(this.deps.store, { repoPath: this.deps.repo.path }, this.now()).length > 0) this.emitRepoChanged();
+    await this.prune();
+  }
+
+  /** Activation (§4.2): `git worktree prune` (LaneManager.prune) and snapshot pruning (§9.7). */
+  async prune(): Promise<void> {
     await this.deps.lanes.prune();
     await this.pruneSnapshots();
+  }
+
+  /** Resolves once every background node chain has settled (no timeout; used after shutdown by dispose). */
+  async drain(): Promise<void> {
+    while (this.chains.size > 0) await Promise.allSettled([...this.chains]);
   }
 
   /** §9.7: snapshot refs of runs that finished over SNAPSHOT_RETENTION_MS ago, or are unknown, are deleted. */
@@ -545,7 +560,10 @@ export class Engine {
     }
   }
 
-  /** SIGINT (§4.5): cancel-gracefully every live execution (≤5s), node runs → interrupted, runs → paused. */
+  /**
+   * SIGINT (§4.5): cancel-gracefully every live execution (≤5s), kill this repository's remaining PTYs
+   * (never another repository's), node runs → interrupted, runs → paused.
+   */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     const execs = [...this.live.values()].flatMap((live) => {
@@ -554,11 +572,13 @@ export class Engine {
     });
     for (const e of execs) e.abort.abort();
     await withTimeout(Promise.allSettled(execs.map((e) => e.controls?.cancel())), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
-    await this.deps.ptys.killAll();
+    await this.deps.ptys.killOwned();
     await withTimeout(Promise.allSettled([...this.chains]), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
     // Only this engine's own runs: another instance (another repository) may share the DB.
     const own = { repoPath: this.deps.repo.path, runIds: [...this.live.keys()] };
-    for (const runId of markInterrupted(this.deps.store, own, this.now())) this.emitRun(runId);
+    const interrupted = markInterrupted(this.deps.store, own, this.now());
+    for (const runId of interrupted) this.emitRun(runId);
+    if (interrupted.length > 0) this.emitRepoChanged();
     this.live.clear();
   }
 
@@ -1093,6 +1113,7 @@ export class Engine {
     }
     bus.emit("node:update", { nodeRun: after });
     if (statusChanged || patch.output !== undefined) this.emitRun(after.runId);
+    if (statusChanged) this.emitRepoChanged();
     if (statusChanged && (ATTENTION_NODE_STATUSES as readonly NodeStatus[]).includes(after.status)) this.emitAttention(after);
     return after;
   }
@@ -1108,6 +1129,7 @@ export class Engine {
       nodeLabel: node ? labelOf(node) : nodeRun.nodeId,
       graphName: run.graphName,
       message: nodeRun.waitingReason?.message ?? fallback,
+      repo: { id: this.deps.repo.id, name: this.deps.repo.name },
     });
   }
 
@@ -1119,6 +1141,7 @@ export class Engine {
     this.deps.store.updateRun(runId, { status, ...extra });
     this.deps.store.appendEvent(runId, null, "run.status", { status, from: run.status, error: extra.error ?? null });
     this.emitRun(runId);
+    if (run.status !== status) this.emitRepoChanged();
   }
 
   private resumeIfPaused(run: Run): void {
@@ -1127,7 +1150,12 @@ export class Engine {
 
   private emitRun(runId: string): void {
     const run = this.deps.store.getRunSummary(runId);
-    if (run) this.deps.bus.emit("run:update", { run });
+    if (run) this.deps.bus.emit("run:update", { repoId: this.deps.repo.id, run });
+  }
+
+  /** Home counters (RepoSummary) may have changed: a run was created or a run/node run changed status. */
+  private emitRepoChanged(): void {
+    this.deps.bus.emit("repo:changed", { repoId: this.deps.repo.id });
   }
 
   // ---------------------------------------------------------------------------

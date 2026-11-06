@@ -717,7 +717,7 @@ describe("Engine crash recovery and shutdown", () => {
     await waitFor(() => runner.last("a"));
     await s.engine.shutdown();
     expect(runner.last("a")!.calls).toEqual(["cancel"]);
-    expect(s.ptys.killAll).toHaveBeenCalled();
+    expect(s.ptys.killOwned).toHaveBeenCalled();
     expect(runStatus(s, run.id)).toBe("paused");
     expect(statusOf(s, run.id)).toEqual({ a: "interrupted", b: "pending" });
   });

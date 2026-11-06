@@ -1,19 +1,24 @@
 // @vitest-environment jsdom
 import type { ClientMessage, Graph, SaveGraphResponse, VoiceStatus } from "@promptgraph/shared";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CaptureCallbacks } from "../../lib/voice/capture";
 import { MicError } from "../../lib/voice/capture";
 import { HOLD_THRESHOLD_MS } from "../../lib/voice/use-dictation";
 import { chatSessionOf, linearGraph, voiceStatusOf } from "../../test-fixtures";
-import { handleServerMessage } from "../../store/app-actions";
-import { useAppStore } from "../../store/app-store";
-import { emptyView, setChatDeps, useChatStore } from "../../store/chat-store";
-import { setEditorPersistence, useEditorStore } from "../../store/editor-store";
-import { useUiStore } from "../../store/ui-store";
+import { clearChatStores, emptyView, getChatStore, setChatDeps } from "../../store/chat-store";
+import { useDaemonStore } from "../../store/daemon-store";
+import { createDispatcher } from "../../store/dispatcher";
+import { createTestView, TEST_REPO_ID, type TestView } from "../../store/view/test-view";
 import { resetVoiceStore, setVoiceDeps, useVoiceStore } from "../../store/voice-store";
 import { ChatPanel } from "./ChatPanel";
+
+/** The view under test (its repository's chat store is getChatStore(TEST_REPO_ID)). */
+let view: TestView;
+const chat = () => getChatStore(TEST_REPO_ID);
+let dispatcher = createDispatcher();
+const handleServerMessage: typeof dispatcher.handle = (msg) => dispatcher.handle(msg);
 
 const chatSent: ClientMessage[] = [];
 const voiceSent: ClientMessage[] = [];
@@ -34,7 +39,7 @@ async function renderPanel(voice: Partial<VoiceStatus> = {}) {
   status = voiceStatusOf(voice);
   useVoiceStore.setState({ status });
   const user = userEvent.setup();
-  render(<ChatPanel />);
+  view.render(<ChatPanel />);
   return user;
 }
 
@@ -79,15 +84,16 @@ describe("composer dictation", () => {
       getSession: async (id) => ({ session: chatSessionOf({ id }), items: [], pendingPermissions: [], streaming: [] }),
     });
     const graph: Graph = linearGraph();
-    setEditorPersistence({
+    clearChatStores();
+    dispatcher = createDispatcher();
+    view = createTestView({ graphId: "g1", persistence: {
       load: async () => ({ graph, hash: "h0", modifiedOutside: false, activeRunId: null }),
       save: async (g: Graph): Promise<SaveGraphResponse> => ({ graph: g, hash: "h1" }),
-    });
-    useEditorStore.getState().closeGraph();
-    await useEditorStore.getState().openGraph("g1");
-    useAppStore.setState({ connected: true });
-    useUiStore.setState({ chatOpen: true });
-    useChatStore.setState({ sessions: [chatSessionOf({ id: "s1" })], sessionsLoaded: true, activeSessionId: "s1", views: { s1: emptyView() }, error: null });
+    } });
+    await view.editor.getState().load();
+    useDaemonStore.setState({ connection: "open" });
+    view.ui.getState().setChatOpen(true);
+    chat().setState({ sessions: [chatSessionOf({ id: "s1" })], sessionsLoaded: true, activeSessionId: "s1", views: { s1: emptyView() }, error: null });
   });
   afterEach(() => {
     cleanup();
@@ -185,7 +191,7 @@ describe("composer dictation", () => {
     await user.keyboard(" ");
     act(() => handleServerMessage({ type: "voice:final", voiceId: "v1", text: "Simplify this graph" }));
     await waitFor(() => expect(chatSent).toHaveLength(1));
-    expect(chatSent[0]).toMatchObject({ type: "chat:send", sessionId: "s1", text: "Simplify this graph" });
+    expect(chatSent[0]).toMatchObject({ type: "chat:send", repoId: TEST_REPO_ID, sessionId: "s1", text: "Simplify this graph" });
   });
 
   it("mic button: a click toggles (tap), a long press records while held", async () => {
@@ -234,7 +240,7 @@ describe("composer dictation", () => {
 
   it("is disabled while the server is not connected, and says why", async () => {
     await renderPanel();
-    act(() => useAppStore.setState({ connected: false }));
+    act(() => useDaemonStore.setState({ connection: "reconnecting" }));
     const mic = screen.getByRole("button", { name: "Dictate" }) as HTMLButtonElement;
     // aria-disabled (not disabled), so the tooltip and its reason stay reachable.
     expect(mic.getAttribute("aria-disabled")).toBe("true");
@@ -317,7 +323,7 @@ describe("composer dictation", () => {
 
   it("autoSubmit while Claude is busy keeps the transcript and says it was not sent", async () => {
     const user = await renderPanel({ mode: "tap", autoSubmit: true });
-    act(() => useChatStore.setState({ views: { s1: { ...emptyView(), status: "thinking" } } }));
+    act(() => chat().setState({ views: { s1: { ...emptyView(), status: "thinking" } } }));
     input().focus();
     await user.keyboard(" ");
     await waitFor(() => expect(recording()).toBe(true));

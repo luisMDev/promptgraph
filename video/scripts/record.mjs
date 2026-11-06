@@ -167,18 +167,22 @@ async function main() {
     server = await startServer(repo, env, await freePort());
     const api = apiClient(server);
     await api("PUT", "/api/settings", { ...(await api("GET", "/api/settings")), notifications: false });
-    await api("PUT", `/api/graphs/${GRAPH.id}`, GRAPH);
+    await api("PUT", `/graphs/${GRAPH.id}`, GRAPH);
 
     browser = await chromium.launch({ executablePath: chrome, headless: true });
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE, colorScheme: "dark" });
-    await context.addInitScript((id) => {
-      localStorage.setItem("pg-theme", "dark");
-      localStorage.setItem("pg_last_graph", id);
-    }, GRAPH.id);
+    // The login lands on /r/<repoId>, which opens the repository's last graph (DESIGN §13.2).
+    await context.addInitScript(
+      ({ repoId, id }) => {
+        localStorage.setItem("pg-theme", "dark");
+        localStorage.setItem(`pg.lastGraph.${repoId}`, id);
+      },
+      { repoId: server.repoId, id: GRAPH.id },
+    );
     await context.addInitScript(installCursor);
     const page = await context.newPage();
     page.on("pageerror", (e) => log("page error:", e.message));
-    await page.goto(server.url);
+    await page.goto(await server.loginUrl());
     await page.getByRole("tab", { name: "Nodes" }).click();
     await page.locator('.react-flow__node[data-id="pr"]').waitFor();
     await page.evaluate(() => document.activeElement?.blur());
@@ -258,7 +262,7 @@ async function main() {
       return until(
         `${nodeId} to be ${want.join("|")}`,
         async () => {
-          const d = await api("GET", `/api/runs/${runId}`);
+          const d = await api("GET", `/runs/${runId}`);
           if (["failed", "cancelled"].includes(d.run.status)) throw new Error(`Run ${d.run.status}: ${d.run.error}`);
           const nr = currentNodeRun(d, nodeId);
           return nr && want.includes(nr.status) ? nr : null;
@@ -284,14 +288,14 @@ async function main() {
     await sleep(500);
     await clickOn(page.getByRole("button", { name: "Collapse sidebar" }), { ms: 500 });
     const { runs } = await until("the run to start", async () => {
-      const r = await api("GET", `/api/runs?graph=${GRAPH.id}&limit=1`);
+      const r = await api("GET", `/runs?graph=${GRAPH.id}&limit=1`);
       return r.runs.length ? r : null;
     });
     const runId = runs[0].id;
 
     await waitNode(runId, "plan", "succeeded");
     await until("the lanes to fan out", async () => {
-      const d = await api("GET", `/api/runs/${runId}`);
+      const d = await api("GET", `/runs/${runId}`);
       return ["impl", "tests", "docs"].every((id) => currentNodeRun(d, id)?.status === "running");
     }, RUN_TIMEOUT_MS, 200);
     mark("fanout");

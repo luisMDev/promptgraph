@@ -4,9 +4,10 @@ import { API, GRAPH_CONFLICT_CODE, type GraphInput, type SaveGraphResponse } fro
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHttpApp } from "../src/http/app.js";
 import { createTempRepo, tempDir } from "./helpers.js";
-import { createTestContext, TEST_TOKEN } from "./support/http-ctx.js";
+import { createTestDaemon, TEST_TOKEN, type TestDaemon } from "./support/test-daemon.js";
 
-vi.mock("../src/git/repo.js", () => ({
+vi.mock("../src/git/repo.js", async (orig) => ({
+  ...(await orig<typeof import("../src/git/repo.js")>()),
   currentBranch: vi.fn(async () => "main"),
   listBranches: vi.fn(async () => ["main"]),
 }));
@@ -26,27 +27,36 @@ function graph(id: string, prompt = "Do it"): GraphInput {
 
 let repo: string;
 let cleanups: Array<() => void>;
-let setup: ReturnType<typeof createTestContext>;
+let daemon: TestDaemon;
 let app: ReturnType<typeof createHttpApp>;
+let repoId: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   const r = createTempRepo();
   const t = tempDir();
   repo = r.repo;
   cleanups = [r.cleanup, t.cleanup];
-  setup = createTestContext(repo, t.dir, { PG_WEB_DIST: path.join(t.dir, "dist"), CLAUDE_CONFIG_DIR: path.join(t.dir, "claude") });
-  app = createHttpApp(setup.ctx);
+  daemon = await createTestDaemon({
+    root: t.dir,
+    repos: [repo],
+    mockEngines: true,
+    env: { PG_WEB_DIST: path.join(t.dir, "dist"), CLAUDE_CONFIG_DIR: path.join(t.dir, "claude") },
+  });
+  repoId = daemon.repoIds[0]!;
+  app = createHttpApp(daemon.ctx);
 });
 
-afterEach(() => {
-  setup.ctx.store.db.close();
+afterEach(async () => {
+  await daemon.close();
   for (const c of cleanups) c();
 });
 
-const put = (g: GraphInput, baseHash?: string) =>
-  app.request(API.saveGraph(g.id, baseHash), { method: "PUT", headers: JSON_AUTH, body: JSON.stringify(g) });
+const graphs = async () => (await daemon.repo(repoId)).graphs;
 
-describe("PUT /api/graphs/:id?baseHash= (optimistic concurrency)", () => {
+const put = (g: GraphInput, baseHash?: string) =>
+  app.request(API.repo(repoId).saveGraph(g.id, baseHash), { method: "PUT", headers: JSON_AUTH, body: JSON.stringify(g) });
+
+describe("PUT /api/repos/:repoId/graphs/:id?baseHash= (optimistic concurrency)", () => {
   it("saves when baseHash matches the current file and returns the new hash", async () => {
     const first = (await (await put(graph("demo"))).json()) as SaveGraphResponse;
     const res = await put(graph("demo", "Changed"), first.hash);
@@ -64,9 +74,9 @@ describe("PUT /api/graphs/:id?baseHash= (optimistic concurrency)", () => {
     const body = (await res.json()) as { code: string; error: string; details: { currentHash: string } };
     expect(body.code).toBe(GRAPH_CONFLICT_CODE);
     expect(body.error).toMatch(/changed since it was read/);
-    expect(body.details.currentHash).toBe(setup.ctx.graphs.currentHash("demo"));
+    expect(body.details.currentHash).toBe((await graphs()).currentHash("demo"));
     // Nothing was written.
-    expect(setup.ctx.graphs.get("demo").graph.nodes[0]!.config).toMatchObject({ prompt: "Edited in the UI" });
+    expect((await graphs()).get("demo").graph.nodes[0]!.config).toMatchObject({ prompt: "Edited in the UI" });
   });
 
   it("detects changes made outside the app and deleted graphs", async () => {
@@ -77,12 +87,12 @@ describe("PUT /api/graphs/:id?baseHash= (optimistic concurrency)", () => {
     const missing = await put(graph("gone"), first.hash);
     expect(missing.status).toBe(409);
     expect(await missing.json()).toMatchObject({ code: GRAPH_CONFLICT_CODE, error: expect.stringMatching(/does not exist/) });
-    expect(setup.ctx.graphs.currentHash("gone")).toBeNull();
+    expect((await graphs()).currentHash("gone")).toBeNull();
   });
 
   it("ignores an empty baseHash and keeps saving without one", async () => {
     await put(graph("demo"));
-    const res = await app.request("/api/graphs/demo?baseHash=", { method: "PUT", headers: JSON_AUTH, body: JSON.stringify(graph("demo", "x")) });
+    const res = await app.request(`${API.repo(repoId).graph("demo")}?baseHash=`, { method: "PUT", headers: JSON_AUTH, body: JSON.stringify(graph("demo", "x")) });
     expect(res.status).toBe(200);
   });
 });

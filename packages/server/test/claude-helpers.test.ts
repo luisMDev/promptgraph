@@ -7,6 +7,7 @@ import { buildClaudeArgs, toCliPermissionMode } from "../src/runners/claude/args
 import { CompletionController } from "../src/runners/claude/completion.js";
 import { buildInitialMessage, CONTEXT_OUTPUT_LIMIT, markerInstruction } from "../src/runners/claude/context.js";
 import { buildHooksSettings, writeHooksSettings } from "../src/runners/claude/hooks-settings.js";
+import { childEnv } from "../src/config/child-env.js";
 import { installPgHook } from "../src/runners/claude/pg-hook.js";
 import { assistantMessageIds, lastAssistantText, usageFromTranscript, waitForLastAssistantText } from "../src/runners/claude/transcript.js";
 import { preTrustDirectory, TRUST_DIALOG_PATTERN } from "../src/runners/claude/trust.js";
@@ -110,18 +111,75 @@ describe("buildInitialMessage", () => {
   });
 });
 
+describe("child environment", () => {
+  it("strips PG_HOME and the Claude nesting variables, sets TERM and applies extra", () => {
+    const env = childEnv({ EXTRA: "1" }, { PG_HOME: "/secret/home", CLAUDECODE: "1", FOO_HERMETIC: "1", PATH: "/bin", PG_PORT: "1", PG_HOOK_HEADER_FILE: "/x", PG_NODE_RUN_ID: "nr-old", PG_OTHER: "1", TERM: "dumb" });
+    expect(env).toEqual({ PATH: "/bin", PG_OTHER: "1", TERM: "xterm-256color", EXTRA: "1" });
+    expect(Object.keys(env)).not.toContain("PG_HOME");
+  });
+
+  it("strips the desktop shell's PG_DESKTOP_* variables (DESIGN §4.1 item 5)", () => {
+    const env = childEnv({}, { PATH: "/bin", PG_DESKTOP_AUTO_ANSWER: "update=update", PG_DESKTOP_UPDATES: "0", PG_DESKTOP_ORIGIN: "http://x", PG_OTHER: "1" });
+    expect(env).toEqual({ PATH: "/bin", PG_OTHER: "1", TERM: "xterm-256color" });
+  });
+});
+
 describe("hooks settings and pg-hook", () => {
   it("builds one quoted command per hook event and writes idempotently", () => {
-    const s = buildHooksSettings("/opt/my dir/pg-hook");
+    const home = { pgHome: "/home/u/.promptgraph" };
+    const s = buildHooksSettings("/opt/my dir/pg-hook", home);
     expect(Object.keys(s.hooks).sort()).toEqual(["Notification", "PreToolUse", "SessionStart", "Stop"]);
     expect(s.hooks.Stop![0]!.hooks[0]!.command).toBe("'/opt/my dir/pg-hook' stop");
     expect(s.hooks.PreToolUse![0]!.hooks[0]!.command).toBe("'/opt/my dir/pg-hook' activity");
     const file = path.join(tmp(), "runs", "r1", "hooks.json");
-    expect(writeHooksSettings(file, "/x/pg-hook")).toBe(file);
+    expect(writeHooksSettings(file, "/x/pg-hook", home)).toBe(file);
     const mtime = fs.statSync(file).mtimeMs;
-    writeHooksSettings(file, "/x/pg-hook");
+    writeHooksSettings(file, "/x/pg-hook", home);
     expect(fs.statSync(file).mtimeMs).toBe(mtime);
-    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(buildHooksSettings("/x/pg-hook"));
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(buildHooksSettings("/x/pg-hook", home));
+  });
+
+  it("denies Claude's file tools the token, the state DB, the run dirs, the server records and the logs of the given PG_HOME (§7.6)", () => {
+    const pgHome = path.join(tmp(), "pg home");
+    const root = `//${pgHome.slice(1)}`;
+    const { permissions } = buildHooksSettings("/x/pg-hook", { pgHome: `${pgHome}/` });
+    expect(permissions.blockReadsOutsideWorkingDirectories).toBe(true);
+    expect(permissions.deny).toEqual([
+      `Read(${root})`,
+      `Read(${root}/token)`,
+      `Edit(${root}/token)`,
+      `Read(${root}/state.db*)`,
+      `Edit(${root}/state.db*)`,
+      `Read(${root}/runs/**)`,
+      `Edit(${root}/runs/**)`,
+      `Read(${root}/servers/**)`,
+      `Edit(${root}/servers/**)`,
+      `Read(${root}/logs/**)`,
+      `Edit(${root}/logs/**)`,
+    ]);
+    const file = path.join(pgHome, "runs", "r1", "hooks.json");
+    writeHooksSettings(file, "/x/pg-hook", { pgHome });
+    const written = JSON.parse(fs.readFileSync(file, "utf8")).permissions.deny;
+    expect(written).toContain(`Read(${root}/token)`);
+    expect(written).toContain(`Read(${root}/servers/**)`);
+    expect(written).toContain(`Read(${root}/logs/**)`);
+  });
+
+  it("writes the deny rules for a symlinked PG_HOME and for its real location", () => {
+    const base = tmp();
+    const real = path.join(base, "disk", "pg-home");
+    fs.mkdirSync(real, { recursive: true });
+    const link = path.join(base, "pg-link");
+    fs.symlinkSync(real, link);
+    const deny = buildHooksSettings("/x/pg-hook", { pgHome: link }).permissions.deny;
+    for (const home of [link, real]) {
+      expect(deny).toContain(`Read(//${home.slice(1)})`);
+      expect(deny).toContain(`Read(//${home.slice(1)}/token)`);
+      expect(deny).toContain(`Edit(//${home.slice(1)}/runs/**)`);
+    }
+    expect(deny).toHaveLength(22);
+    // No link: one set of rules.
+    expect(buildHooksSettings("/x/pg-hook", { pgHome: real }).permissions.deny).toHaveLength(11);
   });
 
   it("installs pg-hook as an executable copy", () => {

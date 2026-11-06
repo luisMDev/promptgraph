@@ -1,8 +1,8 @@
 import type { ConditionEvaluator, GraphNode, GraphNodeOf, GraphSettings, NodeConfigMap, NodeType } from "@promptgraph/shared";
-import { useEffect, useMemo } from "react";
+import { useEffect, useId, useMemo } from "react";
 import { mergeInputLabels } from "../../lib/lanes";
-import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
+import { getRepoCache } from "../../store/repo-cache";
+import { useEditor, useRepo, useView } from "../../store/view/context";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea, parseEnv } from "../common/fields";
 import { Icons } from "../common/icons";
 import { Checkbox, Field } from "../common/ui";
@@ -17,8 +17,9 @@ interface FormProps<T extends NodeType> {
 
 /** Per-type config form; edits go through the editor store (autosaved). */
 export function NodeConfigForm({ node, settings, disabled }: { node: GraphNode; settings: GraphSettings; disabled: boolean }) {
+  const view = useView();
   const patch = (p: object) =>
-    useEditorStore.getState().updateNode(node.id, (n) => ({ ...n, config: { ...n.config, ...p } }) as GraphNode);
+    view.editor.getState().updateNode(node.id, (n) => ({ ...n, config: { ...n.config, ...p } }) as GraphNode);
   switch (node.type) {
     case "prompt":
       return <PromptForm node={node} settings={settings} disabled={disabled} patch={patch} />;
@@ -50,11 +51,15 @@ function PromptForm({ node, settings, disabled, patch }: FormProps<"prompt">) {
   );
 }
 
+const EMPTY: string[] = [];
+
 function CommandForm({ node, settings, disabled, patch }: FormProps<"command">) {
-  const commands = useAppStore((s) => s.commands);
+  const view = useView();
+  const commands = useRepo((s) => s.commands);
+  const listId = useId();
   useEffect(() => {
-    void useAppStore.getState().loadCommands();
-  }, []);
+    void getRepoCache(view.repoId).getState().loadCommands();
+  }, [view.repoId]);
   const name = node.config.command.trim().split(/\s+/)[0] ?? "";
   const match = commands?.find((c) => c.name === name);
   return (
@@ -65,13 +70,13 @@ function CommandForm({ node, settings, disabled, patch }: FormProps<"command">) 
       >
         <OptionalText
           value={node.config.command}
-          list="pg-commands"
+          list={listId}
           placeholder="/code-review high"
           mono
           disabled={disabled}
           onChange={(command) => patch({ command: command ?? "" })}
         />
-        <datalist id="pg-commands">
+        <datalist id={listId}>
           {(commands ?? []).map((c) => (
             <option key={`${c.source}:${c.name}`} value={c.name}>
               {c.description ?? c.kind}
@@ -135,7 +140,7 @@ function CommitForm({ node, disabled, patch }: FormProps<"commit">) {
 }
 
 function PrForm({ node, settings, disabled, patch }: FormProps<"pr">) {
-  const branches = useAppStore((s) => s.repo?.branches ?? []);
+  const branches = useRepo((s) => s.info?.branches ?? EMPTY);
   return (
     <div className="space-y-3">
       <Field label="Title" hint="Leave title or body empty to generate it with Claude from the lane's changes; you can edit both when approving.">
@@ -183,7 +188,7 @@ function ApprovalForm({ node, disabled, patch }: FormProps<"approval">) {
 }
 
 function MergeForm({ node, disabled, patch }: FormProps<"merge">) {
-  const graph = useEditorStore((s) => s.graph);
+  const graph = useEditor((s) => s.graph);
   const inputs = useMemo(() => (graph ? mergeInputLabels(graph, node.id) : []), [graph, node.id]);
   return (
     <div className="space-y-3">

@@ -17,8 +17,8 @@ import { NODE_TYPE_META } from "../../lib/node-meta";
 import { nodeIterations, selectIterationEntry } from "../../lib/run-view";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
-import { isReadOnly, useEditorStore } from "../../store/editor-store";
-import { useRunStore } from "../../store/run-store";
+import { useEditor, useRun, useView, useViewUi } from "../../store/view/context";
+import { isReadOnly } from "../../store/view/editor-store";
 import { Select } from "../common/fields";
 import { NodeTypeIcon } from "../common/icons";
 import { Button, Checkbox, Field, Section, StatusDot } from "../common/ui";
@@ -31,18 +31,19 @@ import { ValidationList } from "./ValidationList";
 
 /** Right panel: node/edge/graph config in edit mode; NodeRun details and controls in run mode. */
 export function Inspector() {
-  const runMode = useRunStore((s) => s.selectedRunId !== null);
+  const runMode = useRun((s) => s.selectedRunId !== null);
   return <div className="h-full overflow-y-auto">{runMode ? <RunInspector /> : <EditInspector />}</div>;
 }
 
 function EditInspector() {
-  const graph = useEditorStore((s) => s.graph);
-  const validation = useEditorStore((s) => s.validation);
-  const selectedNodeIds = useEditorStore((s) => s.selectedNodeIds);
-  const selectedEdgeIds = useEditorStore((s) => s.selectedEdgeIds);
-  const nodeId = useEditorStore((s) => s.selectedNodeId);
-  const edgeId = useEditorStore((s) => s.selectedEdgeId);
-  const readOnly = useEditorStore(isReadOnly);
+  const view = useView();
+  const graph = useEditor((s) => s.graph);
+  const validation = useEditor((s) => s.validation);
+  const selectedNodeIds = useEditor((s) => s.selectedNodeIds);
+  const selectedEdgeIds = useEditor((s) => s.selectedEdgeIds);
+  const nodeId = useEditor((s) => s.selectedNodeId);
+  const edgeId = useEditor((s) => s.selectedEdgeId);
+  const readOnly = useEditor(isReadOnly);
   if (!graph) return null;
 
   const node = nodeId ? graph.nodes.find((n) => n.id === nodeId) : undefined;
@@ -57,7 +58,7 @@ function EditInspector() {
         <p className="text-sm text-foreground/85">
           {selectedNodeIds.length} nodes, {selectedEdgeIds.length} edges selected.
         </p>
-        <Button variant="danger" size="sm" disabled={readOnly} onClick={() => useEditorStore.getState().removeSelection()}>
+        <Button variant="danger" size="sm" disabled={readOnly} onClick={() => view.editor.getState().removeSelection()}>
           Delete selection
         </Button>
       </Section>
@@ -81,12 +82,13 @@ const ON_ERROR_OPTIONS: readonly { value: OnError; label: string }[] = [
 ];
 
 function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean }) {
-  const settings = useEditorStore((s) => s.graph!.settings);
-  const phase = useEditorStore((s) => s.phase);
-  const issues = useEditorStore((s) => s.validation);
+  const view = useView();
+  const settings = useEditor((s) => s.graph!.settings);
+  const phase = useEditor((s) => s.phase);
+  const issues = useEditor((s) => s.validation);
   const nodeIssues = { errors: issues.errors.filter((i) => i.nodeId === node.id), warnings: issues.warnings.filter((i) => i.nodeId === node.id) };
   const meta = NODE_TYPE_META[node.type];
-  const update = (fn: (n: GraphNode) => GraphNode) => useEditorStore.getState().updateNode(node.id, fn);
+  const update = (fn: (n: GraphNode) => GraphNode) => view.editor.getState().updateNode(node.id, fn);
 
   return (
     <div>
@@ -98,7 +100,7 @@ function NodeInspector({ node, disabled }: { node: GraphNode; disabled: boolean 
           <div className="text-sm font-semibold text-foreground">{meta.title}</div>
           <div className="truncate text-[11px] text-muted-foreground">{meta.description}</div>
         </div>
-        <Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([node.id], [])}>
+        <Button size="sm" variant="ghost" disabled={disabled} onClick={() => view.editor.getState().removeElements([node.id], [])}>
           Delete
         </Button>
       </div>
@@ -135,9 +137,6 @@ const EXHAUSTED_OPTIONS: readonly { value: LoopSpec["onExhausted"]; label: strin
 
 const PORT_LABEL: Record<SourcePort, string> = { out: "output", true: "true", false: "false", error: "error" };
 
-/** Loop settings of edges whose "Loop back-edge" box was unchecked in this session (restored on recheck). */
-const lastLoopSpec = new Map<string, LoopSpec>();
-
 /**
  * Integer 1–100 kept as local text while typing (clearing the field does not snap back to 1); valid values
  * are committed as typed, anything else is reverted on blur.
@@ -167,16 +166,19 @@ function MaxIterationsInput({ value, disabled, onChange }: { value: number; disa
 }
 
 function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean }) {
-  const graph = useEditorStore((s) => s.graph!);
-  const phase = useEditorStore((s) => s.phase);
-  const validation = useEditorStore((s) => s.validation);
+  const view = useView();
+  const graph = useEditor((s) => s.graph!);
+  const phase = useEditor((s) => s.phase);
+  const validation = useEditor((s) => s.validation);
   const edgeIssues = { errors: validation.errors.filter((i) => i.edgeId === edge.id), warnings: validation.warnings.filter((i) => i.edgeId === edge.id) };
   const label = (id: string) => nodeDisplayLabel(graph.nodes.find((n) => n.id === id) ?? { id });
-  const update = (fn: (e: GraphEdge) => GraphEdge) => useEditorStore.getState().updateEdge(edge.id, fn);
+  const update = (fn: (e: GraphEdge) => GraphEdge) => view.editor.getState().updateEdge(edge.id, fn);
+  // Loop settings of this edge from before its "Loop back-edge" box was unchecked (restored on recheck).
+  const lastLoopSpec = useViewUi((s) => s.lastLoopSpec);
   const errorPort = edge.sourcePort === "error";
   return (
     <>
-      <Section title={edge.loop ? "Loop edge" : "Edge"} actions={<Button size="sm" variant="ghost" disabled={disabled} onClick={() => useEditorStore.getState().removeElements([], [edge.id])}>Delete</Button>}>
+      <Section title={edge.loop ? "Loop edge" : "Edge"} actions={<Button size="sm" variant="ghost" disabled={disabled} onClick={() => view.editor.getState().removeElements([], [edge.id])}>Delete</Button>}>
         <p className="text-sm text-foreground/85">
           {label(edge.source)} <span className={errorPort ? "text-red-600" : "text-muted-foreground"}>({PORT_LABEL[edge.sourcePort]})</span> → {label(edge.target)}
         </p>
@@ -207,8 +209,8 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
             label="Loop back-edge"
             onChange={(on) => {
               // Unchecking and rechecking restores the settings the user had chosen.
-              if (!on && edge.loop) lastLoopSpec.set(edge.id, edge.loop);
-              update((e) => setEdgeLoop(e, on ? { ...(lastLoopSpec.get(edge.id) ?? DEFAULT_LOOP) } : null));
+              if (!on && edge.loop) view.ui.getState().rememberLoopSpec(edge.id, edge.loop);
+              update((e) => setEdgeLoop(e, on ? { ...(lastLoopSpec[edge.id] ?? DEFAULT_LOOP) } : null));
             }}
           />
           <p className="text-[11px] leading-snug text-muted-foreground">
@@ -252,10 +254,10 @@ function EdgeInspector({ edge, disabled }: { edge: GraphEdge; disabled: boolean 
 }
 
 function RunInspector() {
-  const detail = useRunStore((s) => s.detail);
-  const selectedNodeId = useRunStore((s) => s.selectedNodeId);
-  const selectedIteration = useRunStore((s) => s.selectedIteration);
-  const lanes = useRunStore((s) => s.lanes);
+  const detail = useRun((s) => s.detail);
+  const selectedNodeId = useRun((s) => s.selectedNodeId);
+  const selectedIteration = useRun((s) => s.selectedIteration);
+  const lanes = useRun((s) => s.lanes);
   if (!detail) return null;
   const node = selectedNodeId ? detail.run.graphSnapshot.nodes.find((n) => n.id === selectedNodeId) : undefined;
   if (node) {
@@ -278,7 +280,7 @@ function RunInspector() {
 }
 
 function RunOverview() {
-  const detail = useRunStore((s) => s.detail)!;
+  const detail = useRun((s) => s.detail)!;
   const { run } = detail;
   const style = RUN_STATUS_STYLE[run.status];
   const now = useNow(!isFinalRunStatus(run.status));

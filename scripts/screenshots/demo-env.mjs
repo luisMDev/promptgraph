@@ -124,24 +124,56 @@ export function removeCredentials(claudeConfig) {
   fs.rmSync(path.join(claudeConfig, ".credentials.json"), { force: true });
 }
 
+/**
+ * Runs `promptgraph <repo> --foreground --no-open --port <port>` (the daemon in a child process, with the
+ * isolated PG_HOME of `env`), waits for `Open: http://127.0.0.1:<port>/r/<repoId>` and reads the token
+ * from `<PG_HOME>/token` (sent only as a Bearer header, never logged or put in a URL). `loginUrl()`
+ * mints a one-time login URL for `/r/<repoId>` (over Bearer, valid 30 s): call it right before
+ * `page.goto`, never ahead of slow setup steps.
+ */
 export async function startServer(repo, env, port) {
-  const child = spawn(process.execPath, [SERVER_CLI, repo, "--port", String(port), "--no-open"], {
-    env,
+  const child = spawn(process.execPath, [SERVER_CLI, repo, "--foreground", "--no-open", "--port", String(port)], {
+    env: { ...env, PG_DAEMON_SHELL_ENV: "0" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
   child.stdout.on("data", (d) => (output += d));
   child.stderr.on("data", (d) => (output += d));
-  const url = await until(
+  const match = await until(
     "the server URL",
     () => {
       if (child.exitCode !== null) throw new Error(`Server exited (${child.exitCode}):\n${output}`);
-      return /Open: (http:\/\/127\.0\.0\.1:\d+\/\?t=\S+)/.exec(output)?.[1];
+      return /Open: (http:\/\/127\.0\.0\.1:(\d+)\/r\/(\S+))/.exec(output);
     },
     30_000,
   );
-  const token = new URL(url).searchParams.get("t");
-  return { child, url, token, base: `http://127.0.0.1:${port}`, output: () => output };
+  const [, , boundPort, repoId] = match;
+  const token = fs.readFileSync(path.join(env.PG_HOME, "token"), "utf8").trim();
+  const base = `http://127.0.0.1:${boundPort}`;
+  const loginUrl = (next = `/r/${encodeURIComponent(repoId)}`) => mintLoginUrl(base, token, next);
+  return {
+    child,
+    loginUrl,
+    token,
+    repoId,
+    base,
+    output: () => output,
+  };
+}
+
+/**
+ * One-time login URL (DESIGN §14): `POST /api/daemon/login-codes` with the Bearer token, then
+ * `<base>/login?code=<code>&next=<next>`, which signs a browser in once (302 + the pg_session cookie).
+ */
+export async function mintLoginUrl(base, token, next) {
+  const res = await fetch(`${base}/api/daemon/login-codes`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(`POST /api/daemon/login-codes → ${res.status}`);
+  const { code } = await res.json();
+  return `${base}/login?code=${encodeURIComponent(code)}&next=${encodeURIComponent(next)}`;
 }
 
 export async function stopServer(server) {
@@ -152,15 +184,21 @@ export async function stopServer(server) {
   if (server.child.exitCode === null) server.child.kill("SIGKILL");
 }
 
+/**
+ * REST client of the demo daemon (Bearer token). A route starting with `/api/` is used as is (daemon
+ * routes such as `/api/settings`); any other route is relative to the demo repository,
+ * `/api/repos/<repoId>` (`api("GET", "/runs/<id>")`).
+ */
 export function apiClient(server) {
   return async function api(method, route, body) {
-    const res = await fetch(`${server.base}${route}`, {
+    const url = route.startsWith("/api/") ? route : `/api/repos/${encodeURIComponent(server.repoId)}${route}`;
+    const res = await fetch(`${server.base}${url}`, {
       method,
       headers: { authorization: `Bearer ${server.token}`, ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`${method} ${route} → ${res.status}: ${text}`);
+    if (!res.ok) throw new Error(`${method} ${url} → ${res.status}: ${text}`);
     return text ? JSON.parse(text) : null;
   };
 }

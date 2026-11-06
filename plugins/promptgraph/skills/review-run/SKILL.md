@@ -7,8 +7,8 @@ description: Explain what happened in a past or current promptgraph run, coverin
 
 The tools come from the `promptgraph` MCP server.
 
-1. Call `server_status` (and `start_server` if needed: run history stays in `~/.promptgraph/state.db`
-   after a restart).
+1. Call `server_status` (and `start_server` if the daemon is not running: run history stays in
+   `~/.promptgraph/state.db` after the daemon stops).
 2. Find the run. Use the run id if the user gave one. Otherwise call `list_runs` (filter by
    `graphId` if a graph was named) and take the newest run, or ask when it is unclear which one they
    mean.

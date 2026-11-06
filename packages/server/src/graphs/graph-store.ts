@@ -50,6 +50,22 @@ export function serializeGraph(graph: Graph): string {
 }
 
 const WATCH_DEBOUNCE_MS = 100;
+/** fs.watch failures caused by a resource limit (inotify watches/instances, file descriptors). */
+const WATCH_LIMIT_CODES = new Set(["ENOSPC", "EMFILE"]);
+
+/**
+ * A graph-directory watcher. `error` is set when the watcher could not start (an inotify limit) or
+ * stopped on an `error` event; the store keeps working without live reloads of external edits.
+ */
+export interface GraphWatch {
+  stop(): void;
+  readonly error: Error | null;
+}
+
+export interface GraphWatchOptions {
+  /** Called once when the watcher fails (start or `error` event). Default: logged. */
+  onError?: (err: Error) => void;
+}
 
 /**
  * Graph files at `<repo>/.promptgraph/graphs/<id>.json` (§6, §11.1). Writes are atomic
@@ -65,6 +81,8 @@ export class GraphStore {
   constructor(
     readonly repoPath: string,
     private readonly bus: EventBus,
+    /** Tags graphs:changed (RepoRef.id). */
+    readonly repoId: string,
   ) {
     this.dir = graphsDir(repoPath);
   }
@@ -145,7 +163,7 @@ export class GraphStore {
     fs.renameSync(tmp, file);
     const hash = hashContent(content);
     this.ownWrites.set(parsed.id, hash);
-    this.bus.emit("graphs:changed", { graphId: parsed.id });
+    this.bus.emit("graphs:changed", { repoId: this.repoId, graphId: parsed.id });
     return { graph: parsed, hash, updatedAt: fs.statSync(file).mtimeMs };
   }
 
@@ -155,12 +173,18 @@ export class GraphStore {
     this.writeGuard?.(id);
     fs.rmSync(this.fileOf(id), { force: true });
     this.ownWrites.set(id, null);
-    this.bus.emit("graphs:changed", { graphId: id });
+    this.bus.emit("graphs:changed", { repoId: this.repoId, graphId: id });
   }
 
-  /** fs.watch on the dir; emits graphs:changed for files changed outside the app. Returns a stop function. */
-  watch(): () => void {
+  /**
+   * fs.watch on the dir; emits graphs:changed for files changed outside the app. Never throws for a
+   * watcher failure (DESIGN §4.1 item 8): a synchronous ENOSPC/EMFILE at start is returned as `error`,
+   * and an `error` event later stops the watcher and sets `error`; both are reported through onError.
+   */
+  watch(opts: GraphWatchOptions = {}): GraphWatch {
     this.ensureDir();
+    const report =
+      opts.onError ?? ((err: Error) => console.error(`promptgraph: graph watcher for ${this.repoPath} stopped: ${err.message}`));
     const timers = new Map<string, NodeJS.Timeout>();
     const check = (id: string) => {
       timers.delete(id);
@@ -168,21 +192,41 @@ export class GraphStore {
       const hash = raw ? hashContent(raw.content) : null;
       if (this.ownWrites.has(id) && this.ownWrites.get(id) === hash) return;
       this.ownWrites.set(id, hash);
-      this.bus.emit("graphs:changed", { graphId: id });
+      this.bus.emit("graphs:changed", { repoId: this.repoId, graphId: id });
     };
-    const watcher = fs.watch(this.dir, (_event, filename) => {
-      const name = filename?.toString();
-      if (!name?.endsWith(".json")) return;
-      const id = name.slice(0, -".json".length);
-      if (!GRAPH_ID_PATTERN.test(id)) return;
-      clearTimeout(timers.get(id));
-      timers.set(id, setTimeout(() => check(id), WATCH_DEBOUNCE_MS));
+    let watcher: fs.FSWatcher | null = null;
+    const state: { stop(): void; error: Error | null } = {
+      error: null,
+      stop: () => {
+        watcher?.close();
+        watcher = null;
+        for (const t of timers.values()) clearTimeout(t);
+        timers.clear();
+      },
+    };
+    try {
+      watcher = fs.watch(this.dir, (_event, filename) => {
+        const name = filename?.toString();
+        if (!name?.endsWith(".json")) return;
+        const id = name.slice(0, -".json".length);
+        if (!GRAPH_ID_PATTERN.test(id)) return;
+        clearTimeout(timers.get(id));
+        timers.set(id, setTimeout(() => check(id), WATCH_DEBOUNCE_MS));
+      });
+    } catch (err) {
+      if (!WATCH_LIMIT_CODES.has((err as NodeJS.ErrnoException).code ?? "")) throw err;
+      state.error = err as Error;
+      report(state.error);
+      return state;
+    }
+    // Without a listener an FSWatcher `error` event would throw and take the whole process down.
+    watcher.on("error", (err) => {
+      if (state.error) return;
+      state.error = err;
+      state.stop();
+      report(err);
     });
-    return () => {
-      watcher.close();
-      for (const t of timers.values()) clearTimeout(t);
-      timers.clear();
-    };
+    return state;
   }
 
   private fileOf(id: string): string {

@@ -1,11 +1,10 @@
 import type { ClientMessage, Graph, SaveGraphResponse } from "@promptgraph/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatSessionOf, linearGraph, runDetailOf } from "../test-fixtures";
 import { currentChatContext, sendChatMessage } from "./chat-actions";
-import { setChatDeps, useChatStore } from "./chat-store";
-import { setEditorPersistence, useEditorStore } from "./editor-store";
-import { setRunStoreDeps, useRunStore } from "./run-store";
-import { useUiStore } from "./ui-store";
+import { clearChatStores, getChatStore, setChatDeps } from "./chat-store";
+import { useToastStore } from "./toast-store";
+import { createTestView, TEST_REPO_ID, type TestView } from "./view/test-view";
 
 describe("chat actions", () => {
   const events: string[] = [];
@@ -14,16 +13,19 @@ describe("chat actions", () => {
     events.push("save");
     return { graph, hash: "h1" };
   });
+  let view: TestView;
 
   beforeEach(async () => {
     events.length = 0;
     sent.length = 0;
     save.mockClear();
-    setEditorPersistence({ load: async () => ({ graph: linearGraph(), hash: "h0", modifiedOutside: false, activeRunId: null }), save });
-    setRunStoreDeps({ subscribe: () => undefined, unsubscribe: () => undefined, fetchRun: async () => runDetailOf(linearGraph(), []) });
-    await useRunStore.getState().selectRun(null);
-    useEditorStore.getState().closeGraph();
-    await useEditorStore.getState().openGraph("g1");
+    view = createTestView({
+      graphId: "g1",
+      persistence: { load: async () => ({ graph: linearGraph(), hash: "h0", modifiedOutside: false, activeRunId: null }), save },
+      runDeps: { fetchRun: async () => runDetailOf(linearGraph(), []) },
+    });
+    await view.editor.getState().load();
+    clearChatStores();
     setChatDeps({
       createSession: async () => {
         events.push("create");
@@ -35,40 +37,45 @@ describe("chat actions", () => {
         return true;
       },
     });
-    useChatStore.setState({ sessions: [], sessionsLoaded: true, activeSessionId: null, views: {}, error: null });
+    getChatStore(TEST_REPO_ID).setState({ sessionsLoaded: true });
+  });
+
+  afterEach(() => {
+    clearChatStores();
   });
 
   it("describes the graph on screen and its selection", () => {
-    useEditorStore.getState().setSelection(["a", "b"], ["e1"]);
-    expect(currentChatContext()).toEqual({ graphId: "g1", graphName: "Graph 1", selectedNodeIds: ["a", "b"], selectedEdgeIds: ["e1"], runId: null, readOnly: false });
-    useEditorStore.getState().setActiveRunId("r9");
-    expect(currentChatContext()).toMatchObject({ runId: "r9", readOnly: true });
+    view.editor.getState().setSelection(["a", "b"], ["e1"]);
+    expect(currentChatContext(view)).toEqual({ graphId: "g1", graphName: "Graph 1", selectedNodeIds: ["a", "b"], selectedEdgeIds: ["e1"], runId: null, readOnly: false });
+    view.editor.getState().setActiveRunId("r9");
+    expect(currentChatContext(view)).toMatchObject({ runId: "r9", readOnly: true });
   });
 
   it("uses the inspected node of a shown run as the selection", () => {
-    useRunStore.getState().showRun(runDetailOf(linearGraph(), [], "r1"));
-    useRunStore.getState().selectNode("b");
-    expect(currentChatContext()).toMatchObject({ graphId: "g1", selectedNodeIds: ["b"], selectedEdgeIds: [], runId: "r1", readOnly: true });
+    view.run.getState().showRun(runDetailOf(linearGraph(), [], "r1"));
+    view.run.getState().selectNode("b");
+    expect(currentChatContext(view)).toMatchObject({ graphId: "g1", selectedNodeIds: ["b"], selectedEdgeIds: [], runId: "r1", readOnly: true });
   });
 
   it("reports no graph when none is open", () => {
-    useEditorStore.getState().closeGraph();
-    expect(currentChatContext()).toEqual({ graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: null, readOnly: true });
+    const empty = createTestView({ graphId: null });
+    expect(currentChatContext(empty)).toEqual({ graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: null, readOnly: true });
   });
 
-  it("flushes the pending autosave, creates a session when needed and sends", async () => {
-    useEditorStore.getState().rename("Edited");
-    expect(await sendChatMessage("  add a test step  ")).toBe(true);
+  it("flushes the pending autosave, creates a session in the view's repository when needed and sends", async () => {
+    view.editor.getState().rename("Edited");
+    expect(await sendChatMessage(view, "  add a test step  ")).toBe(true);
     expect(events).toEqual(["save", "create", "send"]);
-    expect(sent[0]).toMatchObject({ type: "chat:send", sessionId: "s1", text: "add a test step", context: { graphId: "g1", graphName: "Edited" } });
-    expect(await sendChatMessage("   ")).toBe(false);
+    expect(sent[0]).toMatchObject({ type: "chat:send", repoId: TEST_REPO_ID, sessionId: "s1", text: "add a test step", context: { graphId: "g1", graphName: "Edited" } });
+    expect(getChatStore(TEST_REPO_ID).getState().activeSessionId).toBe("s1");
+    expect(await sendChatMessage(view, "   ")).toBe(false);
   });
 
   it("does not send when the graph on screen could not be saved", async () => {
     save.mockRejectedValueOnce(new Error("disk full"));
-    useEditorStore.getState().rename("Edited");
-    expect(await sendChatMessage("remove this node")).toBe(false);
+    view.editor.getState().rename("Edited");
+    expect(await sendChatMessage(view, "remove this node")).toBe(false);
     expect(events).not.toContain("send");
-    expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ kind: "error", message: expect.stringMatching(/not saved \(Save failed: disk full\)/) });
+    expect(useToastStore.getState().toasts.at(-1)).toMatchObject({ kind: "error", message: expect.stringMatching(/not saved \(Save failed: disk full\)/) });
   });
 });

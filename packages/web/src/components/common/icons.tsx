@@ -127,6 +127,26 @@ export const Icons = {
       <path d="m6 9 6 6 6-6" />
     </Svg>
   ),
+  chevronRight: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="m9 6 6 6-6 6" />
+    </Svg>
+  ),
+  arrowUp: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </Svg>
+  ),
+  folder: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </Svg>
+  ),
+  home: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" />
+    </Svg>
+  ),
   terminal: (p: IconProps) => (
     <Svg {...p}>
       <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -211,6 +231,23 @@ export const Icons = {
   fit: (p: IconProps) => (
     <Svg {...p}>
       <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />
+    </Svg>
+  ),
+  /** Window controls of the desktop title bar (DESIGN §20.2). */
+  minimize: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M5 12h14" />
+    </Svg>
+  ),
+  maximize: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="5" y="5" width="14" height="14" rx="1" />
+    </Svg>
+  ),
+  restore: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="4" y="8" width="12" height="12" rx="1" />
+      <path d="M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3" />
     </Svg>
   ),
 } as const;

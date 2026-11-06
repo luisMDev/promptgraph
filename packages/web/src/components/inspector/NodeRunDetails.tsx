@@ -16,9 +16,8 @@ import { NODE_TYPE_META, configPreview } from "../../lib/node-meta";
 import type { IterationEntry } from "../../lib/run-view";
 import { nodeRunStyle } from "../../lib/status-style";
 import { useNow } from "../../lib/use-now";
-import { nodeControl, openNodeTerminal, openSetupTerminal, reopenSession } from "../../store/app-actions";
-import { useRunStore } from "../../store/run-store";
-import { useUiStore } from "../../store/ui-store";
+import { nodeControl, openNodeTerminal, openSetupTerminal, reopenSession } from "../../store/view/actions";
+import { useRun, useView } from "../../store/view/context";
 import { GraceCountdown } from "../common/GraceCountdown";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
@@ -77,7 +76,7 @@ export function NodeRunDetails({
 function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nodeRun: NodeRun; lane: Lane | null; attempts: number }) {
   const style = nodeRunStyle(nodeRun);
   const mergeShell = node.type === "merge" && nodeRun.waitingReason?.kind === "merge_conflict";
-  const snapshot = useRunStore((s) => s.detail?.run.graphSnapshot);
+  const snapshot = useRun((s) => s.detail?.run.graphSnapshot);
   const mergeOrder = node.type === "merge" && snapshot ? mergeInputLabels(snapshot, node.id) : [];
   const now = useNow(isActiveNodeStatus(nodeRun.status));
   return (
@@ -129,6 +128,7 @@ function StatusSection({ node, nodeRun, lane, attempts }: { node: GraphNode; nod
 }
 
 function Controls({ node, nodeRun, label, runFinal, historical }: { node: GraphNode; nodeRun: NodeRun; label: string; runFinal: boolean; historical: boolean }) {
+  const view = useView();
   const s = nodeRun.status;
   // A previous iteration is history: only its terminal log and session can be opened.
   const live = !historical;
@@ -151,47 +151,47 @@ function Controls({ node, nodeRun, label, runFinal, historical }: { node: GraphN
     <Section title="Controls">
       <div className="flex flex-wrap gap-1.5">
         {canDone && (
-          <Button size="sm" variant="primary" onClick={() => void nodeControl(id, "done")} title="Mark the node as succeeded">
+          <Button size="sm" variant="primary" onClick={() => void nodeControl(view, id, "done")} title="Mark the node as succeeded">
             Done
           </Button>
         )}
         {active && (
-          <Button size="sm" variant="danger" onClick={() => void nodeControl(id, "fail")} title="Mark the node as failed">
+          <Button size="sm" variant="danger" onClick={() => void nodeControl(view, id, "fail")} title="Mark the node as failed">
             Fail
           </Button>
         )}
         {canHold && (
-          <Button size="sm" onClick={() => void nodeControl(id, nodeRun.hold ? "release" : "hold")} title="Hold: the current turn behaves as manual completion">
+          <Button size="sm" onClick={() => void nodeControl(view, id, nodeRun.hold ? "release" : "hold")} title="Hold: the current turn behaves as manual completion">
             {nodeRun.hold ? "Release hold" : "Hold"}
           </Button>
         )}
         {canRetry && (
-          <Button size="sm" onClick={() => void nodeControl(id, "retry")}>
+          <Button size="sm" onClick={() => void nodeControl(view, id, "retry")}>
             Retry
           </Button>
         )}
         {canSkip && (
-          <Button size="sm" onClick={() => void nodeControl(id, "skip")} title="Treat as succeeded and continue">
+          <Button size="sm" onClick={() => void nodeControl(view, id, "skip")} title="Treat as succeeded and continue">
             Skip
           </Button>
         )}
         {canReview && (
-          <Button size="sm" variant="primary" onClick={() => useUiStore.getState().openApproval(id)}>
+          <Button size="sm" variant="primary" onClick={() => view.ui.getState().openApproval(id)}>
             Review…
           </Button>
         )}
         {nodeRun.ptyId && (
-          <Button size="sm" variant="ghost" onClick={() => openNodeTerminal(nodeRun, mergeShell ? `${label} (merge shell)` : label)}>
+          <Button size="sm" variant="ghost" onClick={() => openNodeTerminal(view, nodeRun, mergeShell ? `${label} (merge shell)` : label)}>
             <Icons.terminal /> {mergeShell ? "Merge shell" : "Terminal"}
           </Button>
         )}
         {nodeRun.laneSetup && (
-          <Button size="sm" variant="ghost" onClick={() => openSetupTerminal(nodeRun, label)} title="Output of the graph's workspace setup in this new worktree">
+          <Button size="sm" variant="ghost" onClick={() => openSetupTerminal(view, nodeRun, label)} title="Output of the graph's workspace setup in this new worktree">
             <Icons.terminal /> Setup log
           </Button>
         )}
         {canReopen && (
-          <Button size="sm" variant="ghost" onClick={() => void reopenSession(id, label)} title="claude --resume in a new terminal (not part of the run)">
+          <Button size="sm" variant="ghost" onClick={() => void reopenSession(view, id, label)} title="claude --resume in a new terminal (not part of the run)">
             Reopen session
           </Button>
         )}
@@ -202,11 +202,12 @@ function Controls({ node, nodeRun, label, runFinal, historical }: { node: GraphN
 
 /** §9.7: what this node changed (start → end snapshot, or → the live worktree while it runs). */
 function ChangesSection({ nodeRun, label }: { nodeRun: NodeRun; label: string }) {
+  const view = useView();
   return (
     <Section title="Changes">
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground">{nodeRun.snapshotEnd ? "What this step changed in its worktree." : "Changes so far in this step."}</span>
-        <Button size="sm" className="ml-auto shrink-0" onClick={() => useUiStore.getState().openDiff({ kind: "node", nodeRunId: nodeRun.id, title: `Changes · ${label}` })}>
+        <Button size="sm" className="ml-auto shrink-0" onClick={() => view.ui.getState().openDiff({ kind: "node", nodeRunId: nodeRun.id, title: `Changes · ${label}` })}>
           View diff
         </Button>
       </div>
@@ -266,15 +267,16 @@ export function UsageSection({ usage, title = "Usage" }: { usage: NonNullable<No
 
 /** Iteration selector (§15.4): browse previous loop iterations of a node (output, terminal log, timings). */
 function IterationSelector({ iterations, shown, historical, label }: { iterations: readonly IterationEntry[]; shown: number; historical: boolean; label: string }) {
+  const view = useView();
   const latest = iterations[iterations.length - 1]!.iteration;
   const select = (iteration: number | null) => {
-    useRunStore.getState().selectIteration(iteration);
+    view.run.getState().selectIteration(iteration);
     // The drawer follows the selection when it shows this node's terminal (one of its iterations).
-    const ui = useUiStore.getState();
+    const ui = view.ui.getState();
     const activeRunId = ui.activeTerminal ? ui.tabMeta[ui.activeTerminal]?.nodeRunId : null;
     const target = iterations.find((e) => e.iteration === (iteration ?? latest))?.nodeRun;
     if (ui.drawerOpen && target?.ptyId && iterations.some((e) => e.nodeRun.id === activeRunId)) {
-      openNodeTerminal(target, `${label} #${target.iteration + 1}`);
+      openNodeTerminal(view, target, `${label} #${target.iteration + 1}`);
     }
   };
   return (

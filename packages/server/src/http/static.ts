@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Hono } from "hono";
+import type { Env, Hono } from "hono";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -23,11 +23,14 @@ const CONTENT_TYPES: Record<string, string> = {
 const NOT_BUILT_PAGE = `<!doctype html><meta charset="utf-8"><title>promptgraph</title>
 <p>The web UI has not been built. Run <code>pnpm build</code> (or <code>pnpm --filter @promptgraph/web dev</code> for development).</p>`;
 
-/** Paths owned by the API; never answered with the SPA. */
-const RESERVED = /^\/(api|hooks|ws)(\/|$)/;
+/** Paths owned by the daemon (API, hooks, WebSocket, sign-in); never answered with the SPA. */
+const RESERVED = /^\/(api|hooks|ws|login)(\/|$)/;
 
-/** Serves webDistDir() assets; unknown non-API GET paths fall back to index.html. Missing dist → 503 hint page. */
-export function registerStatic(app: Hono, distDir: string): void {
+/**
+ * Serves webDistDir() assets; unknown non-API GET paths fall back to index.html (`Cache-Control:
+ * no-store`). Missing dist → 503 hint page.
+ */
+export function registerStatic<E extends Env>(app: Hono<E>, distDir: string): void {
   const root = path.resolve(distDir);
   app.on(["GET", "HEAD"], "*", async (c, next) => {
     const pathname = safeDecode(new URL(c.req.url).pathname);
@@ -40,11 +43,12 @@ export function registerStatic(app: Hono, distDir: string): void {
     const inside = file === root || file.startsWith(root + path.sep);
     if (inside && isFile(file)) {
       const immutable = pathname.startsWith("/assets/");
-      return serveFile(file, immutable ? "public, max-age=31536000, immutable" : "no-cache");
+      return serveFile(file, immutable ? "public, max-age=31536000, immutable" : file === index ? "no-store" : "no-cache");
     }
     // Missing files with an extension are real 404s; anything else is a client-side route.
     if (path.extname(pathname)) return c.text("Not found", 404);
-    return serveFile(index, "no-cache");
+    // no-store: a page from another build must never be reused (DESIGN §13.5); tokenAuth renews the cookie.
+    return serveFile(index, "no-store");
   });
 }
 

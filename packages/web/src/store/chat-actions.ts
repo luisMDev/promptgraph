@@ -1,15 +1,17 @@
 import type { ChatContext } from "@promptgraph/shared";
-import { lastChatSessionId, useChatStore } from "./chat-store";
-import { isReadOnly, useEditorStore } from "./editor-store";
-import { useRunStore } from "./run-store";
-import { useUiStore } from "./ui-store";
+import { getChatStore, lastChatSessionId } from "./chat-store";
+import { toast } from "./toast-store";
+import type { View } from "./view/context";
+import { isReadOnly } from "./view/editor-store";
 
-/** Chat workflows that read other stores: the per-message context and sending (DESIGN §20.3). */
+/** Chat workflows that read a view's stores: the per-message context and sending (DESIGN §21.3). */
 
-/** What the user is looking at: the graph on screen, its selection and the run shown or active. */
-export function currentChatContext(): ChatContext {
-  const editor = useEditorStore.getState();
-  const runs = useRunStore.getState();
+export type ChatView = Pick<View, "repoId" | "editor" | "run" | "ui">;
+
+/** What the user is looking at in this view: the graph on screen, its selection and the run shown or active. */
+export function currentChatContext(view: ChatView): ChatContext {
+  const editor = view.editor.getState();
+  const runs = view.run.getState();
   const runMode = runs.selectedRunId !== null;
   const graph = editor.graph;
   if (!graph) return { graphId: null, selectedNodeIds: [], selectedEdgeIds: [], runId: runs.selectedRunId, readOnly: true };
@@ -24,45 +26,47 @@ export function currentChatContext(): ChatContext {
   };
 }
 
-/** Opens the panel; the first time it loads the session list and shows the last used chat. */
-export async function openChatPanel(): Promise<void> {
-  useUiStore.getState().setChatOpen(true);
-  const chat = useChatStore.getState();
+/** Opens the view's panel; the first time it loads the repository's sessions and shows the last used chat. */
+export async function openChatPanel(view: ChatView): Promise<void> {
+  view.ui.getState().setChatOpen(true);
+  const store = getChatStore(view.repoId);
+  const chat = store.getState();
   if (chat.sessionsLoaded) return;
   await chat.loadSessions();
-  const { sessions, activeSessionId } = useChatStore.getState();
+  const { sessions, activeSessionId } = store.getState();
   if (activeSessionId) return;
-  const last = lastChatSessionId();
+  const last = lastChatSessionId(view.repoId);
   const id = sessions.find((s) => s.id === last)?.id ?? sessions[0]?.id ?? null;
-  if (id) await useChatStore.getState().selectSession(id);
+  if (id) await store.getState().selectSession(id);
 }
 
-export function toggleChatPanel(): void {
-  if (useUiStore.getState().chatOpen) useUiStore.getState().setChatOpen(false);
-  else void openChatPanel();
+export function toggleChatPanel(view: ChatView): void {
+  if (view.ui.getState().chatOpen) view.ui.getState().setChatOpen(false);
+  else void openChatPanel(view);
 }
 
 /**
- * Sends a user message on the shown chat (creating one when none is shown). The pending autosave is written first,
- * so Claude reads the graph the user sees. Returns false when nothing was sent.
+ * Sends a user message on the shown chat of the view's repository (creating one when none is shown). The pending
+ * autosave is written first, so Claude reads the graph the user sees. Returns false when nothing was sent.
  */
-export async function sendChatMessage(text: string): Promise<boolean> {
+export async function sendChatMessage(view: ChatView, text: string): Promise<boolean> {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  await useEditorStore.getState().flushSave();
+  await view.editor.getState().flushSave();
   // Claude would read (and patch) the file on disk, not the graph on screen.
-  const editor = useEditorStore.getState();
+  const editor = view.editor.getState();
   if (editor.graph && !isReadOnly(editor) && (editor.dirty || editor.externalChange)) {
     const why = editor.externalChange
       ? "the graph changed outside the editor: reload it or keep your changes first."
       : `your latest graph changes are not saved${editor.saveError ? ` (${editor.saveError})` : ""}.`;
-    useUiStore.getState().toast("error", `Message not sent: ${why}`);
+    toast("error", `Message not sent: ${why}`);
     return false;
   }
-  let sessionId = useChatStore.getState().activeSessionId;
-  if (!sessionId) sessionId = await useChatStore.getState().newSession();
+  const store = getChatStore(view.repoId);
+  let sessionId = store.getState().activeSessionId;
+  if (!sessionId) sessionId = await store.getState().newSession();
   if (!sessionId) return false;
-  const sent = useChatStore.getState().send(sessionId, trimmed, currentChatContext());
-  if (!sent) useUiStore.getState().toast("error", "Not connected to the promptgraph server: the message was not sent.");
+  const sent = store.getState().send(sessionId, trimmed, currentChatContext(view));
+  if (!sent) toast("error", "Not connected to the promptgraph daemon: the message was not sent.");
   return sent;
 }

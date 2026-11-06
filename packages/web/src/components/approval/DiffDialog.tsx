@@ -1,7 +1,8 @@
 import type { DiffResponse, DiffScope } from "@promptgraph/shared";
 import { useEffect, useState } from "react";
-import { api, errorMessage } from "../../api/rest";
-import { useUiStore, type DiffTarget } from "../../store/ui-store";
+import { errorMessage } from "../../api/rest";
+import { useView } from "../../store/view/context";
+import type { DiffTarget } from "../../store/view/ui-store";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Modal } from "../common/ui";
@@ -12,7 +13,8 @@ import { DiffView } from "./DiffView";
  * whole lane, or a lane of a run (from the report). Loaded lazily (with diff2html) by App.
  */
 export function DiffDialog({ target }: { target: DiffTarget }) {
-  const close = () => useUiStore.getState().openDiff(null);
+  const view = useView();
+  const close = () => view.ui.getState().openDiff(null);
   const [scope, setScope] = useState<DiffScope>("node");
   const [diff, setDiff] = useState<DiffResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +23,7 @@ export function DiffDialog({ target }: { target: DiffTarget }) {
     let cancelled = false;
     setDiff(null);
     setError(null);
-    const load = target.kind === "node" ? api.diff(target.nodeRunId, scope) : api.laneDiff(target.runId, target.laneId);
+    const load = target.kind === "node" ? view.api.diff(target.nodeRunId, scope) : view.api.laneDiff(target.runId, target.laneId);
     load.then(
       (d) => !cancelled && setDiff(d),
       (err: unknown) => !cancelled && setError(errorMessage(err)),
@@ -29,7 +31,7 @@ export function DiffDialog({ target }: { target: DiffTarget }) {
     return () => {
       cancelled = true;
     };
-  }, [target, scope]);
+  }, [target, scope, view.api]);
 
   const nodeScope = target.kind === "node" && scope === "node";
   return (

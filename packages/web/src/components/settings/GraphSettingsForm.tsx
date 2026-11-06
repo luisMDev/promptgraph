@@ -2,8 +2,8 @@ import { Separator } from "@/components/ui/separator";
 import { resolveBranchPrefix, type GraphSettings, type KeepWorktrees } from "@promptgraph/shared";
 import { CompletionEditor, EFFORT_OPTIONS, InheritSelect, MODEL_SUGGESTIONS, PERMISSION_OPTIONS } from "../inspector/ClaudeOptions";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea } from "../common/fields";
-import { useAppStore } from "../../store/app-store";
-import { useEditorStore } from "../../store/editor-store";
+import { useId } from "react";
+import { useRepo, useView } from "../../store/view/context";
 import { Checkbox, Field } from "../common/ui";
 
 const KEEP_OPTIONS: readonly { value: KeepWorktrees; label: string }[] = [
@@ -12,12 +12,16 @@ const KEEP_OPTIONS: readonly { value: KeepWorktrees; label: string }[] = [
   { value: "never", label: "Always remove" },
 ];
 
+const EMPTY: string[] = [];
+
 /** Graph settings (§6): base branch, branch prefix, parallelism, workspace setup, Claude defaults, cleanup. */
 export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: string; settings: GraphSettings; disabled: boolean }) {
-  const branches = useAppStore((s) => s.repo?.branches ?? []);
-  const update = (patch: Partial<GraphSettings>) => useEditorStore.getState().updateSettings((s) => ({ ...s, ...patch }));
+  const view = useView();
+  const branches = useRepo((s) => s.info?.branches ?? EMPTY);
+  const modelsListId = useId();
+  const update = (patch: Partial<GraphSettings>) => view.editor.getState().updateSettings((s) => ({ ...s, ...patch }));
   const updateDefaults = (patch: Partial<GraphSettings["defaults"]>) =>
-    useEditorStore.getState().updateSettings((s) => ({ ...s, defaults: { ...s.defaults, ...patch } }));
+    view.editor.getState().updateSettings((s) => ({ ...s, defaults: { ...s.defaults, ...patch } }));
   // promptgraph's own lane branches (default prefix "pg/", or this graph's prefix) are not base branches.
   const lanePrefixes = ["pg/", `${resolveBranchPrefix({ id: graphId, settings })}/`];
   const baseBranches = branches.filter((b) => !lanePrefixes.some((p) => b.startsWith(p)));
@@ -65,8 +69,8 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
       <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Claude defaults</h4>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Model">
-          <OptionalText value={settings.defaults.model} list="pg-models-defaults" placeholder="Claude Code default" disabled={disabled} onChange={(model) => updateDefaults({ model })} />
-          <datalist id="pg-models-defaults">
+          <OptionalText value={settings.defaults.model} list={modelsListId} placeholder="Claude Code default" disabled={disabled} onChange={(model) => updateDefaults({ model })} />
+          <datalist id={modelsListId}>
             {MODEL_SUGGESTIONS.map((m) => (
               <option key={m} value={m} />
             ))}
