@@ -227,6 +227,7 @@ README.md              prerequisites, the pinned Tauri version, commands, enviro
 | `desktop.ts` | `OPEN_URL_RESULT_VERSION` (1), `OpenUrlResultSchema` (`{v: 1, cliVersion, url, port, repoId \| null}`), `DESKTOP_COMMANDS` (`relogin`), `DESKTOP_OPEN_ARGS`, `DESKTOP_PERMISSIONS`, `DESKTOP_STRIPPED_ENV`, `DESKTOP_STRIPPED_ENV_PREFIXES`, `DESKTOP_MOUNT_PATH_LISTS` (`PATH`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, `PYTHONHOME`, `PYTHONPATH`, `PERLLIB`, `QT_PLUGIN_PATH`, `GST_PLUGIN_SYSTEM_PATH`, `GST_PLUGIN_SYSTEM_PATH_1_0`: their AppImage-mount entries are removed) (DESIGN §20); distribution (§20.6–§20.9): `VERSION_MISMATCH_POLICIES` (`auto`, `restart`, `attach`), `EXIT_VERSION_MISMATCH` (4), `OpenMismatchResultSchema` (`{v: 1, mismatch: {serverVersion, cliVersion, runningRuns: int ≥ 0 \| null, daemonIsOlder: boolean}}`), `RuntimeManifestSchema` (`{v: 1, version, nodeVersion, platform: "linux-x64", buildId: 64 hex}`), `SHIM_MARKER` (`# promptgraph-desktop shim v1`), `ShimStatusSchema` (`{path, state: absent\|ours\|foreign, foreignTarget: string \| null, decision: accepted\|declined\|null, onPath: boolean \| null, shadowedBy: string \| null, pathHint: string \| null, warn: boolean}`; onPath/shadowedBy/pathHint are null unless a PATH check ran; `warn` = a check ran, it was not OK, and this version has not warned yet (the CLI records `warnedVersion` when it returns true)), `DesktopInstallResultSchema` (`{v: 1, version, root /* the versioned dir */, cliPath /* <root>/bin/promptgraph */, current: string \| null /* the name current points at after the call */, installed, pruned: string[], shim: ShimStatus}`), `ShimResultSchema` (`{v: 1, shim: ShimStatus, backup: string \| null}`), `DesktopPrefsSchema` (`{v: 1, shim?: {decision, decidedAt, pathOk?: boolean, warnedVersion?: string}}`, looseObject so unknown keys survive), `DESKTOP_DIALOGS` (`{id: keys[]}`: `shim-offer` [install, skip], `shim-replace` [keep, replace], `path-warning` [ok], `shim-failed` [ok], `version-mismatch` [restart, keep, use], `update` [update, later], `update-failed` [ok], `restart-failed` [ok]; the contract test checks the Rust strings against it), `DESKTOP_INSTALL_ARGS` (`["desktop", "install", "--json"]`), `compareVersions(a, b)` (numeric major.minor.patch; a pre-release sorts before its release; used by `open`, the MCP mismatch text and the tests), `DAEMON_RESTART_PROGRESS_PREFIX` (`promptgraph: restarting the daemon`); `DESKTOP_STRIPPED_ENV` gains `PG_DESKTOP_AUTO_ANSWER`, `PG_DESKTOP_UPDATES` and `DESKTOP_STRIPPED_ENV_PREFIXES` gains `GI_` (the contract test checks the Rust lists against them) |
 | `mcp-guide.ts` | `MCP_SKILLS`, `MCP_TOOL_GROUPS`, `MCP_TOOL_NAMES`, `ClaudeSetupResponseSchema`, `ClaudeCheckResponseSchema` (setup wizard content, DESIGN §19.5) |
 | `topology.ts` | `buildTopology`, `findRoots`, `topologicalOrder`, `findCycle`, `ancestors`, `descendants`, `branchKey`, `edgesMutuallyExclusive`, `loopBody`, `computeLanePlan` → `LanePlan {lanes: PlannedLane[], laneOf, mergeSources, edgeLane}` |
+| `layout.ts` | `LAYOUT_DX`/`LAYOUT_DY`, `layeredLayout(graph)` (top to bottom, §19.3), `isLaidOut(graph)` (every node already where layeredLayout puts it, ±0.5 px; the Arrange button is disabled then), `deriveEdgeId`, `edgeIdSet` |
 | `validation/` | `validateGraph(graph, {phase})` → `ValidationResult {errors, warnings}` of `ValidationIssue {code, message, nodeId?, edgeId?}` |
 
 The request/payload/config type aliases (e.g. `SaveGraphRequest`, `StartRunRequest`, `StopPayload`,
@@ -405,6 +406,7 @@ interface BusEvents {
                repo: { id: string; name: string } };
   "repo:changed":   { repoId: string };             // engine: run created, run or node-run status changed (registry: add/activate/error)
   "repo:removed":   { repoId: string };             // registry
+  "run:deleted":    { repoId: string; runId: string; graphId: string }; // engine.deleteRun
   "session:revoked": { idHashes: string[] };        // Sessions: revoke / revokeAll (token rotation) / expiry seen by verify
   "token:rotated":  {};                               // rotateToken: every socket is closed
   "usage:limits":   { limits: UsageLimits };          // UsageLimitsTracker (chat rate_limit_event, DESIGN §23.3)
@@ -890,6 +892,7 @@ Repository routes, after `/api/repos/:repoId` (`API.repo(repoId)`):
 | GET `/runs/:id/report` | — | `RunReportResponse` (§13.1) |
 | GET `/runs/:id/lanes/:laneId/diff` | — | `DiffResponse` (lane vs base; after cleanup from its last snapshot) |
 | POST `/runs/:id/cancel` · `/cleanup` · `/resume` | — | `OkResponse` |
+| DELETE `/runs/:id` | — | `OkResponse`; `engine.deleteRun` (finished runs only, else 409 `run_active`): `lanes.cleanup(force)` unless cleaned up, `store.deleteRun` (rows + events), run dir removed, bus `run:deleted`, snapshot refs pruned |
 | GET `/pending` | — | `PendingResponse` (waiting_approval node runs of this repository) |
 | POST `/node-runs/:id/done` · `/retry` · `/skip` | — | `NodeRunResponse` |
 | POST `/node-runs/:id/fail` | `FailNodeRequest` | `NodeRunResponse` |
@@ -1038,7 +1041,7 @@ store/view/editor-store.ts       createEditorStore(repoId, graphId | null, {pers
                                  graphId) → {store, release} (cached + ref-counted per `${repoId}:${graphId}`), findEditorStore,
                                  liveEditorStores, flushAllEditors, discardEditorStore, discardEditorsOf(repoId); autosave 500 ms
 store/view/run-store.ts          createRunStore(repoId, deps?) with RunStoreDeps {subscribe(runId) → unsubscribe, fetchRun, listRuns}
-store/view/ui-store.ts           createViewUiStore(): drawer terminals, dialogs, leftPanel, sidebars, revealNodeId, lastLoopSpec
+store/view/ui-store.ts           createViewUiStore(): drawer terminals, dialogs, leftPanel, sidebars, revealNodeId, lastLoopSpec, fitRequest (bumped by requestFit(); the canvas fits the graph in view, e.g. after Arrange)
 store/view/context.tsx           ViewProvider, View (stores + navigate/openInNewTab), useView, useEditor, useRun, useViewUi,
                                  useTabActive, useRepo, useRepoInfo
 store/view/actions.ts            view workflows: createGraph, deleteGraph, startRun, cancel/resume/cleanupRun, showNodeRun,
@@ -1069,6 +1072,9 @@ components/tabs/TabViews.tsx     one `[data-tab-view=<id>]` per mounted tab (pla
                                  openInNewTab → tabs.open) and TabContext; pinned = the reported editor is dirty or saving; the view
                                  renders (except Home) in `[data-pg-panel]` (inset panel) above `[data-pg-bottom-bar]` (the tab's bottom bar:
                                  a start slot, ClaudeStatus = BillingBadge + ClaudeSetupButton, and an end slot, ChatDock)
+components/tabs/strip-slot.ts    useStripSlot {el, setEl}: the end of the tab strip where the active view portals StripApprovals
+                                 (PendingApprovals of its repository); SettingsMenu({repoPath?}) follows it, open state in
+                                 useSettingsMenu (global, not per view)
 components/tabs/tab-context.tsx  TabContext {tabId, active, setTitle, close, reportEditor, chats, setChats, bottomBar, bottomBarStart};
                                  useTabContext()
                                  (null outside tabs)
@@ -1103,13 +1109,19 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   the run's `graphId` from its detail or the history list, so graph ↔ run navigation keeps the same store), the
   `nodeRun` route → `showNodeRun` once the detail is loaded (select node + iteration, open its terminal, open the
   approval dialog when waiting), leaving it deselects. Another graph closes the view's terminals (ending reopened
-  sessions). The shown graph is remembered in `pg.lastGraph.<repoId>`. `/r/<repoId>` redirects (replace) to that graph,
-  else the first; with no graph the workspace shows its empty state. Not found: repo info 404, editor `notFound`
+  sessions). The shown graph is remembered in `pg.lastGraph.<repoId>`. `/` (`HomeView`) and `/r/<repoId>` (`GraphsView`, inside the same `ViewProvider` instead of `Workspace`; no redirect)
+  both render `components/overview/Overview` with the route's repository filter (DESIGN §13.3): `useOverviewModel` (all
+  available repositories' `GET …/graph-overviews`, search in `useOverviewQuery`, `groupItems` recent/repo/none,
+  `pg.overview.group`), `OverviewLayout` (`RepoSidebar`: `useSidebarPrefs {order, favorites, width}`, the pure `sidebar-order` `arrangeRepos` / `moveRepo` / `clampSidebarWidth`, a vertical drag built on the tab strip's `tabDragTarget` / `tabGap` / `tabShift`; and `GraphThumbnail` cards) and the dialogs of
+  `components/home/RepoDialogs` (`AddRepositoryForm`/`Dialog`, `RemoveRepoDialog`, `NewGraphDialog`); `deleteGraph` of the
+  shown graph navigates there.
+- Not found: repo info 404, editor `notFound`
   (graph 404), run `detailNotFound` (404), or a nodeRun id missing from the loaded run. A repo info 409 / network error
   shows a retryable message.
-- Navigation: GraphSelector, RunSelector and PendingApprovals items are `DropdownMenu(Radio)Item asChild` + `<Link>` (the
+- Navigation: GraphSelector and PendingApprovals items are `DropdownMenu(Radio)Item asChild` + `<Link>` (the
   vendored `DropdownMenuRadioItem` supports `asChild` via `Slot.Slottable`); a plain click on a pending approval also
-  opens its dialog in this view. RunHistory rows (card click and header link), Report, Banners (View live run, Back to
+  opens its dialog in this view. RunSelector is a Popover with a list: Editor and run rows are `<Link>`s (↑/↓ move
+  between them), each run row has Report (a link) and Delete (ConfirmDialog → `deleteRun(view, run)`). Report, Banners (View live run, Back to
   editor), Header (logo and repo name → Home), RunReport (close and Show on canvas → run, steps/stalls → node run) are
   links. Canvas run mode: a node click `showNodeRun` + `navigate(nodeRun route, {replace})`; a node without a node run
   or a pane click selects/deselects and replaces with the run route. Leaving run mode (Nodes tab) navigates to the graph.
@@ -1139,14 +1151,20 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
 
 **Tabs (M8, DESIGN §13.4):**
 - Storage: `sessionStorage["pg.tabs.v1"]` (this window) and `localStorage["pg.tabs.last.v1"]` (mirror; read once at
-  start as a seed when the session has none) hold `{version: 1, tabs: [{id, path, title?}], activeId, mru: [id]}`,
+  start as a seed when the session has none) hold `{version: 1, tabs: [{id, path, title?, chats?, graph?}], activeId, mru: [id]}`,
   validated by a local zod schema (1–30 tabs, unique ids, safe paths; a missing active id or incomplete MRU list is
-  repaired; anything else → one Home tab). Written on every change (identical JSON skipped); the closed stack and
+  repaired; anything else → the page on Home). `withPage` puts the page (`PAGE_ID`) first: the stored page, else
+  the most recently used Home or `/r/<repoId>` tab of an older set (those tabs are dropped). Written on every change (identical JSON skipped); the closed stack and
   `lastNavigation` are not persisted. The initial window URL is `open(url, {activate: true})`.
-- `open` dedupes on `normalizePath`; `/r/<repoId>` reuses the MRU tab of that repository; new tabs are appended;
-  background tabs go to the end of the MRU list. More than 30 tabs: the least recently used non-active one is moved to
-  the closed stack. `close` of the active tab activates its right neighbour (else the left one); the last tab becomes
-  a new Home tab. `reopenClosed` reinserts at the old index (with its title) and activates. `navigate` drops the title.
+- `isPagePath` (home, repo routes) → `showPage` (the page navigated, activated unless a background open). Otherwise
+  `open` dedupes on `normalizePath`, then on `graph` (`graphKeyOf` of a graph route; `setGraph` from the view of a run
+  route), retargeting the found tab; new tabs are appended; background tabs go to the end of the MRU list. More than 30
+  tabs: the least recently used non-active one (never the page) is moved to the closed stack. `navigate` from the page
+  to a diagram path → `open`; from a tab to a page path → `showPage` (with `replace` the tab is closed first); to a
+  graph another tab has → `open`. `close(PAGE_ID)` does nothing; of the active tab it activates its right neighbour
+  (else the left one); the last diagram tab leaves the page on its repository's graph list. `move`, `goto`, `next` and
+  the closed stack use strip indices (`stripTabs`, the page excluded). `reopenClosed` reinserts at the old strip index
+  (with its title) and activates. `navigate` drops the title.
 - Keep-alive and gating: hidden views keep run subscriptions (ref-counted in WsClient), repo subscriptions, dispatcher
   registration and PTY attachments. React Flow gets `null` delete/selection/multi-selection key codes while hidden;
   `AutoFit` refits at once when the canvas measures non-zero again after a zero size (tab shown), unless the user moved
