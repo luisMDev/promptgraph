@@ -11,7 +11,7 @@ import {
 } from "./chat.js";
 import { UsageLimitsSchema } from "./billing.js";
 import { RepoIdSchema, RepoSummarySchema } from "./repos.js";
-import { LaneSchema, NodeRunSchema, RunSummarySchema } from "./run.js";
+import { LaneSchema, NodeRunSchema, RunBriefEntrySchema, RunSummarySchema } from "./run.js";
 import {
   VoiceCancelMessageSchema,
   VoiceErrorMessageSchema,
@@ -29,7 +29,7 @@ import {
  * Delivery rules:
  * - `repo:status`, `repo:removed` and `usage:limits` go to every client.
  * - `run:update`, `run:deleted`, `graphs:changed` and `chat:*` (§21) go to clients subscribed to their repository (`repo:subscribe`).
- * - `node:update` / `lane:update` go to clients subscribed to that run.
+ * - `node:update` / `lane:update` / `brief:update` go to clients subscribed to that run.
  * - `pty:*` go to clients attached to that pty.
  * - `voice:*` go only to the client that sent the voice:start.
  */
@@ -51,6 +51,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run:deleted"), repoId: RepoIdSchema, runId: z.string(), graphId: z.string() }),
   z.object({ type: z.literal("node:update"), nodeRun: NodeRunSchema }),
   z.object({ type: z.literal("lane:update"), lane: LaneSchema }),
+  /** A run brief entry was added or finished (§13.6). */
+  z.object({ type: z.literal("brief:update"), entry: RunBriefEntrySchema }),
   /** Sent in reply to pty:attach before the replay. `live` = process still running (input accepted). */
   z.object({ type: z.literal("pty:attached"), ptyId: z.string(), live: z.boolean(), cols: z.number(), rows: z.number() }),
   /** Raw PTY bytes, base64. Replay chunks come first, then live output. */

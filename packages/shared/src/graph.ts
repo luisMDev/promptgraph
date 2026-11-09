@@ -245,6 +245,20 @@ export const GraphDefaultsSchema = z.object({
 });
 export type GraphDefaults = z.infer<typeof GraphDefaultsSchema>;
 
+/** Default model of the run brief (§13.6): a summary per step is short, so a small model is enough. */
+export const DEFAULT_BRIEF_MODEL = "haiku";
+
+/**
+ * Run brief (§13.6): after each step finishes, a headless Claude call summarises it in the context of the run so
+ * far, building a timeline of what happened. Off by default: every summary is one more Claude call.
+ */
+export const RunBriefSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Empty or absent = DEFAULT_BRIEF_MODEL. */
+  model: z.string().optional(),
+});
+export type RunBriefSettings = z.infer<typeof RunBriefSettingsSchema>;
+
 export const GraphSettingsSchema = z.object({
   baseBranch: z.string().min(1).default("main"),
   /** Empty = "pg/<graph-id>" (see resolveBranchPrefix). */
@@ -257,6 +271,7 @@ export const GraphSettingsSchema = z.object({
   autoTrustWorktrees: z.boolean().default(true),
   /** Unlocks `pr.requireApproval: false` in the UI and validator. */
   allowPrWithoutApproval: z.boolean().default(false),
+  brief: RunBriefSettingsSchema.prefault({}),
 });
 export type GraphSettings = z.infer<typeof GraphSettingsSchema>;
 

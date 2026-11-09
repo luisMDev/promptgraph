@@ -166,6 +166,36 @@ export const LoopStateSchema = z.object({
 });
 export type LoopState = z.infer<typeof LoopStateSchema>;
 
+/** pending: the summary is being written; ready: title + summary set; failed: the call failed (error). */
+export const BriefEntryStatusSchema = z.enum(["pending", "ready", "failed"]);
+export type BriefEntryStatus = z.infer<typeof BriefEntryStatusSchema>;
+
+/**
+ * One entry of a run's brief (§13.6): the summary of a finished step (`kind` "node") or, at the end, of the whole
+ * run (`kind` "run"). Entries are ordered by `id` (the order the steps finished in).
+ */
+export const RunBriefEntrySchema = z.object({
+  id: z.number().int(),
+  runId: z.string(),
+  kind: z.enum(["node", "run"]),
+  /** kind "node": the node run summarised; null for the run entry. */
+  nodeRunId: z.string().nullable(),
+  nodeId: z.string().nullable(),
+  /** How the step (NodeStatus) or the run (RunStatus) ended. */
+  outcome: z.string(),
+  status: BriefEntryStatusSchema,
+  /** One line: what the step achieved. Null until ready. */
+  title: z.string().nullable(),
+  /** A few sentences of Markdown. Null until ready. */
+  summary: z.string().nullable(),
+  error: z.string().nullable(),
+  /** Usage of the summary call itself (counted in the run's usage). */
+  usage: TokenUsageSchema.nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type RunBriefEntry = z.infer<typeof RunBriefEntrySchema>;
+
 export const RunDetailSchema = z.object({
   run: RunSchema,
   lanes: z.array(LaneSchema),
@@ -173,6 +203,8 @@ export const RunDetailSchema = z.object({
   nodeRuns: z.array(NodeRunSchema),
   /** Phase 2: one entry per loop edge of the snapshot (canvas edge order). Absent for graphs without loops. */
   loops: z.array(LoopStateSchema).optional(),
+  /** §13.6: the run brief, oldest first. Absent when the server does not send it. */
+  brief: z.array(RunBriefEntrySchema).optional(),
 });
 export type RunDetail = z.infer<typeof RunDetailSchema>;
 

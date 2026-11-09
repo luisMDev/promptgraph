@@ -49,3 +49,13 @@ export const JUDGE_JSON_SCHEMA = {
   required: ["pass", "reason"],
   additionalProperties: false,
 } as const;
+
+/** --json-schema of a run brief entry (§13.6). */
+export const BriefSummarySchema = z.object({ title: z.string(), summary: z.string() });
+export type BriefSummary = z.infer<typeof BriefSummarySchema>;
+export const BRIEF_JSON_SCHEMA = {
+  type: "object",
+  properties: { title: { type: "string" }, summary: { type: "string" } },
+  required: ["title", "summary"],
+  additionalProperties: false,
+} as const;
