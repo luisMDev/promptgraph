@@ -1,5 +1,5 @@
 import { Separator } from "@/components/ui/separator";
-import { resolveBranchPrefix, type GraphSettings, type KeepWorktrees } from "@promptgraph/shared";
+import { DEFAULT_BRIEF_MODEL, resolveBranchPrefix, type GraphSettings, type KeepWorktrees } from "@promptgraph/shared";
 import { CompletionEditor, EFFORT_OPTIONS, InheritSelect, MODEL_SUGGESTIONS, PERMISSION_OPTIONS } from "../inspector/ClaudeOptions";
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea } from "../common/fields";
 import { useId } from "react";
@@ -64,6 +64,24 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
         label="Allow PR nodes without approval"
         onChange={(allowPrWithoutApproval) => update({ allowPrWithoutApproval })}
       />
+
+      <Checkbox
+        checked={settings.brief.enabled}
+        disabled={disabled}
+        label="Run brief: summarise each step"
+        onChange={(enabled) => update({ brief: { ...settings.brief, enabled } })}
+      />
+      {settings.brief.enabled && (
+        <Field label="Brief model" hint="After each step a short Claude call writes its summary in the run's timeline; its cost counts in the run.">
+          <OptionalText
+            value={settings.brief.model}
+            list={modelsListId}
+            placeholder={DEFAULT_BRIEF_MODEL}
+            disabled={disabled}
+            onChange={(model) => update({ brief: { ...settings.brief, model } })}
+          />
+        </Field>
+      )}
 
       <Separator className="mt-1" />
       <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Claude defaults</h4>

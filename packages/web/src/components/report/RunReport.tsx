@@ -20,6 +20,8 @@ import { useRun, useTabActive, useView } from "../../store/view/context";
 import { Icons, NodeTypeIcon } from "../common/icons";
 import { LaneBadge } from "../common/LaneBadge";
 import { Button, ButtonLink, StatusDot } from "../common/ui";
+import { Link } from "../../lib/router/Link";
+import { BriefTimeline, briefStepLabel } from "../inspector/RunBrief";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -100,6 +102,7 @@ export function RunReport({ runId }: { runId: string }) {
         {report && (
           <>
             <Summary report={report} />
+            <Brief runId={runId} nodeRunPath={nodeRunPath} />
             {report.stalls.length > 0 && <Stalls stalls={report.stalls} status={report.run.status} nodeRunPath={nodeRunPath} nodes={report.nodes} />}
             {report.prs.length > 0 && (
               <ReportSection title="Pull requests">
@@ -372,6 +375,33 @@ function Stats({ changes }: { changes: ChangeStats }) {
       {changes.files} file{changes.files === 1 ? "" : "s"} <span className="text-green-600">+{changes.additions}</span>{" "}
       <span className="text-red-600">−{changes.deletions}</span>
     </span>
+  );
+}
+
+const NO_BRIEF: never[] = [];
+
+/** §13.6: the run brief, when the graph had it on (from the view's run store, which follows the run live). */
+function Brief({ runId, nodeRunPath }: { runId: string; nodeRunPath: (nodeRunId: string) => string }) {
+  const entries = useRun((s) => (s.detail?.run.id === runId ? (s.detail.brief ?? NO_BRIEF) : NO_BRIEF));
+  const nodes = useRun((s) => (s.detail?.run.id === runId ? s.detail.run.graphSnapshot.nodes : undefined));
+  if (entries.length === 0) return null;
+  return (
+    <ReportSection title="Brief">
+      <div className="max-w-3xl pl-1.5">
+        <BriefTimeline
+          entries={entries}
+          step={(entry) =>
+            entry.nodeRunId ? (
+              <Link to={nodeRunPath(entry.nodeRunId)} className="truncate font-semibold text-foreground/80 hover:underline">
+                {briefStepLabel(entry, nodes)}
+              </Link>
+            ) : (
+              <span className="truncate font-semibold text-foreground/80">{briefStepLabel(entry, nodes)}</span>
+            )
+          }
+        />
+      </div>
+    </ReportSection>
   );
 }
 

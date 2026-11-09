@@ -1,4 +1,4 @@
-import type { Lane, NodeRun, RunDetail, RunSummary } from "@promptgraph/shared";
+import type { Lane, NodeRun, RunBriefEntry, RunDetail, RunSummary } from "@promptgraph/shared";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { ApiRequestError, errorMessage, repoApi } from "../../api/rest";
 import { wsClient } from "../../api/ws";
@@ -48,6 +48,8 @@ export interface RunStore extends RunState {
   removeRun(runId: string): void;
   applyNodeUpdate(nodeRun: NodeRun): void;
   applyLaneUpdate(lane: Lane): void;
+  /** `brief:update` (§13.6): adds or replaces an entry of the selected run's brief. */
+  applyBriefUpdate(entry: RunBriefEntry): void;
   /** Releases the run subscription and stops timers (the view unmounted or its repository was removed). */
   dispose(): void;
   /** Subscribes to the selected run again after `dispose` (a view that is mounted again). */
@@ -75,7 +77,11 @@ export function repoRunDeps(repoId: string): RunStoreDeps {
 /** Coalesces loop-state refetches triggered by bursts of node updates. */
 const LOOP_REFRESH_MS = 150;
 
-type BufferedUpdate = { kind: "node"; nodeRun: NodeRun } | { kind: "lane"; lane: Lane } | { kind: "run"; run: RunSummary };
+type BufferedUpdate =
+  | { kind: "node"; nodeRun: NodeRun }
+  | { kind: "lane"; lane: Lane }
+  | { kind: "run"; run: RunSummary }
+  | { kind: "brief"; entry: RunBriefEntry };
 
 function lanesById(lanes: readonly Lane[]): Record<string, Lane> {
   return Object.fromEntries(lanes.map((l) => [l.id, l]));
@@ -140,6 +146,7 @@ export function createRunStore(repoId: string, deps: RunStoreDeps = repoRunDeps(
       const s = get();
       if (u.kind === "node") s.applyNodeUpdate(u.nodeRun);
       else if (u.kind === "lane") s.applyLaneUpdate(u.lane);
+      else if (u.kind === "brief") s.applyBriefUpdate(u.entry);
       else s.applyRunUpdate(u.run);
     }
 
@@ -273,6 +280,21 @@ export function createRunStore(repoId: string, deps: RunStoreDeps = repoRunDeps(
         const others = s.detail.lanes.filter((l) => l.id !== lane.id);
         const lanes = [...others, lane].sort((a, b) => a.index - b.index);
         set({ detail: { ...s.detail, lanes }, lanes: lanesById(lanes) });
+      },
+
+      applyBriefUpdate(entry) {
+        const s = get();
+        if (entry.runId !== s.selectedRunId) return;
+        if (!s.detail) {
+          buffer.push({ kind: "brief", entry });
+          return;
+        }
+        const brief = s.detail.brief ?? [];
+        const known = brief.find((e) => e.id === entry.id);
+        // A fetched detail may already hold a newer state of the entry.
+        if (known && known.updatedAt > entry.updatedAt) return;
+        const next = [...brief.filter((e) => e.id !== entry.id), entry].sort((a, b) => a.id - b.id);
+        set({ detail: { ...s.detail, brief: next } });
       },
 
       resume() {

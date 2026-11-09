@@ -154,6 +154,9 @@ export function createDispatcher(): Dispatcher {
       case "lane:update":
         for (const view of views) view.run.getState().applyLaneUpdate(msg.lane);
         return;
+      case "brief:update":
+        for (const view of views) view.run.getState().applyBriefUpdate(msg.entry);
+        return;
       case "graphs:changed":
         void peekRepoCache(msg.repoId)
           ?.getState()
