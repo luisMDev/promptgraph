@@ -204,6 +204,7 @@ type GraphSettings = {
     completion: CompletionPolicy;   // see §7.4
   };
   keepWorktrees: "never" | "on-failure" | "always";   // default "on-failure"
+  brief: { enabled: boolean; model?: string };         // run brief, §13.6; default { enabled: false }, model "haiku"
 };
 
 type Node = {
@@ -535,6 +536,16 @@ CREATE TABLE chat_sessions (             -- chats, §21.8; history comes from th
   started INTEGER,                       -- 1 once Claude created the session: the next process uses --resume
   created_at INTEGER, updated_at INTEGER
 );
+CREATE TABLE run_brief (                 -- run brief, §13.6 (migration 6); cascades with its run
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT,
+  kind TEXT,                             -- node | run
+  node_run_id TEXT, node_id TEXT,
+  outcome TEXT,                          -- NodeStatus of the step, or RunStatus of the run
+  status TEXT,                           -- pending | ready | failed
+  title TEXT, summary TEXT, error TEXT,
+  usage TEXT,                            -- JSON TokenUsage of the summary call, counted in the run's usage
+  created_at INTEGER, updated_at INTEGER
+);
 ```
 
 Migration 3 (§4.2, §4.4, §14):
@@ -650,6 +661,7 @@ One socket per page, whatever the number of tabs and repositories. Run and PTY t
 { type: "graphs:changed", repoId, graphId }   // to clients subscribed to the repo
 { type: "node:update", nodeRun }              // to clients subscribed to the run
 { type: "lane:update", lane }                 // to clients subscribed to the run
+{ type: "brief:update", entry }               // RunBriefEntry (§13.6); to clients subscribed to the run
 { type: "pty:attached" | "pty:data" | "pty:exit" | "pty:error", ptyId, … }   // to clients attached to the pty
 { type: "chat:item", repoId, sessionId, item }        // §21: normalised ChatItem
 { type: "chat:delta", repoId, sessionId, messageId, text, offset } // streamed assistant text; offset = chars streamed before it
@@ -776,6 +788,16 @@ A Linear/Notion-like tab strip at the top of the page, implemented in React (it 
 - **Version**: the web build embeds its version; when `hello.version` differs (the daemon was upgraded on disk but not restarted, or the other way round), a banner says "promptgraph was updated: run `promptgraph stop` and open it again". The daemon serves `index.html` with `Cache-Control: no-store`.
 
 ---
+
+### 13.6 Run brief
+
+A timeline of what has happened in a run so far, readable at any moment without opening terminals. It is a graph setting, `settings.brief` (`enabled`, default off, since every entry is one more Claude call; `model`, default `haiku`), toggled in the graph settings (**Run brief: summarise each step**) and read from the run's snapshot.
+
+- **When.** Each time a node run settles as `succeeded` or `failed` (handled failures and retries included; skips, cancellations and dead paths are not summarised), the engine tells the `RunBriefer` (`engine/brief.ts`), which records a `pending` entry (`kind: "node"`) and queues its summary. When the run ends (any final status) and at least one step was summarised, one more entry (`kind: "run"`) summarises the whole run.
+- **How.** A headless call, `claude -p --output-format json --json-schema` (`{ title, summary }`) in the main checkout, 120 s timeout, in minimal mode: `--tools ""`, `--safe-mode --strict-mcp-config` (no CLAUDE.md, skills, plugins, hooks or MCP servers; the login works as usual, unlike `--bare`, which reads only an API key), a short `--system-prompt` instead of Claude Code's and `--no-session-persistence`. Without it each call loads the user's whole setup: measured at about $0.44 per entry with many MCP servers, against about $0.0004 in minimal mode with haiku. Claude answers only from the prompt, which holds the graph's name and steps, the brief so far (the last 30 ready step entries, titles and summaries), and the step: label, type, result, duration, iteration/attempt, its instructions (prompt, command, shell line, …, up to 1 500 characters), its output as in the context block of §7.5 (up to 4 000) and the `git diff --stat` of its snapshots (§9.7). The run entry gets the result of every step instead. Claude writes in the language of the step instructions.
+- **Order and failures.** Calls are serial per run, so each entry sees the ones before it; runs do not wait for them (a step's successors start at once) and a failed or timed-out call only marks its entry `failed` with the error. Shutdown aborts the calls in progress (entries → failed); entries a killed daemon left `pending` are marked failed by `markInterrupted` at the next start. Entries are deleted with their run.
+- **Cost.** Each entry keeps the usage of its call; it is added to the run's usage (`RunSummary.usage`) and to the graph's cost in the overview.
+- **API and UI.** `GET /api/repos/:repoId/runs/:id` returns the entries as `RunDetail.brief` (oldest first); every change is pushed as `brief:update`. The run inspector with no node selected shows them as a timeline under the run status (step name, time, title and Markdown summary; *Summarising…* while pending; clicking a step's name selects its node), and the run report (§13.1) shows the same timeline after its summary, each step linking to its node run. With the setting off the inspector explains how to turn it on.
 
 ## 14. Security
 
