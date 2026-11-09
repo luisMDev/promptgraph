@@ -130,4 +130,23 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // §23.2: how Claude was billed when the run started (BillingMode); NULL for older runs or when unknown.
   `ALTER TABLE runs ADD COLUMN billing_mode TEXT;`,
+  // §13.6 run brief: one summary per finished step (kind "node") and one for the whole run (kind "run").
+  `
+  CREATE TABLE run_brief (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                  -- node | run
+    node_run_id TEXT,
+    node_id TEXT,
+    outcome TEXT NOT NULL,               -- NodeStatus (node) or RunStatus (run)
+    status TEXT NOT NULL,                -- pending | ready | failed
+    title TEXT,
+    summary TEXT,
+    error TEXT,
+    usage TEXT,                          -- JSON TokenUsage of the summary call
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX run_brief_run ON run_brief (run_id, id);
+  `,
 ];

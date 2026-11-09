@@ -47,6 +47,7 @@ import { newId, newShortId } from "../util/ids.js";
 import type { LaneManager, RepoRef } from "../workspace/lane-manager.js";
 import { runWorkspaceSetup } from "../workspace/setup.js";
 import { ActivationTracker, type LoopIteration } from "./activation.js";
+import type { RunBriefer } from "./brief.js";
 import { markInterrupted } from "./recovery.js";
 import { buildRunReport, laneDiff } from "./report.js";
 import { Scheduler, type SchedulerItem } from "./scheduler.js";
@@ -74,6 +75,8 @@ export interface EngineDeps {
   stopTimeoutMs?: number;
   /** How Claude is billed in this repository (§23.2), recorded on each new run; absent or failing → null. */
   billingMode?: () => Promise<BillingMode | null>;
+  /** §13.6 run brief: told when a step finishes and when a run ends; never blocks the run. */
+  brief?: Pick<RunBriefer, "nodeFinished" | "runFinished" | "shutdown">;
 }
 
 /** Error with an HTTP-mappable code; routes translate it into ApiError. */
@@ -272,7 +275,7 @@ export class Engine {
   getRun(runId: string): RunDetail {
     const { store } = this.deps;
     const run = this.requireRun(runId);
-    const detail: RunDetail = { run, lanes: store.listLanes(runId), nodeRuns: store.listNodeRuns(runId) };
+    const detail: RunDetail = { run, lanes: store.listLanes(runId), nodeRuns: store.listNodeRuns(runId), brief: store.listBriefEntries(runId) };
     if (run.graphSnapshot.edges.some((e) => e.loop)) {
       // Counters of every loop edge (persisted ones win; edges never reached report iteration 0).
       const saved = new Map(store.getLoopStates(runId).map((l) => [l.edgeId, l] as const));
@@ -601,6 +604,8 @@ export class Engine {
    */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    // Summaries in progress are stopped and marked failed; nothing new is queued (§13.6).
+    const briefStopped = this.deps.brief?.shutdown();
     const execs = [...this.live.values()].flatMap((live) => {
       live.scheduler.clear();
       return [...live.executions.values()];
@@ -611,6 +616,7 @@ export class Engine {
     await withTimeout(Promise.allSettled([...this.chains]), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
     // Only this engine's own runs: another instance (another repository) may share the DB.
     const own = { repoPath: this.deps.repo.path, runIds: [...this.live.keys()] };
+    await briefStopped;
     const interrupted = markInterrupted(this.deps.store, own, this.now());
     for (const runId of interrupted) this.emitRun(runId);
     if (interrupted.length > 0) this.emitRepoChanged();
@@ -840,6 +846,7 @@ export class Engine {
     }
     if (result.status === "succeeded") {
       this.patchNodeRun(nr.id, { status: "succeeded", output: { ...nr.output, ...result.output }, finishedAt });
+      this.deps.brief?.nodeFinished(live.runId, nr.id);
       if (!live.terminating) await this.advance(live, node.id, { kind: "success", port: result.output.port });
     } else if (result.status === "failed") {
       // A failure handled downstream (failure/always edge, loop back-edge) cannot be retried or skipped.
@@ -847,6 +854,7 @@ export class Engine {
       const extra = { ...(handled ? { failureHandled: true } : {}), ...(loopExhausted ? { loopExhausted: true } : {}) };
       const output = result.output || handled || loopExhausted ? { ...nr.output, ...result.output, ...extra } : undefined;
       this.patchNodeRun(nr.id, { status: "failed", error: result.error, output, finishedAt });
+      this.deps.brief?.nodeFinished(live.runId, nr.id);
       if (live.terminating) return;
       if (handled) {
         await this.advance(live, node.id, { kind: "failure" });
@@ -1026,6 +1034,7 @@ export class Engine {
   private async finalize(live: LiveRun, status: "succeeded" | "failed" | "cancelled", error: string | null): Promise<void> {
     this.live.delete(live.runId);
     this.setRunStatus(live.runId, status, { finishedAt: this.now(), error });
+    this.deps.brief?.runFinished(live.runId);
     // A lane still being created would otherwise be inserted after cleanup and leak its worktree/branch.
     await withTimeout(Promise.allSettled(live.laneCreation.values()), this.deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
     try {

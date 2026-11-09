@@ -2,6 +2,7 @@ import { ChatManager } from "../chat/chat-manager.js";
 import { createLinkedIssuesResolver } from "../chat/issues.js";
 import { resolveChatMcp } from "../chat/launch.js";
 import { SUPPORTED_PHASE } from "../config/version.js";
+import { RunBriefer } from "../engine/brief.js";
 import { Engine } from "../engine/engine.js";
 import { GraphStore, type GraphWatch } from "../graphs/graph-store.js";
 import { bundledMarketplaceRoot, currentCliEntry } from "../mcp/setup.js";
@@ -67,6 +68,7 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     phase: SUPPORTED_PHASE,
     env,
     billingMode: async () => (await daemon.claudeAuth.get(repo.path)).billingMode,
+    brief: new RunBriefer({ store, bus, repo, env }),
   });
   const offUserInput = daemon.ptys.onUserInput((ptyId) => engine.handleUserInput(ptyId));
   const chat = new ChatManager({

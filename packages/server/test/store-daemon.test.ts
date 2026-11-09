@@ -51,8 +51,8 @@ describe("migrations 3 and 4 (DESIGN §11.2)", () => {
 
     const db = openDatabase(file);
     cleanups.push(() => db.close());
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
-    expect(MIGRATIONS).toHaveLength(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
+    expect(MIGRATIONS).toHaveLength(7);
     expect(tables(db)).toEqual(expect.arrayContaining(DAEMON_TABLES));
     // §23.2: runs recorded before billing was tracked read as unknown.
     expect(new Store(db).getRun("r1")).toMatchObject({ status: "paused", billingMode: null });
@@ -73,7 +73,7 @@ describe("migrations 3 and 4 (DESIGN §11.2)", () => {
 
     const db = openDatabase(file);
     cleanups.push(() => db.close());
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
     expect(tables(db)).toEqual(expect.arrayContaining(DAEMON_TABLES));
     const store = new Store(db);
     expect(store.insertChatSession({ id: "c1", repoPath: "/repo" }).repoPath).toBe("/repo");

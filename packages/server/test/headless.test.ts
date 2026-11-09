@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GENERATED_MESSAGE_JSON_SCHEMA } from "@promptgraph/shared";
@@ -21,6 +22,14 @@ describe("runHeadless", () => {
     expect(r.structured_output).toEqual({ title: "fake title", body: "fake body" });
     expect(r.is_error).toBe(false);
     expect(Object.keys(r.modelUsage ?? {})).toEqual(["claude-haiku-5-5"]);
+  });
+
+  it("runs a bare call in minimal mode (§13.6 run brief)", async () => {
+    const { dir, env: e } = env();
+    const log = path.join(dir, "claude.log");
+    await runHeadless({ prompt: "msg", cwd: dir, minimal: { systemPrompt: "Be brief." }, env: { ...e, FAKE_CLAUDE_LOG: log } });
+    const argv = JSON.parse(fs.readFileSync(log, "utf8").trim().split("\n").at(-1)!).argv as string[];
+    expect(argv.slice(argv.indexOf("--tools"))).toEqual(["--tools", "", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", "Be brief."]);
   });
 
   it("throws on is_error, a missing binary, timeout and abort", async () => {

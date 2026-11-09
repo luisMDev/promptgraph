@@ -9,6 +9,13 @@ export interface HeadlessOptions {
   /** JSON schema object → `--json-schema <JSON>`; the parsed value is in result.structured_output. */
   jsonSchema?: object;
   model?: string;
+  /**
+   * A bare call that answers from the prompt alone (§13.6 run brief): `--tools ""` (no built-in tool),
+   * `--safe-mode --strict-mcp-config` (no CLAUDE.md, skills, plugins, hooks or MCP servers; auth works as usual),
+   * `--system-prompt <systemPrompt>` instead of Claude Code's own, and `--no-session-persistence`. Without it a
+   * call loads the user's whole setup (hundreds of thousands of tokens with many MCP servers).
+   */
+  minimal?: { systemPrompt: string };
   timeoutMs?: number; // default 120s
   signal?: AbortSignal;
   /** Base env (claudeBin + childEnv); defaults to process.env. */
@@ -26,6 +33,9 @@ export function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
   const args = ["-p", "--output-format", "json"];
   if (opts.jsonSchema) args.push("--json-schema", JSON.stringify(opts.jsonSchema));
   if (opts.model) args.push("--model", opts.model);
+  if (opts.minimal) {
+    args.push("--tools", "", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", opts.minimal.systemPrompt);
+  }
 
   return new Promise<HeadlessResult>((resolve, reject) => {
     if (opts.signal?.aborted) return reject(abortError());

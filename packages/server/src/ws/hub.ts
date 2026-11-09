@@ -54,7 +54,7 @@ interface Client {
  * of those sessions and `token:rotated` every socket, with 4401 (WS_CLOSE_SIGNED_OUT).
  * Bus → clients: run:update, graphs:changed and chat:* (§21) to clients subscribed to their repository
  * (`repo:subscribe`, which also activates it); repo:changed debounced per repository into repo:status
- * (RepoSummary) to every client; repo:removed to every client; node:update/lane:update to subscribers
+ * (RepoSummary) to every client; repo:removed to every client; node:update/lane:update/brief:update to subscribers
  * of the run; pty:data (base64) / pty:exit to attached clients. Client messages are validated with
  * ClientMessageSchema; pty:attach replies pty:attached + replay; pty:input → PtyManager.userInput (live
  * only, else pty:error). chat:send / chat:interrupt / chat:permission activate their repository and go
@@ -95,6 +95,7 @@ export class WsHub {
       }),
       bus.on("node:update", ({ nodeRun }) => this.broadcast({ type: "node:update", nodeRun }, (c) => c.runs.has(nodeRun.runId))),
       bus.on("lane:update", ({ lane }) => this.broadcast({ type: "lane:update", lane }, (c) => c.runs.has(lane.runId))),
+      bus.on("brief:update", ({ entry }) => this.broadcast({ type: "brief:update", entry }, (c) => c.runs.has(entry.runId))),
       bus.on("pty:data", ({ ptyId, data }) =>
         this.broadcast({ type: "pty:data", ptyId, data: data.toString("base64") }, (c) => c.ptys.has(ptyId)),
       ),

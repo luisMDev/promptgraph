@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Lane, NodeRun, RunSummary, ServerMessageOf, UsageLimits } from "@promptgraph/shared";
+import type { Lane, NodeRun, RunBriefEntry, RunSummary, ServerMessageOf, UsageLimits } from "@promptgraph/shared";
 
 /** Chat panel messages (§21.6), broadcast as-is by the WsHub. */
 export type ChatServerMessage = ServerMessageOf<"chat:item" | "chat:delta" | "chat:status" | "chat:session" | "chat:deleted">;
@@ -21,6 +21,8 @@ export interface BusEvents {
   /** After every persisted change to a node run. */
   "node:update": { nodeRun: NodeRun };
   "lane:update": { lane: Lane };
+  /** A run brief entry was added or finished (§13.6; RunBriefer). */
+  "brief:update": { repoId: string; entry: RunBriefEntry };
   /** Raw PTY output chunk (already appended to the ring buffer). */
   "pty:data": { ptyId: string; data: Buffer };
   "pty:exit": { ptyId: string; code: number | null };

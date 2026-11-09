@@ -22,7 +22,7 @@ function parseArgs(argv) {
   const o = { positional: [], allowedTools: [] };
   const takesValue = new Set([
     "--session-id", "--resume", "-r", "--settings", "--permission-mode", "--model", "--effort", "--name", "-n",
-    "--output-format", "--json-schema", "--append-system-prompt", "--max-turns", "--input-format",
+    "--output-format", "--json-schema", "--append-system-prompt", "--max-turns", "--input-format", "--tools", "--system-prompt",
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];

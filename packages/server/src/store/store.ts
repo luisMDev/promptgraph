@@ -15,6 +15,7 @@ import {
   type NodeRunOutput,
   type NodeStatus,
   type Run,
+  type RunBriefEntry,
   type RunEvent,
   type RunStatus,
   type RunSummary,
@@ -58,6 +59,43 @@ export type RunPatch = Partial<Pick<Run, "status" | "error" | "finishedAt" | "cl
   /** Phase 2 loop counters (§15.4), exposed as RunDetail.loops. */
   loops?: LoopState[];
 };
+
+export type NewBriefEntry = Pick<RunBriefEntry, "runId" | "kind" | "nodeRunId" | "nodeId" | "outcome">;
+export type BriefEntryPatch = Partial<Pick<RunBriefEntry, "status" | "title" | "summary" | "error" | "usage">>;
+
+interface BriefRow {
+  id: number;
+  run_id: string;
+  kind: string;
+  node_run_id: string | null;
+  node_id: string | null;
+  outcome: string;
+  status: string;
+  title: string | null;
+  summary: string | null;
+  error: string | null;
+  usage: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+function briefFromRow(r: BriefRow): RunBriefEntry {
+  return {
+    id: r.id,
+    runId: r.run_id,
+    kind: r.kind as RunBriefEntry["kind"],
+    nodeRunId: r.node_run_id,
+    nodeId: r.node_id,
+    outcome: r.outcome,
+    status: r.status as RunBriefEntry["status"],
+    title: r.title,
+    summary: r.summary,
+    error: r.error,
+    usage: parseJson<TokenUsage>(r.usage),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
 
 /** A chat panel session row (§21.8). The live status is not persisted: it belongs to the ChatManager. */
 export interface ChatSessionRecord {
@@ -387,6 +425,12 @@ export class Store {
          FROM node_runs n JOIN runs r ON r.id = n.run_id WHERE r.repo_path = ? GROUP BY r.graph_id`,
       )
       .all(repoPath) as Array<{ graph_id: string; cost: number | null }>;
+    const briefCosts = this.db
+      .prepare(
+        `SELECT r.graph_id, SUM(CASE WHEN json_valid(b.usage) THEN COALESCE(json_extract(b.usage, '$.costUsd'), 0) ELSE 0 END) AS cost
+         FROM run_brief b JOIN runs r ON r.id = b.run_id WHERE r.repo_path = ? GROUP BY r.graph_id`,
+      )
+      .all(repoPath) as Array<{ graph_id: string; cost: number | null }>;
     const lasts = this.db
       .prepare(
         `SELECT id, graph_id, short_id, status, started_at, finished_at FROM (
@@ -395,6 +439,7 @@ export class Store {
       )
       .all(repoPath) as Array<Pick<RunRow, "id" | "graph_id" | "short_id" | "status" | "started_at" | "finished_at">>;
     const cost = new Map(costs.map((c) => [c.graph_id, c.cost ?? 0]));
+    for (const b of briefCosts) cost.set(b.graph_id, (cost.get(b.graph_id) ?? 0) + (b.cost ?? 0));
     const last = new Map(lasts.map((l) => [l.graph_id, l]));
     const stats = new Map<string, GraphRunStats>();
     for (const c of counts) {
@@ -438,6 +483,12 @@ export class Store {
       if (s.status === "waiting_approval") pendingApprovals++;
       if (s.status === "waiting_input" || s.status === "idle") waitingInput++;
       const usage = parseJson<NodeRunOutput>(s.output)?.usage;
+      if (usage) usages.push(usage);
+    }
+    // §13.6: the run brief's own Claude calls count in the run's usage.
+    const briefs = this.db.prepare(`SELECT usage FROM run_brief WHERE run_id = ? AND usage IS NOT NULL`).all(r.id) as Array<Pick<BriefRow, "usage">>;
+    for (const b of briefs) {
+      const usage = parseJson<TokenUsage>(b.usage);
       if (usage) usages.push(usage);
     }
     return {
@@ -575,6 +626,56 @@ export class Store {
       payload: parseJson(r.payload),
       at: r.at,
     }));
+  }
+
+  // run brief (§13.6) ----------------------------------------------------------
+  insertBriefEntry(entry: NewBriefEntry): RunBriefEntry {
+    const at = this.now();
+    const info = this.db
+      .prepare(
+        `INSERT INTO run_brief (run_id, kind, node_run_id, node_id, outcome, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      )
+      .run(entry.runId, entry.kind, entry.nodeRunId, entry.nodeId, entry.outcome, at, at);
+    return this.getBriefEntry(Number(info.lastInsertRowid))!;
+  }
+
+  updateBriefEntry(id: number, patch: BriefEntryPatch): RunBriefEntry {
+    const { sql, values } = assignments([
+      ["status", patch.status],
+      ["title", patch.title],
+      ["summary", patch.summary],
+      ["error", patch.error],
+      ["usage", patch.usage === undefined ? undefined : json(patch.usage)],
+      ["updated_at", this.now()],
+    ]);
+    this.db.prepare(`UPDATE run_brief SET ${sql} WHERE id = ?`).run(...values, id);
+    const entry = this.getBriefEntry(id);
+    if (!entry) throw new Error(`Brief entry ${id} not found`);
+    return entry;
+  }
+
+  getBriefEntry(id: number): RunBriefEntry | undefined {
+    const row = this.db.prepare(`SELECT * FROM run_brief WHERE id = ?`).get(id) as BriefRow | undefined;
+    return row && briefFromRow(row);
+  }
+
+  /** Oldest first. */
+  listBriefEntries(runId: string): RunBriefEntry[] {
+    const rows = this.db.prepare(`SELECT * FROM run_brief WHERE run_id = ? ORDER BY id`).all(runId) as BriefRow[];
+    return rows.map(briefFromRow);
+  }
+
+  /** Pending entries (of one repository's runs when given): left by a daemon that stopped while summarising. */
+  listPendingBriefEntries(filter: { repoPath?: string } = {}): RunBriefEntry[] {
+    const rows = (
+      filter.repoPath === undefined
+        ? this.db.prepare(`SELECT * FROM run_brief WHERE status = 'pending' ORDER BY id`).all()
+        : this.db
+            .prepare(`SELECT b.* FROM run_brief b JOIN runs r ON r.id = b.run_id WHERE r.repo_path = ? AND b.status = 'pending' ORDER BY b.id`)
+            .all(filter.repoPath)
+    ) as BriefRow[];
+    return rows.map(briefFromRow);
   }
 
   // graph meta (§14) ---------------------------------------------------------

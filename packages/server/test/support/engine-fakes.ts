@@ -150,7 +150,10 @@ export interface Setup {
   paths: PgPaths;
 }
 
-export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMode?: EngineDeps["billingMode"] } = {}): Setup {
+export function setup(
+  runners: RunnerRegistry,
+  opts: { phase?: 1 | 2; billingMode?: EngineDeps["billingMode"]; brief?: (deps: { store: Store; bus: EventBus; repo: EngineDeps["repo"] }) => EngineDeps["brief"] } = {},
+): Setup {
   const t = tempDir();
   onTestFinished(t.cleanup);
   const bus = new EventBus();
@@ -165,6 +168,8 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMod
   const ptys = { owner: repoId, killOwned: vi.fn(async () => {}) };
   const claude = { reopen: vi.fn(async () => ({ ptyId: "reopen-x", notice: null })), isSessionActive: vi.fn(() => false) };
   const paths = getPaths({ PG_HOME: path.join(t.dir, "pg-home") });
+  const repo = { id: repoId, path: t.dir, name: path.basename(t.dir) };
+  const brief = opts.brief?.({ store, bus, repo });
   const makeEngine = (r: RunnerRegistry) =>
     new Engine({
       store,
@@ -175,11 +180,12 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMod
       claude: claude as unknown as ClaudeRunner,
       bus,
       paths,
-      repo: { id: repoId, path: t.dir, name: path.basename(t.dir) },
+      repo,
       phase: opts.phase ?? 1,
       env: {},
       stopTimeoutMs: 500,
       billingMode: opts.billingMode,
+      brief,
     });
   return { engine: makeEngine(runners), store, graphs, bus, lanes, ptys, claude, events, attention, makeEngine, paths };
 }
