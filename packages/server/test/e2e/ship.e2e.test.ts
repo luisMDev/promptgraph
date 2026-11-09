@@ -101,7 +101,7 @@ describe("e2e: approval, pr and merge nodes", () => {
       version: 1,
       id: "join",
       name: "join",
-      settings: { keepWorktrees: "always", defaults: { completion: { mode: "auto", graceSec: 0 } } },
+      settings: { keepWorktrees: "always", defaults: { completion: { mode: "auto", graceSec: 0 } }, brief: { enabled: false } },
       nodes: [
         { id: "a", type: "prompt", label: "A", position: { x: 0, y: 0 }, config: prompt("README.md", "from a") },
         { id: "b", type: "prompt", label: "B", position: { x: 0, y: 200 }, config: prompt("README.md", "from b") },

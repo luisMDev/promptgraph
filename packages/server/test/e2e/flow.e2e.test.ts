@@ -40,7 +40,7 @@ describe("e2e: control flow (fake claude)", () => {
     ...extra,
   });
   const graph = (id: string, nodes: object[], edges: object[]): GraphInput =>
-    ({ version: 1, id, name: id, settings: { defaults: { completion: { mode: "auto", graceSec: 0 } } }, nodes, edges }) as GraphInput;
+    ({ version: 1, id, name: id, settings: { defaults: { completion: { mode: "auto", graceSec: 0 } }, brief: { enabled: false } }, nodes, edges }) as GraphInput;
 
   /** [iteration, status] (or [iteration, attempt, status]) of every node run of a node, in order. */
   const runsOf = (detail: RunDetail, nodeId: string, withAttempt = false) =>

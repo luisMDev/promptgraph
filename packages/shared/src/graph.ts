@@ -251,10 +251,11 @@ export const DEFAULT_BRIEF_MODEL = "haiku";
 
 /**
  * Run brief (§13.6): after each step finishes, a headless Claude call summarises it in the context of the run so
- * far, building a timeline of what happened. Off by default: every summary is one more Claude call.
+ * far, building a timeline of what happened. On by default: a summary is one more Claude call, but a cheap one
+ * (haiku, minimal mode, §13.6). Graph files that store `enabled: false` keep it off.
  */
 export const RunBriefSettingsSchema = z.object({
-  enabled: z.boolean().default(false),
+  enabled: z.boolean().default(true),
   /** Empty or absent = DEFAULT_BRIEF_MODEL. */
   model: z.string().optional(),
 });

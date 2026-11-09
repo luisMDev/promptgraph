@@ -273,13 +273,14 @@ export class WsTestClient {
 
 type NodeSpec = { id: string; type: string; label?: string; config?: Record<string, unknown>; onError?: "pause" | "fail-run" };
 
-/** Linear chain graph (nodes left to right), auto completion without grace unless overridden. */
+/** Linear chain graph (nodes left to right), auto completion without grace and no run brief unless overridden. */
 export function chainGraph(id: string, nodes: NodeSpec[], settings: Record<string, unknown> = {}): GraphInput {
   return {
     version: 1,
     id,
     name: id,
-    settings: { defaults: { completion: { mode: "auto", graceSec: 0 } }, ...settings },
+    // The run brief (on by default, §13.6) would add claude -p calls to the fake claude log and to the usage totals.
+    settings: { defaults: { completion: { mode: "auto", graceSec: 0 } }, brief: { enabled: false }, ...settings },
     nodes: nodes.map((n, i) => ({ label: n.id, ...n, position: { x: i * 250, y: 0 } })) as GraphInput["nodes"],
     edges: nodes.slice(1).map((n, i) => ({ id: `e${i}`, source: nodes[i]!.id, target: n.id })),
   };

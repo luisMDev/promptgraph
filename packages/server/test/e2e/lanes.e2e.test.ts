@@ -14,7 +14,8 @@ function graph(id: string, nodes: Spec[], edges: string[], settings: Record<stri
     version: 1,
     id,
     name: id,
-    settings: { defaults: { completion: { mode: "auto", graceSec: 0 } }, ...settings },
+    // No run brief (on by default, §13.6): its claude -p calls would show up in the fake claude log.
+    settings: { defaults: { completion: { mode: "auto", graceSec: 0 } }, brief: { enabled: false }, ...settings },
     nodes: nodes.map((n) => ({ id: n.id, type: n.type, label: n.id, position: { x: n.at[0], y: n.at[1] }, config: n.config ?? {} })),
     edges: edges.map((e, i) => {
       const [source, target] = e.split(">");

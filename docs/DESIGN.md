@@ -204,7 +204,7 @@ type GraphSettings = {
     completion: CompletionPolicy;   // see §7.4
   };
   keepWorktrees: "never" | "on-failure" | "always";   // default "on-failure"
-  brief: { enabled: boolean; model?: string };         // run brief, §13.6; default { enabled: false }, model "haiku"
+  brief: { enabled: boolean; model?: string };         // run brief, §13.6; default { enabled: true }, model "haiku"
 };
 
 type Node = {
@@ -805,7 +805,7 @@ A Linear/Notion-like tab strip at the top of the page, implemented in React (it 
 
 ### 13.6 Run brief
 
-A timeline of what has happened in a run so far, readable at any moment without opening terminals. It is a graph setting, `settings.brief` (`enabled`, default off, since every entry is one more Claude call; `model`, default `haiku`), toggled in the graph settings (**Run brief: summarise each step**) and read from the run's snapshot.
+A timeline of what has happened in a run so far, readable at any moment without opening terminals. It is a graph setting, `settings.brief` (`enabled`, default on: every entry is one more Claude call, but in minimal mode with haiku it costs about $0.0004, see **How** below; graph files that store `enabled: false` keep it off; `model`, default `haiku`), toggled in the graph settings (**Run brief: summarise each step**) and read from the run's snapshot.
 
 - **When.** Each time a node run settles as `succeeded` or `failed` (handled failures and retries included; skips, cancellations and dead paths are not summarised), the engine tells the `RunBriefer` (`engine/brief.ts`), which records a `pending` entry (`kind: "node"`) and queues its summary. When the run ends (any final status) and at least one step was summarised, one more entry (`kind: "run"`) summarises the whole run.
 - **How.** A headless call, `claude -p --output-format json --json-schema` (`{ title, summary }`) in the main checkout, 120 s timeout, in minimal mode: `--tools ""`, `--safe-mode --strict-mcp-config` (no CLAUDE.md, skills, plugins, hooks or MCP servers; the login works as usual, unlike `--bare`, which reads only an API key), a short `--system-prompt` instead of Claude Code's and `--no-session-persistence`. Without it each call loads the user's whole setup: measured at about $0.44 per entry with many MCP servers, against about $0.0004 in minimal mode with haiku. Claude answers only from the prompt, which holds the graph's name and steps, the brief so far (the last 30 ready step entries, titles and summaries), and the step: label, type, result, duration, iteration/attempt, its instructions (prompt, command, shell line, …, up to 1 500 characters), its output as in the context block of §7.5 (up to 4 000) and the `git diff --stat` of its snapshots (§9.7). The run entry gets the result of every step instead. Claude writes in the language of the step instructions.

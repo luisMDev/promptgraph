@@ -56,10 +56,20 @@ describe("run brief (§13.6)", () => {
     expect(briefEvents.every((e) => e.repoId === "repo-0123abcd")).toBe(true);
   });
 
-  it("does nothing when the graph has the brief off (the default)", async () => {
-    const summarize = vi.fn<Summarize>();
+  it("is on by default: a graph without brief settings gets its steps summarised", async () => {
+    const summarize = vi.fn<Summarize>(async () => ({ summary: { title: "Done", summary: "It ran." }, usage: null }));
     const { s } = briefSetup(summarize);
     s.graphs.save(makeGraph([{ id: "a" }], []));
+    const detail = await s.engine.startRun("flow");
+    await waitRun(s, detail.run.id, "succeeded");
+    expect(detail.run.graphSnapshot.settings.brief.enabled).toBe(true);
+    await waitFor(() => summarize.mock.calls.length >= 1);
+  });
+
+  it("does nothing when the graph has the brief off", async () => {
+    const summarize = vi.fn<Summarize>();
+    const { s } = briefSetup(summarize);
+    s.graphs.save(makeGraph([{ id: "a" }], [], { brief: { enabled: false } }));
     const detail = await s.engine.startRun("flow");
     await waitRun(s, detail.run.id, "succeeded");
     expect(s.store.listBriefEntries(detail.run.id)).toEqual([]);
