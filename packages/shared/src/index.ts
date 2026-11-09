@@ -1,4 +1,5 @@
 export * from "./graph.js";
+export * from "./linear.js";
 export * from "./status.js";
 export * from "./run.js";
 export * from "./pricing.js";

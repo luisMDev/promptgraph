@@ -19,6 +19,7 @@ import {
   type Topology,
 } from "../topology.js";
 import { regexError } from "../condition.js";
+import { isValidBranchPrefix } from "../linear.js";
 import type { ValidateOptions, ValidationIssue, ValidationResult } from "./types.js";
 
 /** Node types whose work leaves uncommitted changes in the lane (for the §18 Q1 warning). */
@@ -162,12 +163,11 @@ function checkCompletion(policy: CompletionPolicy, out: Collector, nodeId: strin
 }
 
 /** Slash-separated segments of letters, digits, "_", "." and "-"; no segment starts with "." or "-" (§9.1). */
-const BRANCH_PREFIX_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/;
 
 /** A lane branch `<prefix>/<run>/<lane>` must be a plain git ref name (no "+x" refspecs, "-x" options, ".."). */
 function checkBranchPrefix(prefix: string, out: Collector): void {
   const p = prefix.trim();
-  if (!p || (BRANCH_PREFIX_PATTERN.test(p) && !/\.\.|\.lock(\/|$)|\.(\/|$)/.test(p))) return;
+  if (!p || isValidBranchPrefix(p)) return;
   out.error({
     code: "invalid_config",
     message: `Branch prefix "${p}" is not a valid branch name: use letters, digits, "_", "." and "-" separated by "/".`,
@@ -208,6 +208,14 @@ function checkNodeConfig(graph: Graph, node: GraphNode, out: Collector, phase: 1
       break;
     case "approval":
     case "merge":
+      break;
+    case "linear":
+      if (!node.config.allowComments && !node.config.allowStateChanges) {
+        out.error({ code: "invalid_config", message: "The node may neither comment nor change states: allow at least one.", nodeId: node.id });
+      }
+      if (!graph.issues?.length) {
+        out.warn({ code: "linear_no_issues", message: "The graph links no Linear issues: this node will have nothing to update.", nodeId: node.id });
+      }
       break;
     case "condition": {
       if (phase === 1 && isPhase2NodeType(node.type)) {

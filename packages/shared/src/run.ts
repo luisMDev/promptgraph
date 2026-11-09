@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LinearUpdateOutputSchema } from "./linear.js";
 import { BillingModeSchema } from "./billing.js";
 import { GraphSchema } from "./graph.js";
 import { LaneStatusSchema, NodeStatusSchema, RunStatusSchema } from "./status.js";
@@ -38,6 +39,8 @@ export const NodeRunOutputSchema = z.object({
   /** approval / pr gate */
   approved: z.boolean().optional(),
   comment: z.string().optional(),
+  /** linear (§24.5): proposed updates, then what was applied. */
+  linear: LinearUpdateOutputSchema.optional(),
   /** condition (Phase 2): chosen port. */
   port: z.enum(["true", "false"]).optional(),
   /** condition (Phase 2): evaluation result (port === "true"); the reason is in `text`. */

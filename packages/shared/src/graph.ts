@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { branchPrefixForIssue, GraphIssuesSchema, type GraphIssue } from "./linear.js";
 
 // ---------------------------------------------------------------------------
 // Shared enums
 // ---------------------------------------------------------------------------
 
-export const NODE_TYPES = ["prompt", "command", "shell", "commit", "pr", "approval", "merge", "condition"] as const;
+export const NODE_TYPES = ["prompt", "command", "shell", "commit", "pr", "approval", "merge", "condition", "linear"] as const;
 export const NodeTypeSchema = z.enum(NODE_TYPES);
 export type NodeType = z.infer<typeof NodeTypeSchema>;
 
@@ -132,6 +133,22 @@ export const ConditionConfigSchema = z.object({
 });
 export type ConditionConfig = z.infer<typeof ConditionConfigSchema>;
 
+/**
+ * `linear` nodes (§24.5): Claude proposes progress comments and state changes for the graph's linked issues; after
+ * approval (always required: it writes outside the machine) the daemon applies them.
+ */
+export const LinearConfigSchema = z.object({
+  /** Instructions for Claude; absent or blank = DEFAULT_LINEAR_UPDATE_PROMPT. */
+  prompt: z.string().optional(),
+  allowComments: z.boolean().default(true),
+  allowStateChanges: z.boolean().default(true),
+  /** Headless model; absent = settings.defaults.model. */
+  model: z.string().optional(),
+  /** Headless call timeout; absent = 300 s. */
+  timeoutSec: z.number().int().positive().optional(),
+});
+export type LinearConfig = z.infer<typeof LinearConfigSchema>;
+
 export const NODE_CONFIG_SCHEMAS = {
   prompt: PromptConfigSchema,
   command: CommandConfigSchema,
@@ -141,6 +158,7 @@ export const NODE_CONFIG_SCHEMAS = {
   approval: ApprovalConfigSchema,
   merge: MergeConfigSchema,
   condition: ConditionConfigSchema,
+  linear: LinearConfigSchema,
 } as const satisfies Record<NodeType, z.ZodType>;
 
 export type NodeConfigMap = { [K in NodeType]: z.infer<(typeof NODE_CONFIG_SCHEMAS)[K]> };
@@ -171,6 +189,7 @@ export const PrNodeSchema = z.object({ ...nodeBase, type: z.literal("pr"), confi
 export const ApprovalNodeSchema = z.object({ ...nodeBase, type: z.literal("approval"), config: ApprovalConfigSchema.prefault({}) });
 export const MergeNodeSchema = z.object({ ...nodeBase, type: z.literal("merge"), config: MergeConfigSchema.prefault({}) });
 export const ConditionNodeSchema = z.object({ ...nodeBase, type: z.literal("condition"), config: ConditionConfigSchema.prefault({}) });
+export const LinearNodeSchema = z.object({ ...nodeBase, type: z.literal("linear"), config: LinearConfigSchema.prefault({}) });
 
 export const NodeSchema = z.discriminatedUnion("type", [
   PromptNodeSchema,
@@ -181,6 +200,7 @@ export const NodeSchema = z.discriminatedUnion("type", [
   ApprovalNodeSchema,
   MergeNodeSchema,
   ConditionNodeSchema,
+  LinearNodeSchema,
 ]);
 export type GraphNode = z.infer<typeof NodeSchema>;
 export type GraphNodeOf<T extends NodeType> = Extract<GraphNode, { type: T }>;
@@ -248,6 +268,8 @@ export const GraphSchema = z.object({
   id: GraphIdSchema,
   name: z.string().min(1),
   settings: GraphSettingsSchema.prefault({}),
+  /** The Linear issues the graph works on (§24), in the order they were linked; absent for graphs that are only named. */
+  issues: GraphIssuesSchema.optional(),
   nodes: z.array(NodeSchema).default([]),
   edges: z.array(EdgeSchema).default([]),
 });
@@ -304,6 +326,12 @@ export function compareCanvasOrder(a: Pick<GraphNode, "id" | "position">, b: Pic
   return a.position.x - b.position.x || a.position.y - b.position.y || a.id.localeCompare(b.id);
 }
 
-export function createEmptyGraph(id: string, name: string, baseBranch = "main"): Graph {
-  return GraphSchema.parse({ version: 1, id, name, settings: { baseBranch } });
+/**
+ * A new graph with no nodes. Linked to `issues`, it also takes the first issue's branch prefix (branchPrefixForIssue),
+ * so its lane branches carry that identifier.
+ */
+export function createEmptyGraph(id: string, name: string, baseBranch = "main", issues: readonly GraphIssue[] = []): Graph {
+  const first = issues[0];
+  if (!first) return GraphSchema.parse({ version: 1, id, name, settings: { baseBranch } });
+  return GraphSchema.parse({ version: 1, id, name, issues, settings: { baseBranch, branchPrefix: branchPrefixForIssue(first) } });
 }

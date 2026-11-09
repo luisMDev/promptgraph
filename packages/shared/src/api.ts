@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { GraphSchema, NodeTypeSchema } from "./graph.js";
+import { GraphIssueSchema, LinearUpdateDecisionSchema, LinearUpdateProposalSchema, MAX_GRAPH_ISSUES } from "./linear.js";
 import { RepoIdSchema } from "./repos.js";
 import { LaneSchema, NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
 import { RunStatusSchema } from "./status.js";
@@ -93,6 +94,8 @@ export const GraphListItemSchema = z.object({
   loadError: z.string().nullable(),
   updatedAt: z.number(),
   hash: z.string(),
+  /** The linked Linear issues (§24), for badges in lists; absent when the graph has none or does not parse. */
+  issues: z.array(GraphIssueSchema.pick({ id: true, identifier: true, title: true, url: true })).optional(),
 });
 export type GraphListItem = z.infer<typeof GraphListItemSchema>;
 
@@ -217,6 +220,8 @@ export const ApprovalRequestSchema = z.object({
    * approval when the lane moved since, and pushes exactly this commit.
    */
   headSha: z.string().optional(),
+  /** linear nodes (§24.5): the updates to apply, as edited in the dialog; proposals left out are skipped. */
+  linearUpdates: z.array(LinearUpdateDecisionSchema).max(MAX_GRAPH_ISSUES).optional(),
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
@@ -227,6 +232,8 @@ export const ApprovalInfoResponseSchema = z.object({
   showDiff: z.boolean(),
   /** pr nodes: proposed (generated or configured) title/body. */
   pr: z.object({ title: z.string(), body: z.string(), base: z.string(), draft: z.boolean() }).nullable(),
+  /** linear nodes (§24.5): the proposed updates. */
+  linear: z.object({ proposals: z.array(LinearUpdateProposalSchema), allowComments: z.boolean(), allowStateChanges: z.boolean() }).optional(),
   /** Outputs of direct predecessors, by node id. */
   predecessorOutputs: z.array(z.object({ nodeId: z.string(), label: z.string(), text: z.string() })),
 });
@@ -417,6 +424,15 @@ export const API = {
   /** DELETE → OkResponse (409 repo_active unless `force`). */
   removeRepo: (repoId: string, force = false) => `/api/repos/${enc(repoId)}${force ? "?force=1" : ""}`,
   settings: "/api/settings",
+  /** GET → LinearStatusResponse (§24). */
+  linear: "/api/linear",
+  /** PUT SetLinearKeyRequest → LinearStatusResponse; DELETE → LinearStatusResponse. */
+  linearKey: "/api/linear/key",
+  /** GET → LinearIssueStatesResponse: the current state of linked issues, by Linear id. */
+  linearIssueStates: (ids: readonly string[]) => `/api/linear/issue-states?ids=${enc(ids.join(","))}`,
+  /** GET → LinearIssuesResponse; `states`: state types to keep (default: the open ones); `scope`: mine / all. */
+  linearIssues: (q: string, states?: readonly string[], scope?: "mine" | "all") =>
+    `/api/linear/issues?q=${enc(q)}${states ? `&states=${enc(states.join(","))}` : ""}${scope ? `&scope=${scope}` : ""}`,
   /** GET → ListDirsResponse: subdirectories of `path` (default: home), for Home's folder picker. */
   dirs: (path?: string, hidden = false) => {
     const q = new URLSearchParams();

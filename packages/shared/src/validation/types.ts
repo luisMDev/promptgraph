@@ -12,6 +12,7 @@ export const VALIDATION_CODES = [
   "invalid_port",
   "cycle",
   "invalid_join",
+  "linear_no_issues",
   "merge_input_count",
   "invalid_resume_context",
   "missing_config",
