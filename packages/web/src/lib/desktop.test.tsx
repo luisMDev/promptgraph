@@ -10,7 +10,7 @@ import type { PgFlowNode } from "../components/nodes/types";
 import { TabStrip, WindowTitleBar } from "../components/tabs/TabStrip";
 import { useDaemonStore } from "../store/daemon-store";
 import { AUTO_RELOGIN_KEY, useReloginStore } from "../store/relogin-store";
-import { createTabsStore, setTabsStore, type TabsStoreApi } from "../store/tabs-store";
+import { PAGE_ID, createTabsStore, setTabsStore, type TabsStoreApi } from "../store/tabs-store";
 import { createTestView } from "../store/view/test-view";
 import { FakeSocket, REPO, installFakeDaemon, resetGlobals, summaryOf } from "../test-daemon";
 import { linearGraph, nodeRunOf } from "../test-fixtures";
@@ -244,6 +244,8 @@ describe("TabStrip as the title bar (DESIGN §20.2)", () => {
 
   it("custom title bar: drag regions on the strip and the spacer only, window controls and edges", async () => {
     const bridge = spyBridge();
+    // A diagram tab in the background: the page (Home) stays shown.
+    tabs.getState().open("/nope", { activate: false });
     render(<TabStrip bridge={bridge} />);
     const strip = document.querySelector("[data-pg-tabstrip]")!;
     const spacer = document.querySelector("[data-pg-tabstrip-spacer]")!;
@@ -329,6 +331,7 @@ describe("TabStrip as the title bar (DESIGN §20.2)", () => {
   });
 
   it("in a browser: nothing desktop-specific", () => {
+    tabs.getState().open("/nope", { activate: false });
     render(<TabStrip />);
     expect(dragRegions()).toEqual([]);
     expect(screen.queryByRole("button", { name: "Close window" })).toBeNull();
@@ -340,11 +343,14 @@ describe("App in the desktop window", () => {
   it("handles the Ctrl shortcuts (bridge.isDesktop) and installs the external link handler", async () => {
     const bridge = spyBridge();
     setDesktopBridge(bridge);
+    tabs.getState().open("/nope", { activate: true });
     render(<App />);
     await act(async () => {});
-    expect(tabs.getState().tabs).toHaveLength(1);
+    expect(tabs.getState().activeId).not.toBe(PAGE_ID);
+    // New tab shows Home in the page; no tab is added.
     fireEvent.keyDown(window, { code: "KeyT", key: "t", ctrlKey: true });
-    expect(tabs.getState().tabs).toHaveLength(2);
+    expect(tabs.getState().activeId).toBe(PAGE_ID);
+    expect(tabs.getState().tabs.map((t) => t.path)).toEqual(["/", "/nope"]);
 
     const link = document.createElement("a");
     link.href = "https://github.com/o/r/pull/9";
@@ -356,12 +362,13 @@ describe("App in the desktop window", () => {
   });
 
   it("in a browser Ctrl+T is left to the browser", async () => {
+    tabs.getState().open("/nope", { activate: true });
     render(<App />);
     await act(async () => {});
     fireEvent.keyDown(window, { code: "KeyT", key: "t", ctrlKey: true });
-    expect(tabs.getState().tabs).toHaveLength(1);
+    expect(tabs.getState().activeId).not.toBe(PAGE_ID);
     fireEvent.keyDown(window, { code: "KeyT", key: "t", altKey: true });
-    expect(tabs.getState().tabs).toHaveLength(2);
+    expect(tabs.getState().activeId).toBe(PAGE_ID);
   });
 });
 

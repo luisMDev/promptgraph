@@ -1,29 +1,33 @@
-import { nodeDisplayLabel, webRoutes } from "@promptgraph/shared";
+import { nodeDisplayLabel } from "@promptgraph/shared";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { repoApi } from "../api/rest";
 import { wsClient } from "../api/ws";
 import { ChatDock } from "../components/chat/ChatDock";
 import { ClaudeStatus } from "../components/claude/ClaudeStatus";
+import { StripApprovals } from "../components/header/StripApprovals";
 import { useTabContext } from "../components/tabs/tab-context";
+import { graphKey } from "../store/tabs-store";
 import { useLocation } from "../lib/router/location";
 import { tabTitleFromData } from "../lib/tabs/titles";
 import { routeRunId, type RepoRoute } from "../lib/router/routes";
 import { useDaemonStore } from "../store/daemon-store";
 import { dispatcher } from "../store/live";
 import { getRepoCache, useRepoCache } from "../store/repo-cache";
-import { closeAllTerminals, lastGraphId, rememberGraph, showNodeRun } from "../store/view/actions";
+import { closeAllTerminals, rememberGraph, showNodeRun } from "../store/view/actions";
 import { ViewProvider, type View, type ViewStores } from "../store/view/context";
 import { acquireEditorStore, createEditorStore, type EditorStoreApi } from "../store/view/editor-store";
 import { createRunStore, type RunStoreApi } from "../store/view/run-store";
 import { createViewUiStore } from "../store/view/ui-store";
+import { GraphsView } from "./GraphsView";
 import { FullScreenMessage, NotFound } from "./NotFound";
 import { Workspace } from "./Workspace";
 
 /**
- * One view of a repository (DESIGN §13.2): its run and UI stores, the shared editor store of the graph it
- * shows, its repository subscription, and the route applied to those stores (graph opened, run selected and
- * subscribed, node run shown). Mounted per repository; the route inside it changes freely.
+ * One view of a repository (DESIGN §13.2): its run and UI stores, the shared editor store of the graph it shows,
+ * its repository subscription, and the route applied to those stores (graph opened, run selected and subscribed,
+ * node run shown). `/r/<repoId>` shows the overview filtered to the repository (§13.3). Mounted per repository; the route
+ * inside it changes freely, so going from the list to a graph and back keeps the view's stores.
  */
 export function RepoView({ route, active: activeProp }: { route: RepoRoute; active?: boolean }) {
   const { repoId } = route;
@@ -54,12 +58,6 @@ export function RepoView({ route, active: activeProp }: { route: RepoRoute; acti
   if (infoError?.status === 404) return <NotFound what="This repository is not registered." />;
   if (infoError) return <FullScreenMessage title="This repository cannot be opened" detail={infoError.message} retry={() => void cache.getState().load()} />;
   if (!info || !graphs) return <FullScreenMessage title="Loading…" />;
-  if (route.kind === "repo") {
-    // `/r/<repoId>` → the repository's last graph, else its first; with no graph, the empty editor.
-    const last = lastGraphId(repoId);
-    const target = graphs.find((g) => g.id === last)?.id ?? graphs[0]?.id ?? null;
-    if (target) return <Redirect to={webRoutes.graph(repoId, target)} />;
-  }
   return <RouteViews route={route} own={own} active={active} />;
 }
 
@@ -95,12 +93,6 @@ function useReportToTab(route: RepoRoute, run: RunStoreApi, editor: EditorStoreA
   }, [reportEditor, editor]);
 }
 
-function Redirect({ to }: { to: string }) {
-  const { navigate } = useLocation();
-  useEffect(() => navigate(to, { replace: true }), [to, navigate]);
-  return null;
-}
-
 interface OwnStores {
   api: ViewStores["api"];
   run: RunStoreApi;
@@ -134,6 +126,11 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
   const graphId = routeGraphId ?? runGraphId;
   const editor = useEditorSlot(repoId, graphId);
   useReportToTab(route, own.run, editor);
+  // A run shows its graph: the tab belongs to that graph (one tab per graph, §13.4).
+  const setGraph = useTabContext()?.setGraph;
+  useEffect(() => {
+    if (setGraph && graphId) setGraph(graphKey(repoId, graphId));
+  }, [setGraph, repoId, graphId]);
   const stores: ViewStores = useMemo(() => ({ repoId, ...own, editor, active }), [repoId, own, editor, active]);
   const view: View = useMemo(() => ({ ...stores, navigate: location.navigate, openInNewTab: location.openInNewTab }), [stores, location.navigate, location.openInNewTab]);
 
@@ -182,13 +179,15 @@ function RouteViews({ route, own, active }: { route: RepoRoute; own: OwnStores; 
   const runNotFound = useStore(own.run, (s) => s.detailNotFound && s.selectedRunId === runId);
   const nodeRunMissing = useStore(own.run, (s) => !!nodeRunId && s.detail?.run.id === runId && !s.detail.nodeRuns.some((n) => n.id === nodeRunId));
 
-  let content: ReactNode = <Workspace route={route} />;
+  // `/r/<repoId>` shows the overview filtered to the repository (§13.3); every other route is the editor or a run.
+  let content: ReactNode = route.kind === "repo" ? <GraphsView /> : <Workspace route={route} />;
   if (route.kind === "graph" && graphNotFound) content = <NotFound what="This graph does not exist." repoId={repoId} />;
   else if (runNotFound) content = <NotFound what="This run does not exist in this repository." repoId={repoId} />;
   else if (nodeRunMissing) content = <NotFound what="This step does not exist in this run." repoId={repoId} />;
   return (
     <ViewProvider value={stores}>
       {content}
+      <StripApprovals />
       <ClaudeStatus />
       <ChatDock />
     </ViewProvider>

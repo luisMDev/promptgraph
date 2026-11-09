@@ -7,9 +7,11 @@ import type { KeyAction } from "../lib/keymap";
 import { parseRoute } from "../lib/router/routes";
 
 /**
- * The in-app tabs of one window (DESIGN §13.4). A tab shows any view of any repository; its path is the
- * source of truth for what it shows. The live set is kept in `sessionStorage` (one window; survives a
- * reload) and mirrored to `localStorage`, which only seeds a window that starts without a session set.
+ * The in-app tabs of one window (DESIGN §13.4). Tabs are for diagrams: a graph and its runs, steps and reports, at
+ * most one tab per graph. Home and a repository's graph list are not tabs: they show in the **page** (`PAGE_ID`, kept
+ * first in `tabs` and never shown in the strip), which the sidebar navigates. A tab's path is the source of truth for
+ * what it shows. The live set is kept in `sessionStorage` (one window; survives a reload) and mirrored to
+ * `localStorage`, which only seeds a window that starts without a session set.
  */
 export interface Tab {
   id: string;
@@ -19,6 +21,8 @@ export interface Tab {
   title?: string;
   /** The tab's chat windows (DESIGN §21.11); dropped when the tab leaves their repository. */
   chats?: TabChats;
+  /** The graph the tab shows (`graphKey`): from a graph route, or reported by the view of a run route. */
+  graph?: string;
 }
 
 /** Chats opened in a tab, in bottom-bar order, and the one whose window is open (null: all minimised). */
@@ -66,25 +70,31 @@ export interface TabsState {
   lastNavigation: TabNavigation | null;
 
   /**
-   * Opens a path: a tab already showing it (after normalisation) is reused; `/r/<repoId>` reuses the most
-   * recently used tab of that repository. Returns the tab id.
+   * Opens a path. Home and `/r/<repoId>` show in the page; a diagram path reuses the tab of its graph (or one already
+   * showing the path), navigated to it. Returns the tab id.
    */
   open(path: string, opts: OpenTabOptions): string;
-  /** Closes a tab (the last one leaves a Home tab); it goes on the closed stack. */
+  /** Closes a diagram tab (the page cannot be closed); it goes on the closed stack. The last one shows its repository's graph list in the page. */
   close(id: string): void;
   activate(id: string): void;
-  /** The tab shows another path (duplicates of other tabs are allowed). */
+  /**
+   * The tab shows another path. A page path from a diagram tab shows in the page instead (with `replace`, the tab is
+   * closed: what it showed is gone); a diagram path from the page opens its tab; a graph another tab shows activates
+   * that tab.
+   */
   navigate(id: string, path: string, opts?: { replace?: boolean }): void;
   /** Back/forward re-applies a history entry to its tab and activates it (no new history entry). */
   applyHistory(id: string, path: string): void;
-  /** Next (+1) or previous (-1) tab in strip order, wrapping around. */
+  /** Next (+1) or previous (-1) diagram tab in strip order, wrapping around. */
   next(dir: 1 | -1): void;
-  /** Activates the tab at a 0-based strip index, or the last one; out of range does nothing. */
+  /** Activates the diagram tab at a 0-based strip index, or the last one; out of range does nothing. */
   goto(index: number | "last"): void;
   reopenClosed(): void;
   setTitle(id: string, title: string): void;
-  /** Moves a tab to a 0-based strip index (clamped); the active tab and the MRU order do not change. */
+  /** Moves a diagram tab to a 0-based strip index (clamped); the active tab and the MRU order do not change. */
   move(id: string, index: number): void;
+  /** The view of a run route reports the run's graph (`graphKey`), so the graph keeps one tab. */
+  setGraph(id: string, graph: string | null): void;
   /** Replaces a tab's chats (null or no ids: none). */
   setChats(id: string, chats: TabChats | null): void;
 }
@@ -96,6 +106,8 @@ export const TABS_LAST_KEY = "pg.tabs.last.v1";
 export const MAX_TABS = 30;
 export const MAX_CLOSED_TABS = 10;
 export const HOME_PATH = "/";
+/** The page: Home or a repository's graph list, never a tab of the strip. */
+export const PAGE_ID = "page";
 export const MAX_TAB_PATH = 2048;
 export const MAX_TAB_TITLE = 300;
 
@@ -114,6 +126,7 @@ const TabSchema = z.object({
   path: z.string(),
   title: z.string().max(MAX_TAB_TITLE).optional().catch(undefined),
   chats: TabChatsSchema.optional().catch(undefined),
+  graph: z.string().max(500).optional().catch(undefined),
 });
 
 /** What both storages hold: `{version: 1, tabs, activeId, mru}`. */
@@ -130,6 +143,22 @@ export function tabPath(path: string): string {
   if (path.length > MAX_TAB_PATH || !isSafeNextPath(path)) return HOME_PATH;
   const normalized = normalizePath(path);
   return normalized.length > MAX_TAB_PATH ? HOME_PATH : normalized;
+}
+
+/** Home and a repository's graph list show in the page; everything else (diagrams, not found) in a tab. */
+export function isPagePath(path: string): boolean {
+  const kind = parseRoute(path).kind;
+  return kind === "home" || kind === "repo";
+}
+
+/** The graph a graph route shows (`<repoId>/<graphId>`), else null. */
+export function graphKeyOf(path: string): string | null {
+  const route = parseRoute(path);
+  return route.kind === "graph" ? graphKey(route.repoId, route.graphId) : null;
+}
+
+export function graphKey(repoId: string, graphId: string): string {
+  return `${repoId}/${graphId}`;
 }
 
 /** Titles come from user data (graph names, node labels) of any length: what a tab keeps is capped. */
@@ -165,13 +194,35 @@ export function parsePersistedTabs(raw: string | null): Pick<TabsState, "tabs" |
     const tab: Tab = t.title === undefined ? { id: t.id, path } : { id: t.id, path, title: t.title };
     const chats = t.chats && repoOf(path) === t.chats.repoId ? normalizeChats(t.chats) : null;
     if (chats) tab.chats = chats;
+    const graph = graphKeyOf(path) ?? (t.graph && repoOf(path) === t.graph.split("/")[0] ? t.graph : undefined);
+    if (graph) tab.graph = graph;
     tabs.push(tab);
   }
   if (tabs.length === 0) return null;
   const mru = [...new Set(parsed.data.mru.filter((id) => seen.has(id)))];
   for (const t of tabs) if (!mru.includes(t.id)) mru.push(t.id);
   const activeId = seen.has(parsed.data.activeId) ? parsed.data.activeId : mru[0]!;
-  return { tabs, activeId, mru: [activeId, ...mru.filter((id) => id !== activeId)] };
+  return withPage(tabs, activeId, [activeId, ...mru.filter((id) => id !== activeId)]);
+}
+
+/**
+ * Puts the page first, made from the stored page or (sets saved before the page existed) the most recently used
+ * Home or repository tab, which are dropped; every other tab is a diagram tab.
+ */
+function withPage(all: Tab[], activeId: string, mru: string[]): Pick<TabsState, "tabs" | "activeId" | "mru"> {
+  const pageLike = (t: Tab) => t.id === PAGE_ID || isPagePath(t.path);
+  const stored = all.find((t) => t.id === PAGE_ID && isPagePath(t.path));
+  const recent = mru.map((id) => all.find((t) => t.id === id)).find((t): t is Tab => !!t && pageLike(t));
+  const source = stored ?? recent;
+  const page: Tab = source ? { ...source, id: PAGE_ID } : { id: PAGE_ID, path: HOME_PATH };
+  if (!isPagePath(page.path)) page.path = HOME_PATH;
+  delete page.graph;
+  const tabs = [page, ...all.filter((t) => !pageLike(t))];
+  const ids = new Set(tabs.map((t) => t.id));
+  const active = ids.has(activeId) ? activeId : all.find((t) => t.id === activeId && pageLike(t)) ? PAGE_ID : (mru.find((id) => ids.has(id)) ?? PAGE_ID);
+  const order = [...new Set(mru.map((id) => (ids.has(id) ? id : all.find((t) => t.id === id && pageLike(t)) ? PAGE_ID : null)).filter((id): id is string => id !== null))];
+  for (const t of tabs) if (!order.includes(t.id)) order.push(t.id);
+  return { tabs, activeId: active, mru: [active, ...order.filter((id) => id !== active)] };
 }
 
 /** Unique ids, at most MAX_TAB_CHATS (the newest), `open` one of them; null when there is none. */
@@ -181,16 +232,22 @@ function normalizeChats(chats: TabChats): TabChats | null {
   return { repoId: chats.repoId, ids, open: chats.open !== null && ids.includes(chats.open) ? chats.open : null };
 }
 
-/** A tab moved to `path`: the title is dropped, the chats kept while it stays in their repository. */
+/**
+ * A tab moved to `path`: the title is dropped, the chats kept while it stays in their repository, the graph taken
+ * from a graph route (else kept while it stays in its repository, until the view reports it).
+ */
 function retarget(tab: Tab, path: string): Tab {
   const next: Tab = { id: tab.id, path };
   if (tab.chats && repoOf(path) === tab.chats.repoId) next.chats = tab.chats;
+  if (tab.id !== PAGE_ID) {
+    const graph = graphKeyOf(path) ?? (tab.graph && repoOf(path) === tab.graph.split("/")[0] ? tab.graph : undefined);
+    if (graph) next.graph = graph;
+  }
   return next;
 }
 
 function homeSet(): Pick<TabsState, "tabs" | "activeId" | "mru"> {
-  const id = newTabId();
-  return { tabs: [{ id, path: HOME_PATH }], activeId: id, mru: [id] };
+  return { tabs: [{ id: PAGE_ID, path: HOME_PATH }], activeId: PAGE_ID, mru: [PAGE_ID] };
 }
 
 function read(storage: Storage | null, key: string): string | null {
@@ -240,9 +297,10 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
     function capped(state: Pick<TabsState, "tabs" | "activeId" | "mru" | "closed">, keepId: string): Pick<TabsState, "tabs" | "mru" | "closed"> {
       let { tabs, mru, closed } = state;
       while (tabs.length > MAX_TABS) {
-        const victim = [...mru].reverse().find((id) => id !== state.activeId && id !== keepId)!;
+        const victim = [...mru].reverse().find((id) => id !== state.activeId && id !== keepId && id !== PAGE_ID)!;
         const index = tabs.findIndex((t) => t.id === victim);
-        closed = pushClosed(closed, tabs[index]!, index);
+        // The closed stack keeps strip indices (the page, first, is not in the strip).
+        closed = pushClosed(closed, tabs[index]!, index - 1);
         tabs = tabs.filter((t) => t.id !== victim);
         mru = mru.filter((id) => id !== victim);
       }
@@ -258,12 +316,24 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
       const s = get();
       const id = newTabId();
       const tab: Tab = title === undefined ? { id, path } : { id, path, title: capTitle(title) };
+      const graph = graphKeyOf(path);
+      if (graph) tab.graph = graph;
       const tabs = [...s.tabs];
-      tabs.splice(at === undefined ? tabs.length : Math.min(Math.max(at, 0), tabs.length), 0, tab);
+      // `at` is a strip index; the page stays first.
+      tabs.splice(at === undefined ? tabs.length : Math.min(Math.max(at + 1, 1), tabs.length), 0, tab);
       const activeId = activate ? id : s.activeId;
       const mru = activate ? [id, ...s.mru] : [...s.mru, id];
       set({ activeId, ...capped({ tabs, activeId, mru, closed: s.closed }, id) });
       return id;
+    }
+
+    /** The page shows `path` (Home or a graph list), activated or not. */
+    function showPage(path: string, activate: boolean): void {
+      const s = get();
+      const page = s.tabs.find((t) => t.id === PAGE_ID)!;
+      const tabs = page.path === path ? s.tabs : s.tabs.map((t) => (t.id === PAGE_ID ? retarget(t, path) : t));
+      set({ tabs, lastNavigation: { tabId: PAGE_ID, path, replace: false } });
+      if (activate) get().activate(PAGE_ID);
     }
 
     return {
@@ -273,13 +343,18 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
 
       open(rawPath, { activate, dedupe = true }) {
         const path = tabPath(rawPath);
+        if (isPagePath(path)) {
+          showPage(path, activate);
+          return PAGE_ID;
+        }
         const s = get();
         if (dedupe) {
-          const route = parseRoute(path);
-          // In MRU order: of two tabs on the same path (or repository), the one used last wins.
-          const byMru = s.mru.map((id) => s.tabs.find((t) => t.id === id)).filter((t): t is Tab => t !== undefined);
-          const existing = byMru.find((t) => (route.kind === "repo" ? repoOf(t.path) === route.repoId : t.path === path));
+          const graph = graphKeyOf(path);
+          // In MRU order: of two tabs of the same graph (or path), the one used last wins.
+          const byMru = s.mru.map((id) => s.tabs.find((t) => t.id === id)).filter((t): t is Tab => t !== undefined && t.id !== PAGE_ID);
+          const existing = byMru.find((t) => t.path === path) ?? (graph ? byMru.find((t) => t.graph === graph) : undefined);
           if (existing) {
+            if (existing.path !== path) set({ tabs: get().tabs.map((t) => (t.id === existing.id ? retarget(t, path) : t)), lastNavigation: { tabId: existing.id, path, replace: false } });
             if (activate) get().activate(existing.id);
             return existing.id;
           }
@@ -290,13 +365,16 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
       close(id) {
         const s = get();
         const index = s.tabs.findIndex((t) => t.id === id);
-        if (index === -1) return;
-        const closed = pushClosed(s.closed, s.tabs[index]!, index);
-        const tabs = s.tabs.filter((t) => t.id !== id);
+        if (index === -1 || id === PAGE_ID) return;
+        const tab = s.tabs[index]!;
+        const closed = pushClosed(s.closed, tab, index - 1);
+        let tabs = s.tabs.filter((t) => t.id !== id);
         const mru = s.mru.filter((x) => x !== id);
-        if (tabs.length === 0) {
-          const home = homeSet();
-          set({ ...home, closed });
+        if (tabs.length === 1) {
+          // The last diagram tab: the page shows its repository's graph list.
+          const repoId = repoOf(tab.path);
+          if (repoId) tabs = tabs.map((t) => (t.id === PAGE_ID ? retarget(t, `/r/${encodeURIComponent(repoId)}`) : t));
+          set({ tabs, closed, activeId: PAGE_ID, mru: touch(mru, PAGE_ID) });
           return;
         }
         // Closing the active tab activates its right neighbour (else the left one), as browsers do.
@@ -316,6 +394,24 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
         const s = get();
         const tab = s.tabs.find((t) => t.id === id);
         if (!tab) return;
+        if (id === PAGE_ID && !isPagePath(path)) {
+          // A diagram from the page (Home, a graph list): its tab.
+          get().open(path, { activate: true });
+          return;
+        }
+        if (id !== PAGE_ID && isPagePath(path)) {
+          // Home or a graph list from a diagram: the page. A replace means what the tab showed is gone (a deleted graph).
+          if (navOpts?.replace) get().close(id);
+          showPage(path, true);
+          return;
+        }
+        const graph = graphKeyOf(path);
+        const other = graph ? s.tabs.find((t) => t.id !== id && t.id !== PAGE_ID && t.graph === graph) : undefined;
+        if (other) {
+          // The graph already has a tab: go there.
+          get().open(path, { activate: true });
+          return;
+        }
         const replace = !!navOpts?.replace;
         const tabs = tab.path === path ? s.tabs : s.tabs.map((t) => (t.id === id ? retarget(t, path) : t));
         set({ tabs, lastNavigation: { tabId: id, path, replace } });
@@ -331,15 +427,17 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
       },
 
       next(dir) {
-        const s = get();
-        const i = s.tabs.findIndex((t) => t.id === s.activeId);
-        const n = s.tabs.length;
-        get().activate(s.tabs[(i + dir + n) % n]!.id);
+        const strip = stripTabs(get());
+        if (strip.length === 0) return;
+        const i = strip.findIndex((t) => t.id === get().activeId);
+        const n = strip.length;
+        // From the page, +1 goes to the first tab and -1 to the last.
+        get().activate(strip[i === -1 ? (dir === 1 ? 0 : n - 1) : (i + dir + n) % n]!.id);
       },
 
       goto(index) {
-        const s = get();
-        const tab = index === "last" ? s.tabs.at(-1) : s.tabs[index];
+        const strip = stripTabs(get());
+        const tab = index === "last" ? strip.at(-1) : strip[index];
         if (tab) get().activate(tab.id);
       },
 
@@ -354,12 +452,26 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
       move(id, index) {
         const s = get();
         const from = s.tabs.findIndex((t) => t.id === id);
-        if (from === -1) return;
-        const to = Math.min(Math.max(Math.trunc(index), 0), s.tabs.length - 1);
+        if (from < 1) return;
+        // `index` is a strip index; the page stays first.
+        const to = Math.min(Math.max(Math.trunc(index) + 1, 1), s.tabs.length - 1);
         if (to === from) return;
         const tabs = s.tabs.filter((t) => t.id !== id);
         tabs.splice(to, 0, s.tabs[from]!);
         set({ tabs });
+      },
+
+      setGraph(id, graph) {
+        const s = get();
+        const tab = s.tabs.find((t) => t.id === id);
+        if (!tab || id === PAGE_ID || (tab.graph ?? null) === graph) return;
+        set({
+          tabs: s.tabs.map((t) => {
+            if (t.id !== id) return t;
+            const { graph: _old, ...rest } = t;
+            return graph ? { ...rest, graph } : rest;
+          }),
+        });
       },
 
       setChats(id, chats) {
@@ -408,6 +520,11 @@ export function createTabsStore(opts: CreateTabsStoreOptions): TabsStoreApi {
   return store;
 }
 
+/** The tabs of the strip: every diagram tab, in order (the page is not one). */
+export function stripTabs(s: Pick<TabsState, "tabs">): Tab[] {
+  return s.tabs.filter((t) => t.id !== PAGE_ID);
+}
+
 export function activeTab(s: Pick<TabsState, "tabs" | "activeId">): Tab {
   return s.tabs.find((t) => t.id === s.activeId) ?? s.tabs[0]!;
 }
@@ -440,12 +557,12 @@ export function useTabs<T>(selector: (s: TabsState) => T): T {
   return useStore(tabsStore(), selector);
 }
 
-/** What a tab shortcut does (DESIGN §13.4): "new tab" always adds a Home tab. */
+/** What a tab shortcut does (DESIGN §13.4): "new tab" shows Home in the page. */
 export function runTabAction(store: TabsStoreApi, action: KeyAction): void {
   const s = store.getState();
   switch (action.type) {
     case "newTab":
-      s.open(HOME_PATH, { activate: true, dedupe: false });
+      s.open(HOME_PATH, { activate: true });
       return;
     case "closeTab":
       s.close(s.activeId);

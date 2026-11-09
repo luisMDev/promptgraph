@@ -58,6 +58,7 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
       tabId: id,
       active,
       setTitle: (title) => store.getState().setTitle(id, title),
+      setGraph: (graph) => store.getState().setGraph(id, graph),
       close: () => store.getState().close(id),
       reportEditor: (editor) => void editors.set(id, editor),
       chats,
@@ -69,16 +70,16 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
   );
   useEffect(() => () => void editors.delete(id), [editors, id]);
 
-  // The view sits in an inset panel (rounded, bordered, as in Linear); below it, the tab's bottom bar (§13.4). Home
-  // has neither: it sits on the window frame. The elements stay the same, so navigating in or out of Home keeps them.
+  // Every view sits in an inset panel (rounded, bordered, as in Linear); below it, the tab's bottom bar (§13.4), which
+  // Home hides (it has no repository). The elements stay the same, so navigating in or out of Home keeps them.
   const home = parseRoute(path).kind === "home";
   return (
-    <div data-tab-view={id} hidden={!active} inert={!active} className={active ? "flex min-h-0 flex-1 flex-col px-1.5" : undefined}>
+    <div data-tab-view={id} hidden={!active} inert={!active} className={active ? cn("flex min-h-0 flex-1 flex-col px-1.5", home && "pb-1.5") : undefined}>
       <LocationContext.Provider value={location}>
         <TabContext.Provider value={context}>
           <div
-            data-pg-panel={home ? undefined : ""}
-            className={cn("relative flex min-h-0 flex-1 flex-col overflow-hidden", !home && "rounded-lg border bg-background shadow-xs")}
+            data-pg-panel=""
+            className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background shadow-xs"
           >
             {children}
           </div>

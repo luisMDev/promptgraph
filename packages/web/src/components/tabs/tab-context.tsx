@@ -12,6 +12,8 @@ export interface TabContextValue {
   active: boolean;
   /** The title derived from the view's data (persisted with the tab). */
   setTitle(title: string): void;
+  /** The graph the view shows (`graphKey`), so a graph keeps one tab (§13.4); null: none. */
+  setGraph(graph: string | null): void;
   close(): void;
   /** The editor store the view shows: a view whose editor is dirty or saving is never evicted. */
   reportEditor(editor: EditorStoreApi | null): void;

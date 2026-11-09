@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { getDesktopBridge, type DesktopBridge, type ResizeDirection } from "../../lib/desktop";
-import { HOME_PATH, activeTab, tabsStore, useTabs, type Tab } from "../../store/tabs-store";
+import { HOME_PATH, activeTab, stripTabs, tabsStore, useTabs, type Tab } from "../../store/tabs-store";
 import { Icons } from "../common/icons";
 import { Logo } from "../common/Logo";
+import { parseRoute } from "../../lib/router/routes";
+import { useDaemonStore } from "../../store/daemon-store";
+import { SettingsMenu } from "../settings/SettingsMenu";
+import { useStripSlot } from "./strip-slot";
 import { useLoadTabRepos, useTabAttention, useTabTitle } from "./use-tab-title";
 
 /**
@@ -21,11 +25,13 @@ import { useLoadTabRepos, useTabAttention, useTabTitle } from "./use-tab-title";
 export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBridge }) {
   const titleBar = bridge.isDesktop && bridge.customTitleBar;
   const dragRegion = titleBar ? { "data-tauri-drag-region": "" } : {};
-  const tabs = useTabs((s) => s.tabs);
+  // Only diagrams are tabs; the page (Home, graph lists) is reached from the sidebar and the logo (§13.4).
+  const allTabs = useTabs((s) => s.tabs);
+  const tabs = useMemo(() => stripTabs({ tabs: allTabs }), [allTabs]);
   const activeId = useTabs((s) => s.activeId);
   const listRef = useRef<HTMLDivElement>(null);
   const drag = useTabDrag(listRef);
-  useLoadTabRepos(tabs);
+  useLoadTabRepos(allTabs);
 
   useEffect(() => {
     const items = listRef.current?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? [];
@@ -73,22 +79,18 @@ export function TabStrip({ bridge = getDesktopBridge() }: { bridge?: DesktopBrid
             key={tab.id}
             tab={tab}
             active={tab.id === activeId}
+            // With the page shown no tab is active: the first one takes the roving focus, so the strip stays reachable.
+            focusable={tab.id === activeId || (i === 0 && !tabs.some((t) => t.id === activeId))}
             dragging={drag.draggingId === tab.id}
             dragStyle={drag.styleOf(tab.id, i)}
             onPointerDown={drag.onPointerDown}
           />
         ))}
       </div>
-      <button
-        type="button"
-        aria-label="New tab"
-        title="New tab"
-        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-        onClick={() => tabsStore().getState().open(HOME_PATH, { activate: true, dedupe: false })}
-      >
-        <Icons.plus />
-      </button>
       <div className="min-w-6 flex-1" data-pg-tabstrip-spacer="" {...dragRegion} />
+      {/* Pending approvals of the active repository tab (portalled by its view), then the app settings. */}
+      <div ref={useStripSlot((s) => s.setEl)} className="flex shrink-0 items-center" data-pg-tabstrip-actions="" />
+      <ActiveSettingsMenu />
       {titleBar && <WindowFrame bridge={bridge} />}
       <DocumentTitle bridge={bridge} />
     </div>
@@ -287,12 +289,14 @@ function useTabDrag(listRef: RefObject<HTMLDivElement | null>) {
 function TabItem({
   tab,
   active,
+  focusable,
   dragging,
   dragStyle,
   onPointerDown,
 }: {
   tab: Tab;
   active: boolean;
+  focusable: boolean;
   dragging: boolean;
   dragStyle: TabDragStyle;
   onPointerDown: (id: string, e: ReactPointerEvent<HTMLElement>) => void;
@@ -318,7 +322,7 @@ function TabItem({
     <div
       role="tab"
       aria-selected={active}
-      tabIndex={active ? 0 : -1}
+      tabIndex={focusable ? 0 : -1}
       data-tab-id={tab.id}
       data-dragging={dragging || undefined}
       title={title}
@@ -470,5 +474,18 @@ function ResizeEdges({ bridge }: { bridge: DesktopBridge }) {
         />
       ))}
     </>
+  );
+}
+
+/** The settings menu, told the repository of the active tab (none on Home). */
+function ActiveSettingsMenu() {
+  const path = useTabs((s) => activeTab(s).path);
+  const route = parseRoute(path);
+  const repoId = route.kind === "home" || route.kind === "notFound" ? null : route.repoId;
+  const repoPath = useDaemonStore((s) => (repoId ? (s.repos?.find((r) => r.id === repoId)?.path ?? null) : null));
+  return (
+    <div className="flex shrink-0 items-center pr-1">
+      <SettingsMenu repoPath={repoPath} />
+    </div>
   );
 }

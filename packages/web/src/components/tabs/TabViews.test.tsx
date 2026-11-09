@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "../../App";
 import { dispatcher } from "../../store/live";
-import { TABS_SESSION_KEY, activeTab, createTabsStore, setTabsStore, type TabsStoreApi } from "../../store/tabs-store";
+import { PAGE_ID, TABS_SESSION_KEY, activeTab, createTabsStore, setTabsStore, stripTabs, type TabsStoreApi } from "../../store/tabs-store";
 import { AUTOSAVE_DELAY_MS, findEditorStore } from "../../store/view/editor-store";
 import { FakeSocket, REPO, installFakeDaemon, resetGlobals, summaryOf, type FakeDaemon } from "../../test-daemon";
 import { linearGraph, nodeRunOf, runDetailOf } from "../../test-fixtures";
@@ -47,6 +47,8 @@ function viewOf(tabId: string): HTMLElement {
 }
 
 const strip = () => within(screen.getByRole("tablist", { name: "Tabs" }));
+/** Paths of the strip's tabs (diagrams; the page is not one). */
+const stripPaths = () => stripTabs(s()).map((t) => t.path);
 
 const puts = () => daemon.calls.filter((c) => c.startsWith("PUT "));
 
@@ -81,7 +83,7 @@ describe("tab views: keep-alive (DESIGN §13.4)", () => {
     const home = s().activeId;
     const other = s().open("/nope-1", { activate: false });
     renderTabs();
-    expect(await screen.findByRole("heading", { name: "Repositories" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "All graphs" })).toBeTruthy();
     expect(mountedViews()).toEqual([home]);
 
     act(() => s().activate(other));
@@ -91,14 +93,13 @@ describe("tab views: keep-alive (DESIGN §13.4)", () => {
     expect(viewOf(other).hidden).toBe(false);
     expect(viewOf(other).hasAttribute("inert")).toBe(false);
     // The hidden Home view is still there (not rebuilt).
-    const homeHeading = within(viewOf(home)).getByRole("heading", { name: "Repositories", hidden: true });
+    const homeHeading = within(viewOf(home)).getByRole("heading", { name: "All graphs", hidden: true });
     act(() => s().activate(home));
-    expect(within(viewOf(home)).getByRole("heading", { name: "Repositories" })).toBe(homeHeading);
+    expect(within(viewOf(home)).getByRole("heading", { name: "All graphs" })).toBe(homeHeading);
   });
 
   it(`mounts at most ${MAX_MOUNTED} views: the least recently used is evicted and remounts from its path`, async () => {
-    const first = s().activeId;
-    act(() => s().navigate(first, "/nope-0"));
+    const first = s().open("/nope-0", { activate: true });
     renderTabs();
     await screen.findAllByText("Not found");
     const ids = [first];
@@ -114,8 +115,7 @@ describe("tab views: keep-alive (DESIGN §13.4)", () => {
   });
 
   it("never evicts a view whose editor has unsaved changes", async () => {
-    const graphTab = s().activeId;
-    act(() => s().navigate(graphTab, `${R}/graphs/g1`));
+    const graphTab = s().open(`${R}/graphs/g1`, { activate: true });
     renderTabs();
     expect(await screen.findByText("Implement")).toBeTruthy();
     act(() => findEditorStore(REPO, "g1")!.getState().rename("Unsaved"));
@@ -200,13 +200,13 @@ describe("tab views: overlays of hidden views (DESIGN §13.4)", () => {
 
 describe("tab views: shared stores (DESIGN §13.4)", () => {
   it("two tabs on the same run subscribe once; closing one keeps the subscription", async () => {
-    const one = s().activeId;
-    act(() => s().navigate(one, `${R}/runs/r1`));
+    const one = s().open(`${R}/runs/r1`, { activate: true });
     renderTabs();
     act(() => FakeSocket.last()!.open());
     await waitFor(() => expect(FakeSocket.allSent().filter((m) => m.type === "subscribe")).toHaveLength(1));
-    const two = s().open("/", { activate: true, dedupe: false });
-    act(() => s().navigate(two, `${R}/runs/r1`));
+    // A duplicate tab (dedupe off) on the same run.
+    let two = "";
+    act(() => void (two = s().open(`${R}/runs/r1`, { activate: true, dedupe: false })));
     await waitFor(() => expect(within(viewOf(two)).getAllByText("Implement").length).toBeGreaterThan(0));
     expect(FakeSocket.allSent().filter((m) => m.type === "subscribe")).toEqual([{ type: "subscribe", runId: "r1" }]);
     expect(FakeSocket.allSent().filter((m) => m.type === "repo:subscribe")).toEqual([{ type: "repo:subscribe", repoId: REPO }]);
@@ -219,12 +219,12 @@ describe("tab views: shared stores (DESIGN §13.4)", () => {
   });
 
   it("two tabs on the same graph share one editor store; closing the last one during the debounce flushes the save", async () => {
-    const one = s().activeId;
-    act(() => s().navigate(one, `${R}/graphs/g1`));
+    const one = s().open(`${R}/graphs/g1`, { activate: true });
     renderTabs();
     await screen.findByText("Implement");
-    const two = s().open("/", { activate: true, dedupe: false });
-    act(() => s().navigate(two, `${R}/graphs/g1`));
+    // A duplicate tab (dedupe off) on the same graph.
+    let two = "";
+    act(() => void (two = s().open(`${R}/graphs/g1`, { activate: true, dedupe: false })));
     await waitFor(() => expect(within(viewOf(two)).getByText("Implement")).toBeTruthy());
     expect(daemon.calls.filter((c) => c === `GET /api/repos/${REPO}/graphs/g1`)).toHaveLength(1);
 
@@ -240,67 +240,80 @@ describe("tab views: shared stores (DESIGN §13.4)", () => {
     // Well before the debounce.
     await waitFor(() => expect(puts()).toEqual([`PUT /api/repos/${REPO}/graphs/g1?baseHash=h0`]), { timeout: AUTOSAVE_DELAY_MS / 2 });
     expect(daemon.bodies.find((b) => b.call.startsWith("PUT"))?.body).toMatchObject({ name: "Edited in two" });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/"]);
+    // The last tab closed: the page shows the repository's graph list.
+    expect(s().tabs.map((t) => t.path)).toEqual([R]);
+    expect(s().activeId).toBe(PAGE_ID);
   });
 
-  it("a Ctrl-click on a link opens a background tab; a middle click too", async () => {
-    const first = s().activeId;
-    act(() => s().navigate(first, "/nope"));
+  it("a Ctrl-click on a diagram link opens a background tab; Ctrl+Shift a foreground one; a page link shows in the page", async () => {
+    act(() => s().navigate(PAGE_ID, R));
     renderTabs();
-    const link = await screen.findByRole("link", { name: "Go to Home" });
+    const link = await screen.findByRole("link", { name: "Open Graph 1" });
     fireEvent.click(link, { ctrlKey: true });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/nope", "/"]);
-    expect(s().activeId).toBe(first);
+    expect(stripPaths()).toEqual([`${R}/graphs/g1`]);
+    expect(s().activeId).toBe(PAGE_ID);
+    // The graph has a tab: Ctrl+Shift activates it rather than adding one.
     fireEvent.click(link, { ctrlKey: true, shiftKey: true });
-    expect(activeTab(s()).path).toBe("/");
-    expect(s().tabs).toHaveLength(2);
+    expect(activeTab(s()).path).toBe(`${R}/graphs/g1`);
+    expect(stripPaths()).toHaveLength(1);
+    // A middle click on another graph: a background tab too.
+    act(() => s().activate(PAGE_ID));
+    fireEvent(await screen.findByRole("link", { name: "Open Other" }), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+    expect(stripPaths()).toEqual([`${R}/graphs/g1`, `${R}/graphs/g2`]);
+    expect(s().activeId).toBe(PAGE_ID);
+  });
+
+  it("a run tab belongs to the run's graph: its view reports it, and opening the graph from the list reuses the tab", async () => {
+    const run = s().open(`${R}/runs/r1`, { activate: true });
+    renderTabs();
+    await waitFor(() => expect(s().tabs.find((t) => t.id === run)!.graph).toBe(`${REPO}/g1`));
+    act(() => s().navigate(run, R));
+    expect(s().activeId).toBe(PAGE_ID);
+    fireEvent.click(await within(viewOf(PAGE_ID)).findByRole("link", { name: "Open Graph 1" }));
+    expect(s().activeId).toBe(run);
+    expect(stripPaths()).toEqual([`${R}/graphs/g1`]);
   });
 
   it("a removed repository keeps its tabs, which show Repository removed and can be closed", async () => {
-    const one = s().activeId;
-    act(() => s().navigate(one, `${R}/graphs/g1`));
+    const one = s().open(`${R}/graphs/g1`, { activate: true });
     const two = s().open(`${R}/graphs/g2`, { activate: false });
     renderTabs();
     await screen.findByText("Implement");
     act(() => dispatcher.handle({ type: "repo:removed", repoId: REPO }));
     expect(await screen.findByText("Repository removed")).toBeTruthy();
-    expect(s().tabs.map((t) => t.id)).toEqual([one, two]);
+    expect(s().tabs.map((t) => t.id)).toEqual([PAGE_ID, one, two]);
     act(() => s().activate(two));
     expect(within(viewOf(two)).getByText("Repository removed")).toBeTruthy();
     fireEvent.click(within(viewOf(two)).getByRole("button", { name: "Close tab" }));
-    expect(s().tabs.map((t) => t.id)).toEqual([one]);
+    expect(s().tabs.map((t) => t.id)).toEqual([PAGE_ID, one]);
   });
 });
 
 describe("tab strip (DESIGN §13.4)", () => {
-  it("shows titles from the repository cache, closes with × and middle-click, and + opens Home", async () => {
-    const one = s().activeId;
-    act(() => s().navigate(one, `${R}/graphs/g1`));
+  it("shows titles from the repository cache and closes with × and middle-click; there is no new-tab button", async () => {
+    const one = s().open(`${R}/graphs/g1`, { activate: true });
     s().open(`${R}/graphs/g2`, { activate: false });
-    s().open(`${R}/runs/r1`, { activate: false });
+    const run = s().open(`${R}/runs/r1`, { activate: false });
     renderTabs();
     // The graph list of every repository with a tab is loaded, mounted or not.
     expect(await strip().findByRole("tab", { name: /repo · Other/ })).toBeTruthy();
     expect(strip().getByRole("tab", { name: /repo · Graph 1/ }).getAttribute("aria-selected")).toBe("true");
     // An unmounted run tab: the route's shape, never its id.
     expect(strip().getByRole("tab", { name: /^Run/ })).toBeTruthy();
+    expect(strip().getAllByRole("tab")).toHaveLength(3);
     expect(document.title).toBe("repo · Graph 1 · promptgraph");
 
-    act(() => s().activate(s().tabs[2]!.id));
+    act(() => s().activate(run));
     expect(await strip().findByRole("tab", { name: /Graph 1 #ab12/ })).toBeTruthy();
     // The mounted view's title is persisted with the tab.
-    expect(s().tabs[2]!.title).toBe("Graph 1 #ab12");
+    expect(s().tabs.find((t) => t.id === run)!.title).toBe("Graph 1 #ab12");
 
     fireEvent.click(screen.getByRole("button", { name: "Close repo · Other" }));
-    expect(s().tabs).toHaveLength(2);
+    expect(stripPaths()).toHaveLength(2);
     fireEvent.mouseDown(strip().getByRole("tab", { name: /Graph 1 #ab12/ }), { button: 1 });
     fireEvent(strip().getByRole("tab", { name: /Graph 1 #ab12/ }), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
-    expect(s().tabs.map((t) => t.id)).toEqual([one]);
-
-    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
-    expect(s().tabs.map((t) => t.path)).toEqual([`${R}/graphs/g1`, "/"]);
-    expect(activeTab(s()).path).toBe("/");
-    expect(document.title).toBe("promptgraph");
+    expect(s().tabs.map((t) => t.id)).toEqual([PAGE_ID, one]);
+    expect(screen.queryByRole("button", { name: "New tab" })).toBeNull();
   });
 
   it("an attention dot shows on the tabs of a repository with nodes waiting for the user", async () => {
@@ -312,114 +325,117 @@ describe("tab strip (DESIGN §13.4)", () => {
     expect(screen.getByLabelText("Needs attention")).toBeTruthy();
   });
 
-  it("the logo comes first in the strip and activates the Home tab, opening one when there is none", async () => {
-    s().navigate(s().activeId, `${R}/graphs/g1`);
-    s().open("/", { activate: false, dedupe: false });
+  it("the logo comes first in the strip and shows Home in the page, whatever the page showed", async () => {
+    s().open(`${R}/graphs/g1`, { activate: true });
+    s().navigate(PAGE_ID, R);
     renderTabs();
     await screen.findByText("Implement");
     const logo = screen.getByRole("button", { name: "promptgraph Home" });
     expect(logo.parentElement?.firstElementChild).toBe(logo);
 
     fireEvent.click(logo);
+    expect(s().activeId).toBe(PAGE_ID);
     expect(activeTab(s()).path).toBe("/");
-    expect(s().tabs).toHaveLength(2);
-
-    act(() => s().close(s().activeId));
-    expect(s().tabs.map((t) => t.path)).toEqual([`${R}/graphs/g1`]);
-    fireEvent.click(logo);
-    expect(s().tabs.map((t) => t.path)).toEqual([`${R}/graphs/g1`, "/"]);
-    expect(activeTab(s()).path).toBe("/");
+    expect(await screen.findByRole("heading", { name: "All graphs" })).toBeTruthy();
+    expect(document.title).toBe("promptgraph");
+    // The diagram tab stays, no longer selected.
+    expect(stripPaths()).toEqual([`${R}/graphs/g1`]);
+    expect(strip().getByRole("tab").getAttribute("aria-selected")).toBe("false");
   });
 
   it("dragging a tab past the others reorders the strip; a short press only activates", async () => {
-    s().open("/a", { activate: false });
-    s().open("/b", { activate: false });
+    for (const p of ["/a", "/b", "/c"]) s().open(p, { activate: false });
     renderTabs();
     const tabs = await strip().findAllByRole("tab");
     // jsdom has no layout: 100px-wide tabs side by side.
     tabs.forEach((tab, i) => (tab.getBoundingClientRect = () => ({ left: i * 100, width: 100 }) as DOMRect));
-    const [home, a] = tabs;
+    const [a, b, c] = tabs;
 
-    fireEvent.pointerDown(home!, { button: 0, isPrimary: true, pointerId: 1, clientX: 50 });
+    fireEvent.pointerDown(a!, { button: 0, isPrimary: true, pointerId: 1, clientX: 50 });
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 52 });
-    expect(home!.hasAttribute("data-dragging")).toBe(false);
-    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
+    expect(a!.hasAttribute("data-dragging")).toBe(false);
+    expect(stripPaths()).toEqual(["/a", "/b", "/c"]);
 
     // While dragging the order is unchanged: the tab follows the pointer (clamped to the strip) and the
     // tabs it passed slide aside.
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 260 });
-    expect(home!.getAttribute("data-dragging")).toBe("true");
+    expect(a!.getAttribute("data-dragging")).toBe("true");
     expect(document.documentElement.hasAttribute("data-pg-tab-dragging")).toBe(true);
-    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
-    expect(home!.style.transform).toBe("translateX(200px)");
-    expect(a!.style.transform).toBe("translateX(-100px)");
-    expect(tabs[2]!.style.transform).toBe("translateX(-100px)");
+    expect(stripPaths()).toEqual(["/a", "/b", "/c"]);
+    expect(a!.style.transform).toBe("translateX(200px)");
+    expect(b!.style.transform).toBe("translateX(-100px)");
+    expect(c!.style.transform).toBe("translateX(-100px)");
 
     fireEvent.pointerUp(window, { pointerId: 1, clientX: 260 });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
-    expect(home!.hasAttribute("data-dragging")).toBe(false);
+    expect(stripPaths()).toEqual(["/b", "/c", "/a"]);
+    expect(s().tabs[0]!.id).toBe(PAGE_ID);
+    expect(a!.hasAttribute("data-dragging")).toBe(false);
     expect(document.documentElement.hasAttribute("data-pg-tab-dragging")).toBe(false);
     // Dropped exactly on its new slot: nothing left to slide.
-    expect(home!.style.transform).toBe("");
     expect(a!.style.transform).toBe("");
+    expect(b!.style.transform).toBe("");
 
     // Moves after the release do nothing.
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 0 });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
+    expect(stripPaths()).toEqual(["/b", "/c", "/a"]);
 
     // The close button never starts a drag.
-    fireEvent.pointerDown(within(a!).getByRole("button"), { button: 0, isPrimary: true, pointerId: 2, clientX: 150 });
+    fireEvent.pointerDown(within(b!).getByRole("button"), { button: 0, isPrimary: true, pointerId: 2, clientX: 150 });
     fireEvent.pointerMove(window, { pointerId: 2, clientX: 400 });
     fireEvent.pointerUp(window, { pointerId: 2, clientX: 400 });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/b", "/"]);
+    expect(stripPaths()).toEqual(["/b", "/c", "/a"]);
   });
 
   it("dragging activates the tab; Escape slides it back without reordering", async () => {
-    s().open("/a", { activate: false });
-    s().open("/b", { activate: false });
+    for (const p of ["/a", "/b", "/c"]) s().open(p, { activate: false });
     renderTabs();
     const tabs = await strip().findAllByRole("tab");
     tabs.forEach((tab, i) => (tab.getBoundingClientRect = () => ({ left: i * 100, width: 100 }) as DOMRect));
-    const [home, a, b] = tabs;
+    const [a, b, c] = tabs;
 
-    fireEvent.pointerDown(b!, { button: 0, isPrimary: true, pointerId: 1, clientX: 250 });
+    fireEvent.pointerDown(c!, { button: 0, isPrimary: true, pointerId: 1, clientX: 250 });
     fireEvent.pointerMove(window, { pointerId: 1, clientX: 120 });
-    expect(activeTab(s()).path).toBe("/b");
-    expect(b!.style.transform).toBe("translateX(-130px)");
-    expect(a!.style.transform).toBe("translateX(100px)");
-    expect(home!.style.transform).toBe("");
+    expect(activeTab(s()).path).toBe("/c");
+    expect(c!.style.transform).toBe("translateX(-130px)");
+    expect(b!.style.transform).toBe("translateX(100px)");
+    expect(a!.style.transform).toBe("");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
-    expect(b!.hasAttribute("data-dragging")).toBe(false);
+    expect(stripPaths()).toEqual(["/a", "/b", "/c"]);
+    expect(c!.hasAttribute("data-dragging")).toBe(false);
+    expect(c!.style.transform).toBe("");
     expect(b!.style.transform).toBe("");
-    expect(a!.style.transform).toBe("");
     // The release after a cancel does nothing.
     fireEvent.pointerUp(window, { pointerId: 1, clientX: 120 });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a", "/b"]);
+    expect(stripPaths()).toEqual(["/a", "/b", "/c"]);
   });
 
   it("Ctrl+Shift+Left/Right move the focused tab", async () => {
     s().open("/a", { activate: false });
+    s().open("/b", { activate: false });
     renderTabs();
-    const [home] = await strip().findAllByRole("tab");
-    home!.focus();
-    fireEvent.keyDown(home!, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/a", "/"]);
-    fireEvent.keyDown(home!, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
-    expect(s().tabs.map((t) => t.path)).toEqual(["/", "/a"]);
+    const [a] = await strip().findAllByRole("tab");
+    a!.focus();
+    fireEvent.keyDown(a!, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(stripPaths()).toEqual(["/b", "/a"]);
+    fireEvent.keyDown(a!, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+    expect(stripPaths()).toEqual(["/a", "/b"]);
   });
 
   it("arrow keys move the focus between tabs (roving tabindex); Enter activates", async () => {
     s().open("/nope", { activate: false });
+    s().open("/nope-2", { activate: false });
     renderTabs();
-    const [home, other] = await strip().findAllByRole("tab");
-    expect(home!.tabIndex).toBe(0);
+    // The page is shown, so no tab is active: the first one takes the roving focus.
+    const [first, other] = await strip().findAllByRole("tab");
+    expect(first!.tabIndex).toBe(0);
     expect(other!.tabIndex).toBe(-1);
-    home!.focus();
-    fireEvent.keyDown(home!, { key: "ArrowRight" });
+    first!.focus();
+    fireEvent.keyDown(first!, { key: "ArrowRight" });
     expect(document.activeElement).toBe(other);
     fireEvent.keyDown(other!, { key: "Enter" });
-    expect(activeTab(s()).path).toBe("/nope");
+    expect(activeTab(s()).path).toBe("/nope-2");
+    expect(other!.tabIndex).toBe(0);
+    expect(first!.tabIndex).toBe(-1);
   });
 });
