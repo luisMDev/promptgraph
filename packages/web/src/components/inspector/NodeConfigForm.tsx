@@ -1,4 +1,4 @@
-import type { ConditionEvaluator, GraphNode, GraphNodeOf, GraphSettings, NodeConfigMap, NodeType } from "@promptgraph/shared";
+import { DEFAULT_LINEAR_UPDATE_PROMPT, type ConditionEvaluator, type GraphNode, type GraphNodeOf, type GraphSettings, type NodeConfigMap, type NodeType } from "@promptgraph/shared";
 import { useEffect, useId, useMemo } from "react";
 import { mergeInputLabels } from "../../lib/lanes";
 import { getRepoCache } from "../../store/repo-cache";
@@ -37,7 +37,46 @@ export function NodeConfigForm({ node, settings, disabled }: { node: GraphNode; 
       return <MergeForm node={node} settings={settings} disabled={disabled} patch={patch} />;
     case "condition":
       return <ConditionForm node={node} settings={settings} disabled={disabled} patch={patch} />;
+    case "linear":
+      return <LinearForm node={node} settings={settings} disabled={disabled} patch={patch} />;
   }
+}
+
+/**
+ * linear nodes (DESIGN §24.5): the instructions, prefilled with DEFAULT_LINEAR_UPDATE_PROMPT (an unchanged or blank
+ * text is saved as "use the default", so later changes to the default reach it; **Use default** resets an override),
+ * what Claude may propose, and the headless model and timeout. Approval is always required.
+ */
+function LinearForm({ node, settings, disabled, patch }: FormProps<"linear">) {
+  const issues = useEditor((s) => s.graph?.issues?.length ?? 0);
+  const custom = !!node.config.prompt?.trim();
+  const setPrompt = (text: string) => patch({ prompt: text.trim() && text.trim() !== DEFAULT_LINEAR_UPDATE_PROMPT ? text : undefined });
+  return (
+    <div className="space-y-3">
+      <Field label="Instructions" hint={custom ? "Custom instructions." : "The default instructions; edit them to override."}>
+        <TextArea value={node.config.prompt ?? DEFAULT_LINEAR_UPDATE_PROMPT} rows={8} disabled={disabled} onChange={setPrompt} />
+      </Field>
+      {custom && (
+        <button type="button" disabled={disabled} className="text-[11px] text-blue-600 hover:underline disabled:opacity-50" onClick={() => patch({ prompt: undefined })}>
+          Use default instructions
+        </button>
+      )}
+      <Checkbox checked={node.config.allowComments} disabled={disabled} label="Propose progress comments" onChange={(allowComments) => patch({ allowComments })} />
+      <Checkbox checked={node.config.allowStateChanges} disabled={disabled} label="Propose state changes" onChange={(allowStateChanges) => patch({ allowStateChanges })} />
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Model">
+          <OptionalText value={node.config.model} placeholder={settings.defaults.model ? `Default (${settings.defaults.model})` : "Default"} disabled={disabled} onChange={(model) => patch({ model })} />
+        </Field>
+        <Field label="Timeout (s)">
+          <OptionalNumber value={node.config.timeoutSec} min={1} placeholder="300" disabled={disabled} onChange={(t) => patch({ timeoutSec: t === undefined ? undefined : Math.max(1, Math.round(t)) })} />
+        </Field>
+      </div>
+      <p className="text-[11px] leading-snug text-muted-foreground">
+        {issues ? `Updates the ${issues} Linear issue${issues === 1 ? "" : "s"} linked to this graph.` : "Link Linear issues in the graph settings first."} You review and can edit
+        every comment and state change before anything is sent to Linear.
+      </p>
+    </div>
+  );
 }
 
 function PromptForm({ node, settings, disabled, patch }: FormProps<"prompt">) {

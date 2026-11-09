@@ -293,6 +293,17 @@ describe("Overview (DESIGN §13.3)", () => {
     expect(saved).toMatchObject({ name: "Deploy it", settings: { baseBranch: "dev" } });
   });
 
+  it("shows a linked Linear issue as a link on its card (§24)", async () => {
+    const url = "https://linear.app/acme/issue/ENG-9/ship";
+    daemon.repos[REPO]!.graphs.g2 = { ...loaded("g2", "Release"), graph: { ...graphOf({ id: "g2", name: "Release" }), issues: [{ provider: "linear", id: "i9", identifier: "ENG-9", title: "Ship", url }] } };
+    renderOverview();
+    const card = await within(graphs()).findByRole("listitem", { name: "Release" });
+    const link = within(card).getByRole("link", { name: "ENG-9 in Linear" });
+    expect(link.getAttribute("href")).toBe(url);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(within(within(graphs()).getByRole("listitem", { name: "Nightly" })).queryByRole("link", { name: /in Linear/ })).toBeNull();
+  });
+
   it("deletes a graph from its card after confirmation", async () => {
     renderOverview();
     const card = await within(graphs()).findByRole("listitem", { name: "Release" });

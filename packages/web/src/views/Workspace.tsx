@@ -3,7 +3,7 @@ import { PanelLeftIcon, PanelRightIcon } from "lucide-react";
 import { Suspense, lazy, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas } from "../components/canvas/Canvas";
 import { Banners } from "../components/common/Banners";
-import { PromptDialog } from "../components/common/PromptDialog";
+import { NewGraphDialog } from "../components/home/RepoDialogs";
 import { Icons } from "../components/common/icons";
 import { Button } from "../components/common/ui";
 import { Header } from "../components/header/Header";
@@ -212,7 +212,7 @@ function CanvasArea() {
             <Icons.plus /> New graph
           </Button>
         </div>
-        {creating && <PromptDialog title="New graph" label="Name" submitLabel="Create" onSubmit={(name) => void createGraph(view, name)} onClose={() => setCreating(false)} />}
+        {creating && <NewGraphDialog repoId={view.repoId} create={(v) => createGraph(view, v)} onClose={() => setCreating(false)} />}
       </Centered>
     );
   }

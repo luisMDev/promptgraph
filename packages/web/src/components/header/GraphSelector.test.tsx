@@ -137,7 +137,7 @@ describe("GraphSelector", () => {
 
     await user.type(input, "My flow");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    expect(createGraph).toHaveBeenCalledWith(expect.objectContaining({ repoId: "repo-0123abcd" }), "My flow");
+    expect(createGraph).toHaveBeenCalledWith(expect.objectContaining({ repoId: "repo-0123abcd" }), { name: "My flow", issues: [] });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger()));
   });

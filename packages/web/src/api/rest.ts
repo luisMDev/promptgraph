@@ -18,6 +18,9 @@ import {
   type GetGraphResponse,
   type GetRunResponse,
   type Graph,
+  type LinearIssueStatesResponse,
+  type LinearIssuesResponse,
+  type LinearStatusResponse,
   type ListCommandsResponse,
   type ListGraphOverviewsResponse,
   type ListGraphsResponse,
@@ -153,6 +156,25 @@ export const daemonApi = {
   /** Last observed subscription usage limits (§23.3). */
   usageLimits(): Promise<UsageLimitsResponse> {
     return request("GET", API.usageLimits);
+  },
+  /** Linear connection (§24). The key is write-only: no response contains it. */
+  linearStatus(): Promise<LinearStatusResponse> {
+    return request("GET", API.linear);
+  },
+  /** 422 linear_key_invalid (nothing saved), 502 linear_unavailable. */
+  setLinearKey(apiKey: string): Promise<LinearStatusResponse> {
+    return request("PUT", API.linearKey, { apiKey });
+  },
+  clearLinearKey(): Promise<LinearStatusResponse> {
+    return request("DELETE", API.linearKey);
+  },
+  /** Current state of linked issues by Linear id (at most LINEAR_MAX_STATE_IDS); unknown ids are missing. */
+  linearIssueStates(ids: readonly string[]): Promise<LinearIssueStatesResponse> {
+    return request("GET", API.linearIssueStates(ids));
+  },
+  /** 409 linear_not_connected, 502 linear_key_invalid / linear_unavailable. */
+  linearIssues(q: string, states?: readonly string[], scope?: "mine" | "all"): Promise<LinearIssuesResponse> {
+    return request("GET", API.linearIssues(q, states, scope));
   },
   /** Voice dictation status (§22): whisper binary, model and the resolved preferences. `refresh` skips the server's probe cache. */
   voiceStatus(refresh = false): Promise<VoiceStatus> {

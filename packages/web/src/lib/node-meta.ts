@@ -19,13 +19,14 @@ const META: Record<NodeType, Omit<NodeTypeMeta, "phase2">> = {
   approval: { title: "Approval", description: "Pause until you approve", accent: "bg-violet-500/15 text-violet-700" },
   merge: { title: "Merge", description: "Merge parallel lanes", accent: "bg-pink-500/15 text-pink-700" },
   condition: { title: "Condition", description: "Branch on exit code, regex or judge", accent: "bg-teal-500/15 text-teal-700" },
+  linear: { title: "Linear update", description: "Comment on and move the linked issues (gated)", accent: "bg-blue-500/15 text-blue-700" },
 };
 
 export const NODE_TYPE_META = Object.fromEntries(
   Object.entries(META).map(([type, meta]) => [type, { ...meta, phase2: isPhase2NodeType(type as NodeType) }]),
 ) as Record<NodeType, NodeTypeMeta>;
 
-export const PALETTE_ORDER: readonly NodeType[] = ["prompt", "command", "shell", "commit", "pr", "approval", "merge", "condition"];
+export const PALETTE_ORDER: readonly NodeType[] = ["prompt", "command", "shell", "commit", "pr", "approval", "merge", "condition", "linear"];
 
 /** One-line summary of a node's key config, shown on its card. */
 export function configPreview(node: GraphNode): string {
@@ -49,6 +50,10 @@ export function configPreview(node: GraphNode): string {
       if (ev.kind === "exitCode") return `exit code = ${ev.equals}`;
       if (ev.kind === "regex") return `/${ev.pattern}/${ev.flags}`;
       return preview(ev.question, 80) || "Judge question";
+    }
+    case "linear": {
+      const kinds = [node.config.allowComments ? "comments" : "", node.config.allowStateChanges ? "states" : ""].filter(Boolean).join(" + ");
+      return `${node.config.prompt?.trim() ? "Custom instructions" : "Default instructions"} · ${kinds || "nothing"} · approval`;
     }
   }
 }

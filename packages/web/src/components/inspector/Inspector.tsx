@@ -4,6 +4,7 @@ import {
   isFinalRunStatus,
   type EdgeWhen,
   type GraphEdge,
+  type GraphIssue,
   type GraphNode,
   type LoopSpec,
   type OnError,
@@ -24,6 +25,7 @@ import { NodeTypeIcon } from "../common/icons";
 import { Button, Checkbox, Field, Section, StatusDot } from "../common/ui";
 import { Input } from "@/components/ui/input";
 import { GraphSettingsForm } from "../settings/GraphSettingsForm";
+import { LinearIssuePicker } from "../common/LinearIssuePicker";
 import { LaneLegend } from "./LaneLegend";
 import { NodeConfigForm } from "./NodeConfigForm";
 import { NodeRunDetails, UsageSection } from "./NodeRunDetails";
@@ -70,9 +72,26 @@ function EditInspector() {
         <ValidationList validation={validation} />
       </Section>
       <Section title="Graph settings">
+        <LinkedIssues issues={graph.issues ?? []} disabled={readOnly} onChange={(issues) => view.editor.getState().setIssues(issues)} />
         <GraphSettingsForm graphId={graph.id} settings={graph.settings} disabled={readOnly} />
       </Section>
     </>
+  );
+}
+
+/**
+ * The graph's Linear issues (DESIGN §24.3): the linked ones with their current state, × to unlink, and the issue
+ * picker to link more (an existing graph can be linked too). The name and branch prefix stay as they are. Shown only
+ * while the graph has issues or Linear is connected.
+ */
+function LinkedIssues({ issues, disabled, onChange }: { issues: readonly GraphIssue[]; disabled: boolean; onChange: (issues: GraphIssue[]) => void }) {
+  return (
+    <div className="mb-3 space-y-1">
+      <LinearIssuePicker selected={issues} onChange={onChange} disabled={disabled} hideWhenDisconnected />
+      {issues.length > 0 && (
+        <span className="block text-[11px] leading-snug text-muted-foreground/80">Pull requests of this graph name {issues.map((i) => i.identifier).join(", ")}.</span>
+      )}
+    </div>
   );
 }
 

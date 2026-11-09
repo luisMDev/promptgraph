@@ -1,4 +1,4 @@
-import { createEmptyGraph, nodeDisplayLabel, slugifyGraphId, webRoutes, type NodeRun, type RunSummary } from "@promptgraph/shared";
+import { createEmptyGraph, nodeDisplayLabel, slugifyGraphId, webRoutes, type GraphIssue, type NodeRun, type RunSummary } from "@promptgraph/shared";
 import { ApiRequestError, errorMessage } from "../../api/rest";
 import { getRepoCache } from "../repo-cache";
 import { toast } from "../toast-store";
@@ -41,10 +41,11 @@ export function uniqueGraphId(name: string, taken: readonly string[]): string {
   for (let i = 2; ; i++) if (!taken.includes(`${base}-${i}`)) return `${base}-${i}`;
 }
 
-export async function createGraph(view: View, name: string): Promise<void> {
+/** Creates an empty graph in the view's repository, linked to `issues` (DESIGN §24), and opens it. */
+export async function createGraph(view: View, { name, issues = [] }: { name: string; issues?: readonly GraphIssue[] }): Promise<void> {
   const cache = getRepoCache(view.repoId).getState();
   const id = uniqueGraphId(name, (cache.graphs ?? []).map((g) => g.id));
-  const graph = createEmptyGraph(id, name.trim(), cache.info?.currentBranch ?? "main");
+  const graph = createEmptyGraph(id, name.trim(), cache.info?.currentBranch ?? "main", issues);
   try {
     await view.api.saveGraph(graph);
     await getRepoCache(view.repoId).getState().refreshGraphs();

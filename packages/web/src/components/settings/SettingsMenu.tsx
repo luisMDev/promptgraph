@@ -19,6 +19,7 @@ import { toast } from "../../store/toast-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import { OPEN_VOICE_SETTINGS_EVENT } from "../chat/Dictation";
+import { LinearSettingsDialog } from "./LinearSettingsDialog";
 import { VoiceSettingsDialog } from "./VoiceSettingsDialog";
 
 /** Whether the settings menu is open: one menu per window, in the tab strip (DESIGN §13.4). */
@@ -28,7 +29,7 @@ export const useSettingsMenu = create<{ open: boolean; setOpen(open: boolean): v
 }));
 
 /**
- * App settings menu (theme, desktop notifications toggle, voice dictation dialog, repo/version info), at the end of the
+ * App settings menu (theme, desktop notifications toggle, voice dictation and Linear dialogs, repo/version info), at the end of the
  * tab strip. A Radix dropdown menu whose open state lives in `useSettingsMenu`: keyboard navigation, focus return to the
  * trigger, Escape and outside-click dismissal come from Radix. The info text is static content, so it is not
  * focusable. `repoPath`: the repository of the active tab, shown with the version (none on Home).
@@ -40,6 +41,7 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
   const notifyAvailable = daemon?.notificationsAvailable ?? true;
   const theme = useTheme();
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [linearOpen, setLinearOpen] = useState(false);
 
   // The composer's "voice unavailable" popover opens the voice settings too.
   useEffect(() => {
@@ -97,6 +99,9 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
           <DropdownMenuItem onSelect={() => setVoiceOpen(true)}>
             <MicIcon /> Voice dictation…
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setLinearOpen(true)}>
+            <Icons.plug /> Linear…
+          </DropdownMenuItem>
           {daemon && (
             <>
               <DropdownMenuSeparator />
@@ -120,6 +125,7 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
         </DropdownMenuContent>
       </DropdownMenu>
       {voiceOpen && <VoiceSettingsDialog onClose={() => setVoiceOpen(false)} />}
+      {linearOpen && <LinearSettingsDialog onClose={() => setLinearOpen(false)} />}
     </>
   );
 }

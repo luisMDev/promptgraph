@@ -2,6 +2,8 @@ import type { DaemonInfoResponse, GetGraphResponse, Graph, GraphListItem, GraphO
 import { vi } from "vitest";
 import { setDesktopBridge } from "./lib/desktop";
 import { useDaemonStore } from "./store/daemon-store";
+import { resetLinearIssueStore } from "./store/linear-issue-store";
+import { resetLinearStore } from "./store/linear-store";
 import { resetReloginStore } from "./store/relogin-store";
 import { clearRepoCaches } from "./store/repo-cache";
 import { useToastStore } from "./store/toast-store";
@@ -62,7 +64,15 @@ function json(status: number, body: unknown): Response {
 }
 
 function listItem(id: string, g: GetGraphResponse): GraphListItem {
-  return { id, name: g.graph.name, loadError: null, updatedAt: 1, hash: g.hash };
+  const issues = g.graph.issues;
+  return {
+    id,
+    name: g.graph.name,
+    loadError: null,
+    updatedAt: 1,
+    hash: g.hash,
+    ...(issues?.length ? { issues: issues.map(({ id: issueId, identifier, title, url }) => ({ id: issueId, identifier, title, url })) } : {}),
+  };
 }
 
 /** A graph's overview as the daemon computes it (DESIGN §13.3), from the fake's graphs and runs. */
@@ -100,6 +110,7 @@ export function installFakeDaemon(init: Partial<Pick<FakeDaemon, "repos" | "summ
     const p = u.pathname;
     if (p === "/api/daemon") return json(200, daemonInfo);
     if (p === "/api/settings") return json(200, { notifications: true });
+    if (p === "/api/linear") return json(200, { connected: false, viewer: null, workspace: null, error: null });
     if (p === "/api/repos" && method === "GET") return json(200, { repos: d.summaries });
     const m = /^\/api\/repos\/([^/]+)(\/.*)?$/.exec(p);
     if (!m) return json(404, { error: "Not found", code: "not_found" });
@@ -183,4 +194,6 @@ export function resetGlobals(): void {
   localStorage.clear();
   setDesktopBridge(null);
   resetReloginStore();
+  resetLinearStore();
+  resetLinearIssueStore();
 }

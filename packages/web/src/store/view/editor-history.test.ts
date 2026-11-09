@@ -25,6 +25,22 @@ describe("editor store: undo / redo", () => {
     vi.useRealTimers();
   });
 
+  it("links and unlinks Linear issues as one undoable edit each, dropping the field when none is left (§24)", async () => {
+    const issue = (n: number) => ({ provider: "linear", id: `i${n}`, identifier: `ENG-${n}`, title: `Issue ${n}`, url: `https://linear.app/acme/issue/ENG-${n}` }) as const;
+    editor().setIssues([issue(1), issue(2)]);
+    expect(editor().graph?.issues?.map((i) => i.identifier)).toEqual(["ENG-1", "ENG-2"]);
+    const past = editor().past.length;
+    editor().setIssues([issue(1), issue(2)]);
+    expect(editor().past).toHaveLength(past);
+    vi.advanceTimersByTime(HISTORY_COALESCE_MS);
+    editor().setIssues([]);
+    expect(editor().graph && "issues" in editor().graph!).toBe(false);
+    editor().undo();
+    expect(editor().graph?.issues).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS);
+    expect(save.mock.calls.at(-1)![0].issues).toHaveLength(2);
+  });
+
   it("starts with nothing to undo or redo", () => {
     expect(canUndo(editor())).toBe(false);
     expect(canRedo(editor())).toBe(false);

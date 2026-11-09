@@ -2,6 +2,7 @@ import type { RepoSummary } from "@promptgraph/shared";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import type { OverviewItem, OverviewModel } from "./data";
+import { LinearIssueLinks } from "../common/LinearIssueLink";
 import { Counters, GraphLink, GroupHeading, GroupToggle, LastOpenedBadge, LastRun, RepoAvatar, SearchField, StatsLine, Thumb } from "./parts";
 import { RepoSidebar } from "./RepoSidebar";
 
@@ -106,6 +107,7 @@ function Card({ item, showRepo, onDelete }: { item: OverviewItem; showRepo: bool
       <div className="min-w-0 space-y-0.5">
         <div className="flex min-w-0 items-center gap-2 text-sm">
           <GraphLink item={item} />
+          {item.graph.issues?.length ? <LinearIssueLinks issues={item.graph.issues} variant="badge" /> : null}
           <LastOpenedBadge item={item} />
         </div>
         <div className="flex min-w-0 items-center gap-1.5">

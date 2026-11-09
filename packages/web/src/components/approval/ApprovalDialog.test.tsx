@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { ApprovalInfoResponse, ApprovalRequest, DiffResponse } from "@promptgraph/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RepoApi } from "../../api/rest";
@@ -85,5 +85,71 @@ describe("ApprovalDialog", () => {
     fireEvent.click(approve);
     expect(await screen.findByText("The branch changed since you loaded the diff")).toBeTruthy();
     await waitFor(() => expect(approvalInfo).toHaveBeenCalledTimes(2));
+  });
+
+  it("edits the proposed Linear updates and approves only the ones to apply (§24.5)", async () => {
+    const states = [
+      { id: "s-todo", name: "Todo", type: "unstarted", color: "#ccc" },
+      { id: "s-review", name: "In Review", type: "started", color: "#0cf" },
+    ];
+    const proposal = (n: number, comment: string, stateId: string | null) => ({
+      issueId: `i${n}`,
+      identifier: `ENG-${n}`,
+      title: `Issue ${n}`,
+      url: `https://linear.app/acme/issue/ENG-${n}`,
+      currentState: states[0]!,
+      states,
+      comment,
+      stateId,
+    });
+    approvalInfo.mockResolvedValueOnce({
+      ...info,
+      message: null,
+      showDiff: false,
+      pr: null,
+      linear: { proposals: [proposal(1, "Implemented the API.", "s-review"), proposal(2, "", null)], allowComments: true, allowStateChanges: true },
+    });
+    await openGate();
+    const list = await screen.findByRole("list", { name: "Proposed Linear updates" });
+    expect(screen.getByRole("heading", { name: /Approve Linear updates/ })).toBeTruthy();
+    expect(list.querySelectorAll("li")).toHaveLength(2);
+    // ENG-2 has no proposal: not applied, no editor.
+    const update2 = screen.getByRole("checkbox", { name: "Update ENG-2" });
+    expect(update2.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getAllByLabelText("Comment", { exact: false }).filter((el) => el.tagName === "TEXTAREA")).toHaveLength(2);
+
+    fireEvent.change(screen.getByDisplayValue("Implemented the API."), { target: { value: "Implemented the API, tests pending." } });
+    fireEvent.click(update2);
+    const item2 = within(list).getByRole("listitem", { name: "ENG-2" });
+    fireEvent.change(within(item2).getByRole("textbox"), { target: { value: "Started" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve & update Linear" }));
+    await waitFor(() =>
+      expect(submitApproval).toHaveBeenCalledWith("np", {
+        approved: true,
+        linearUpdates: [
+          { issueId: "i1", comment: "Implemented the API, tests pending.", stateId: "s-review" },
+          { issueId: "i2", comment: "Started", stateId: null },
+        ],
+      }),
+    );
+  });
+
+  it("cannot approve Linear updates when none is selected", async () => {
+    approvalInfo.mockResolvedValueOnce({
+      ...info,
+      pr: null,
+      showDiff: false,
+      linear: {
+        proposals: [{ issueId: "i1", identifier: "ENG-1", title: "T", url: "https://linear.app/acme/issue/ENG-1", currentState: null, states: [], comment: "c", stateId: null }],
+        allowComments: true,
+        allowStateChanges: false,
+      },
+    });
+    await openGate();
+    const approve = (await screen.findByRole("button", { name: "Approve & update Linear" })) as HTMLButtonElement;
+    await waitFor(() => expect(approve.disabled).toBe(false));
+    expect(screen.queryByText("State")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Update ENG-1" }));
+    expect(approve.disabled).toBe(true);
   });
 });

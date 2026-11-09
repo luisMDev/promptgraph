@@ -12,10 +12,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Icons } from "../common/icons";
 import { Button, Field, Modal } from "../common/ui";
 import { DiffView } from "./DiffView";
+import { decisionsOf, draftsOf, LinearUpdatesEditor, type LinearUpdateDraft } from "./LinearUpdatesEditor";
 
 /**
- * Approval gate (§10) for approval and pr nodes: message, predecessor outputs, lane diff vs base, editable
- * PR title/body, Approve / Reject with an optional comment. Opened from a violet node or the header's
+ * Approval gate (§10) for approval, pr and linear nodes: message, predecessor outputs, lane diff vs base, editable
+ * PR title/body or Linear updates (§24.5), Approve / Reject with an optional comment. Opened from a violet node or the header's
  * pending list (any run of the repo). Whether the gate still waits follows the live stores; approving a PR
  * sends the reviewed commit (diff.head), and a refused decision (409) reloads the gate. Loaded lazily
  * (with diff2html) by App.
@@ -30,6 +31,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
   const [comment, setComment] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [drafts, setDrafts] = useState<LinearUpdateDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const context = useGateContext(info);
   const waiting = useStillWaiting(info);
@@ -45,6 +47,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
           if (!keepEdits) {
             setTitle(res.pr?.title ?? "");
             setBody(res.pr?.body ?? "");
+            setDrafts(draftsOf(res.linear?.proposals ?? []));
           }
           if (!res.showDiff) return;
           setDiff(null);
@@ -74,6 +77,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
         approved,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         ...(info?.pr ? { title, body, ...(diff ? { headSha: diff.head } : {}) } : {}),
+        ...(info?.linear && approved ? { linearUpdates: decisionsOf(drafts) } : {}),
       });
       view.run.getState().applyNodeUpdate(nodeRun);
       void getRepoCache(view.repoId).getState().refreshPending();
@@ -89,7 +93,8 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
 
   const pending = info?.nodeRun.status === "waiting_approval" && waiting;
   // Approving a PR pushes exactly the reviewed commit, so it needs the loaded diff.
-  const canApprove = pending && (!info?.pr || !!diff);
+  const isLinear = !!info?.linear;
+  const canApprove = pending && (!info?.pr || !!diff) && (!isLinear || decisionsOf(drafts).length > 0);
   const isPr = !!info?.pr;
   const outputs = info?.predecessorOutputs.filter((p) => p.text.trim()) ?? [];
 
@@ -98,7 +103,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
       wide
       title={
         <span className="flex items-baseline gap-2">
-          <span>{isPr ? "Approve pull request" : "Approval required"}</span>
+          <span>{isPr ? "Approve pull request" : isLinear ? "Approve Linear updates" : "Approval required"}</span>
           {context && <span className="truncate text-xs font-normal text-muted-foreground">{context}</span>}
         </span>
       }
@@ -112,7 +117,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
             Reject
           </Button>
           <Button variant="primary" disabled={!canApprove || busy} onClick={() => void submit(true)}>
-            {isPr ? "Approve & push" : "Approve"}
+            {isPr ? "Approve & push" : isLinear ? "Approve & update Linear" : "Approve"}
           </Button>
         </>
       }
@@ -153,6 +158,7 @@ export function ApprovalDialog({ nodeRunId }: { nodeRunId: string }) {
               </CardContent>
             </Card>
           )}
+          {info.linear && <LinearUpdatesEditor linear={info.linear} drafts={drafts} disabled={!pending} onChange={setDrafts} />}
           {outputs.length > 0 && (
             <div className="space-y-2">
               <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Previous steps</h3>

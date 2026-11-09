@@ -19,6 +19,7 @@ const TYPE_STYLE: Record<NodeType, string> = {
   approval: "fill-violet-500/25 stroke-violet-500",
   merge: "fill-pink-500/25 stroke-pink-500",
   condition: "fill-teal-500/25 stroke-teal-500",
+  linear: "fill-blue-500/25 stroke-blue-500",
 };
 
 /**

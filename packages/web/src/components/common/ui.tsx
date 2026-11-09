@@ -64,12 +64,15 @@ export function Modal({
   children,
   footer,
   wide = false,
+  size,
 }: {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** Width: `md` (default), `lg` (a search dialog), `xl` (= `wide`). */
+  size?: "md" | "lg" | "xl";
 }) {
   // The dialog has no DialogTrigger (it is mounted open), so Radix has no trigger to refocus on close: remember
   // what had focus when it mounted and return focus there, whether it closes via Escape/outside/X or unmounts.
@@ -80,11 +83,15 @@ export function Modal({
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
+        // Escape in an expanded combobox (the new-graph dialog's issue search) closes its list, not the dialog.
+        onEscapeKeyDown={(e) => {
+          if (e.target instanceof HTMLElement && e.target.getAttribute("role") === "combobox" && e.target.getAttribute("aria-expanded") === "true") e.preventDefault();
+        }}
         onCloseAutoFocus={(e) => {
           e.preventDefault();
           if (active && opener?.isConnected) opener.focus();
         }}
-        className={cn("flex max-h-[calc(100%-3rem)] flex-col gap-0 overflow-hidden p-0", wide ? "sm:max-w-5xl" : "sm:max-w-md")}
+        className={cn("flex max-h-[calc(100%-3rem)] flex-col gap-0 overflow-hidden p-0", wide || size === "xl" ? "sm:max-w-5xl" : size === "lg" ? "sm:max-w-2xl" : "sm:max-w-md")}
       >
         <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
           <DialogTitle className="text-sm font-semibold">{title}</DialogTitle>

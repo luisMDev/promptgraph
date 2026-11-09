@@ -6,6 +6,7 @@ import {
   type GetGraphResponse,
   type Graph,
   type GraphEdge,
+  type GraphIssue,
   type GraphNode,
   type GraphSettings,
   type NodeType,
@@ -103,6 +104,8 @@ export interface EditorStore extends EditorState, EditorValidation {
   setSelection(nodeIds: readonly string[], edgeIds: readonly string[]): void;
   updateSettings(fn: (settings: GraphSettings) => GraphSettings): void;
   rename(name: string): void;
+  /** Replaces the graph's linked Linear issues (§24; none removes the field). Name and branch prefix stay as they are. */
+  setIssues(issues: readonly GraphIssue[]): void;
   /** Writes a pending autosave now (and waits for one in flight). */
   flushSave(): Promise<void>;
   /** Called on `graphs:changed`: reloads a file changed outside the app, or flags a conflict when dirty. */
@@ -461,6 +464,15 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
         const trimmed = name.trim();
         if (!trimmed) return;
         get().edit((g) => (g.name === trimmed ? g : { ...g, name: trimmed }), "rename");
+      },
+
+      setIssues(issues) {
+        get().edit((g) => {
+          const current = g.issues ?? [];
+          if (current.length === issues.length && current.every((i, n) => i.id === issues[n]!.id)) return g;
+          const { issues: _old, ...rest } = g;
+          return issues.length ? { ...rest, issues: [...issues] } : rest;
+        }, "issues");
       },
 
       async flushSave() {

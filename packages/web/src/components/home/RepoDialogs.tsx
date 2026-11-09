@@ -1,6 +1,7 @@
 import { createEmptyGraph, webRoutes, type RepoSummary } from "@promptgraph/shared";
 import { useState, type FormEvent } from "react";
 import { Input } from "@/components/ui/input";
+import { GraphNameField, type GraphNameValue } from "../common/GraphNameField";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 import { ApiRequestError, errorMessage, repoApi } from "../../api/rest";
@@ -149,25 +150,45 @@ export function RemoveRepoDialog({ repo, onClose }: { repo: RepoSummary; onClose
 }
 
 /**
- * New graph in any registered repository: its name and, unless `repoId` fixes it, the repository. Saves an empty graph
- * on the repository's current branch and opens it.
+ * New graph (DESIGN §13.3, §24): its name and Linear issues (GraphNameField) and, unless `repoId` fixes it, the
+ * repository. Saves an empty graph on the repository's current branch (linked to the issues, with the first one's
+ * branch prefix) and opens it. `repos` is needed only when the repository is picked here. Inside a repository view, `create`
+ * replaces the save (createGraph: the view's caches) and `takenIds` shows the file the graph is saved as.
  */
-export function NewGraphDialog({ repos, repoId, onClose }: { repos: RepoSummary[]; repoId: string | null; onClose: () => void }) {
+export function NewGraphDialog({
+  repos = [],
+  repoId,
+  onClose,
+  create,
+  takenIds,
+}: {
+  repos?: RepoSummary[];
+  repoId: string | null;
+  onClose: () => void;
+  create?: (value: GraphNameValue) => Promise<void>;
+  takenIds?: readonly string[];
+}) {
   const { navigate } = useLocation();
   const available = repos.filter((r) => r.available);
   const [target, setTarget] = useState(repoId ?? available[0]?.id ?? "");
-  const [name, setName] = useState("");
+  const [value, setValue] = useState<GraphNameValue>({ name: "", issues: [] });
   const [busy, setBusy] = useState(false);
-  const valid = name.trim().length > 0 && target !== "";
+  const valid = value.name.trim().length > 0 && target !== "";
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
     if (!valid || busy) return;
     setBusy(true);
+    if (create) {
+      await create({ name: value.name.trim(), issues: value.issues });
+      onClose();
+      return;
+    }
     try {
       const api = repoApi(target);
       const [{ graphs }, info] = await Promise.all([api.listGraphs(), api.info()]);
+      const name = value.name.trim();
       const id = uniqueGraphId(name, graphs.map((g) => g.id));
-      await api.saveGraph(createEmptyGraph(id, name.trim(), info.currentBranch ?? "main"));
+      await api.saveGraph(createEmptyGraph(id, name, info.currentBranch ?? "main", value.issues));
       onClose();
       navigate(webRoutes.graph(target, id));
     } catch (err) {
@@ -202,9 +223,10 @@ export function NewGraphDialog({ repos, repoId, onClose }: { repos: RepoSummary[
             </NativeSelect>
           </Field>
         )}
-        <Field label="Name">
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
+        <GraphNameField value={value} onChange={setValue} onSubmit={() => void submit()} />
+        {takenIds && value.name.trim() && (
+          <p className="text-[11px] leading-snug text-muted-foreground/80">Saved as .promptgraph/graphs/{uniqueGraphId(value.name, takenIds)}.json</p>
+        )}
       </form>
     </Modal>
   );

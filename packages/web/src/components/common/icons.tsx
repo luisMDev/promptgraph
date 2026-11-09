@@ -74,6 +74,14 @@ export const Icons = {
       <path d="M12 2 22 12 12 22 2 12z" />
     </Svg>
   ),
+  /** linear nodes: an issue (circle) with a progress tick. */
+  linear: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 3a9 9 0 0 1 9 9h-9z" fill="currentColor" />
+      <path d="m8.5 15 2 2 4-4" />
+    </Svg>
+  ),
   play: (p: IconProps) => (
     <Svg {...p}>
       <path d="M7 4v16l13-8z" fill="currentColor" />

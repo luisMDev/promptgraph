@@ -11,10 +11,11 @@ import {
 import { cn } from "@/lib/utils";
 import { webRoutes } from "@promptgraph/shared";
 import { Link } from "../../lib/router/Link";
-import { createGraph, deleteGraph, uniqueGraphId } from "../../store/view/actions";
+import { createGraph, deleteGraph } from "../../store/view/actions";
 import { useEditor, useRepo, useView } from "../../store/view/context";
 import { isReadOnly } from "../../store/view/editor-store";
 import { ConfirmDialog, PromptDialog } from "../common/PromptDialog";
+import { NewGraphDialog } from "../home/RepoDialogs";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 
@@ -72,7 +73,9 @@ export function GraphSelector() {
                   <Link to={webRoutes.graph(view.repoId, g.id)}>
                     <span className="min-w-0 flex-1">
                       <span className={cn("block truncate", g.loadError ? "text-red-700" : "text-foreground")}>{g.name ?? g.id}</span>
-                      <span className="block truncate font-mono text-[11px] text-muted-foreground">{g.loadError ? g.loadError : `${g.id}.json`}</span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                        {g.loadError ? g.loadError : g.issues?.length ? `${g.id}.json · ${g.issues.map((i) => i.identifier).join(", ")}` : `${g.id}.json`}
+                      </span>
                     </span>
                     {g.loadError && <Icons.alert className="shrink-0 text-red-600" />}
                   </Link>
@@ -112,14 +115,7 @@ export function GraphSelector() {
         </DropdownMenuContent>
       </DropdownMenu>
       {dialog === "create" && (
-        <PromptDialog
-          title="New graph"
-          label="Name"
-          submitLabel="Create"
-          hint={(v) => (v.trim() ? `Saved as .promptgraph/graphs/${uniqueGraphId(v, graphs.map((g) => g.id))}.json` : null)}
-          onSubmit={(name) => void createGraph(view, name)}
-          onClose={closeDialog}
-        />
+        <NewGraphDialog repoId={view.repoId} takenIds={graphs.map((g) => g.id)} create={(v) => createGraph(view, v)} onClose={closeDialog} />
       )}
       {dialog === "rename" && graph && (
         <PromptDialog
