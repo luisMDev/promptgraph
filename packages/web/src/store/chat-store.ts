@@ -64,7 +64,8 @@ export interface ChatStore extends ChatState {
   /** Sends a user turn on the WS. Returns false when it could not be sent (socket down). */
   send(sessionId: string, text: string, context: ChatContext): boolean;
   interrupt(sessionId: string): void;
-  answerPermission(sessionId: string, requestId: string, allow: boolean, message?: string): void;
+  /** Answers a permission prompt; `answers` (keyed by question text) answer an AskUserQuestion prompt. */
+  answerPermission(sessionId: string, requestId: string, allow: boolean, message?: string, answers?: Record<string, string>): void;
   /**
    * After a WS reconnect: reloads the list and every opened session (items may have been missed). The views stay on
    * screen meanwhile, so a conversation, its permission card and Stop do not disappear.
@@ -303,8 +304,8 @@ export function createChatStore(repoId: string, deps: ChatDeps = { ...repoChatDe
       deps.send({ type: "chat:interrupt", repoId, sessionId });
     },
 
-    answerPermission(sessionId, requestId, allow, message) {
-      const ok = deps.send({ type: "chat:permission", repoId, sessionId, requestId, allow, ...(message ? { message } : {}) });
+    answerPermission(sessionId, requestId, allow, message, answers) {
+      const ok = deps.send({ type: "chat:permission", repoId, sessionId, requestId, allow, ...(message ? { message } : {}), ...(answers ? { answers } : {}) });
       // The card disappears at once (the next prompt, if any, shows); the server's permission_resolved item records the answer.
       if (ok) {
         patchView(sessionId, (v) => {

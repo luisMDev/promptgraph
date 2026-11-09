@@ -9,6 +9,9 @@ import { useDaemonStore } from "../../store/daemon-store";
 import { createDispatcher } from "../../store/dispatcher";
 import { createTestView, TEST_REPO_ID, type TestView } from "../../store/view/test-view";
 import { emitChatShortcut } from "../../lib/chat-shortcut";
+import { useState } from "react";
+import type { TabChats } from "../../store/tabs-store";
+import { TabContext, type TabContextValue } from "../tabs/tab-context";
 import { ChatDock } from "./ChatDock";
 import { ChatWindow, type ChatWindowActions } from "./ChatPanel";
 
@@ -60,16 +63,18 @@ describe("ChatPanel", () => {
   const actions: ChatWindowActions = { onMinimize: vi.fn(), onClose: vi.fn(), expanded: false, onToggleExpanded: vi.fn() };
   const Window = ({ id = "s1" }: { id?: string }) => <ChatWindow sessionId={id} actions={actions} />;
 
-  it("renders messages with markdown and folds tool results into their tool row", async () => {
+  it("renders messages with markdown and folds tool calls into one activity group", async () => {
     show();
     const user = userEvent.setup();
     view.render(<Window />);
     expect(screen.getByText("Add a commit after the tests")).toBeTruthy();
     expect(screen.getByText("commit").tagName).toBe("STRONG");
     expect(screen.getByRole("heading", { name: "Commit step" })).toBeTruthy();
-    // The result is hidden until the tool row is expanded.
+    // The group says what it did; the calls and their results are hidden until it is expanded.
     expect(screen.queryByText("added: commit")).toBeNull();
-    await user.click(screen.getByRole("button", { name: /patch_graph · 1 op/ }));
+    expect(screen.queryByRole("button", { name: /Update graph g1/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Updated the graph.*1 step/ }));
+    await user.click(screen.getByRole("button", { name: /Update graph g1 · 0 changes/ }));
     expect(screen.getByText("added: commit")).toBeTruthy();
   });
 
@@ -143,6 +148,98 @@ describe("ChatPanel", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  const askInput = {
+    questions: [
+      { question: "How complex should the graph be?", header: "Complexity", multiSelect: false, options: [{ label: "Simple", description: "2-4 steps" }, { label: "Complex" }] },
+      { question: "How is the result checked?", header: "Checks", multiSelect: true, options: [{ label: "Tests" }, { label: "Review" }] },
+    ],
+  };
+  function askQuestions() {
+    act(() => {
+      handleServerMessage({
+        type: "chat:item",
+        repoId: TEST_REPO_ID,
+        sessionId: "s1",
+        item: { id: "q-use", ts: 6, kind: "tool_use", toolUseId: "tq", name: "AskUserQuestion", input: askInput, summary: "AskUserQuestion · 2 questions" },
+      });
+      handleServerMessage({
+        type: "chat:item",
+        repoId: TEST_REPO_ID,
+        sessionId: "s1",
+        item: { id: "q-req", ts: 7, kind: "permission_request", requestId: "rq", toolName: "AskUserQuestion", input: askInput, toolUseId: "tq" },
+      });
+      handleServerMessage({ type: "chat:status", repoId: TEST_REPO_ID, sessionId: "s1", status: "waiting_permission" });
+    });
+  }
+
+  it("answers AskUserQuestion from a question card", async () => {
+    show("thinking");
+    const user = userEvent.setup();
+    view.render(<Window />);
+    askQuestions();
+    const card = screen.getByTestId("question-card");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(within(card).getByText("Claude has 2 questions")).toBeTruthy();
+    expect(within(screen.getByRole("list", { name: "Chat messages" })).getByText("Claude is asking you…")).toBeTruthy();
+    // Focus goes to the first option; picking a single-choice option moves to the next question.
+    expect(document.activeElement).toBe(within(card).getByRole("radio", { name: /Simple/ }));
+    await user.click(within(card).getByRole("radio", { name: /Simple/ }));
+    expect(within(card).getByText("How is the result checked?")).toBeTruthy();
+    // Number keys pick options; "Other" takes free text.
+    await user.keyboard("1");
+    expect(within(card).getByRole("checkbox", { name: /Tests/ }).getAttribute("aria-checked")).toBe("true");
+    await user.click(within(card).getByRole("checkbox", { name: /Other/ }));
+    await user.type(within(card).getByRole("textbox", { name: "Your answer" }), "a smoke run");
+    await user.click(within(card).getByRole("button", { name: "Submit" }));
+    expect(sent).toEqual([
+      {
+        type: "chat:permission",
+        repoId: TEST_REPO_ID,
+        sessionId: "s1",
+        requestId: "rq",
+        allow: true,
+        answers: { "How complex should the graph be?": "Simple", "How is the result checked?": "Tests, a smoke run" },
+      },
+    ]);
+    expect(screen.queryByTestId("question-card")).toBeNull();
+    // The answered questions stay in the conversation.
+    act(() =>
+      handleServerMessage({
+        type: "chat:item",
+        repoId: TEST_REPO_ID,
+        sessionId: "s1",
+        item: { id: "q-res", ts: 8, kind: "tool_result", toolUseId: "tq", isError: false, text: "answered", answers: { "How complex should the graph be?": "Simple" } },
+      }),
+    );
+    const list = screen.getByRole("list", { name: "Chat messages" });
+    expect(within(list).getByText("Claude asked 2 questions")).toBeTruthy();
+    expect(within(list).getByText("Simple")).toBeTruthy();
+  });
+
+  it("skips AskUserQuestion with a deny", async () => {
+    show("thinking");
+    const user = userEvent.setup();
+    view.render(<Window />);
+    askQuestions();
+    await user.click(within(screen.getByTestId("question-card")).getByRole("button", { name: "Skip" }));
+    expect(sent).toEqual([{ type: "chat:permission", repoId: TEST_REPO_ID, sessionId: "s1", requestId: "rq", allow: false }]);
+  });
+
+  it("starts planning from a suggestion of an empty chat", async () => {
+    chat().setState({ sessions: [chatSessionOf({ id: "s1" })], sessionsLoaded: true, views: { s1: emptyView() }, error: null });
+    const user = userEvent.setup();
+    view.render(<Window />);
+    await user.click(screen.getByRole("button", { name: "Plan a new graph" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ type: "chat:send", sessionId: "s1", text: "Help me plan a new graph for this repository." });
+  });
+
+  it("shows Thinking inline while Claude works without streaming text", () => {
+    show("thinking");
+    view.render(<Window />);
+    expect(within(screen.getByRole("list", { name: "Chat messages" })).getByText("Thinking…")).toBeTruthy();
+  });
+
   it("shows concurrent permission prompts one after the other", async () => {
     show("thinking");
     const user = userEvent.setup();
@@ -199,7 +296,7 @@ describe("ChatPanel", () => {
     await user.click(screen.getByRole("button", { name: "Chat actions" }));
     expect(await screen.findByText("$0.012")).toBeTruthy();
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Expand" }));
+    await user.click(screen.getByRole("button", { name: "Open as side panel" }));
     await user.click(screen.getByRole("button", { name: "Close chat" }));
     expect(actions.onToggleExpanded).toHaveBeenCalledTimes(1);
     expect(actions.onClose).toHaveBeenCalledTimes(1);
@@ -253,6 +350,53 @@ describe("ChatDock (DESIGN §21.11)", () => {
     await user.click(within(bar).getByRole("button", { name: "Close chat Older chat" }));
     expect(screen.queryByRole("region", { name: "Chat" })).toBeNull();
     expect(within(bar).getAllByRole("button", { name: /^(Open|Minimize) chat/ }).map((b) => b.textContent)).toEqual(["New chat"]);
+  });
+
+  it("docks the expanded chat as a side panel next to the tab's panel, and floats it again", async () => {
+    localStorage.removeItem("pg.chat.docked");
+    const side = document.createElement("div");
+    const bottomBar = document.createElement("div");
+    document.body.append(side, bottomBar);
+    let chats: TabChats | null = null;
+    function InTab() {
+      const [state, setState] = useState<TabChats | null>(chats);
+      chats = state;
+      const ctx: TabContextValue = {
+        tabId: "t",
+        active: true,
+        setTitle: () => undefined,
+        setGraph: () => undefined,
+        close: () => undefined,
+        reportEditor: () => undefined,
+        chats: state,
+        setChats: setState,
+        bottomBar,
+        bottomBarStart: null,
+        sidePanel: side,
+      };
+      return (
+        <TabContext.Provider value={ctx}>
+          <div data-testid="panel">
+            <ChatDock />
+          </div>
+        </TabContext.Provider>
+      );
+    }
+    const user = userEvent.setup();
+    view.render(<InTab />);
+    await user.click(within(bottomBar).getByRole("button", { name: "New chat" }));
+    const floating = await screen.findByRole("region", { name: "Chat" });
+    expect(screen.getByTestId("panel").contains(floating)).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Open as side panel" }));
+    const docked = screen.getByRole("region", { name: "Chat" });
+    expect(side.contains(docked)).toBe(true);
+    expect(screen.getByTestId("panel").contains(docked)).toBe(false);
+    expect(screen.getByRole("separator", { name: "Resize chat" })).toBeTruthy();
+    expect(localStorage.getItem("pg.chat.docked")).toBe("1");
+    await user.click(screen.getByRole("button", { name: "Float over the canvas" }));
+    expect(screen.getByTestId("panel").contains(screen.getByRole("region", { name: "Chat" }))).toBe(true);
+    side.remove();
+    bottomBar.remove();
   });
 
   it("the shortcut opens a new chat, minimises the open one and reopens the newest", async () => {

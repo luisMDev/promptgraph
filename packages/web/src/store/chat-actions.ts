@@ -23,6 +23,7 @@ export function currentChatContext(view: ChatView): ChatContext {
     selectedEdgeIds: runMode ? [] : editor.selectedEdgeIds,
     runId: runs.selectedRunId ?? editor.activeRunId,
     readOnly: runMode || isReadOnly(editor),
+    ...(graph.issues?.length ? { issues: graph.issues.map((i) => i.identifier) } : {}),
   };
 }
 

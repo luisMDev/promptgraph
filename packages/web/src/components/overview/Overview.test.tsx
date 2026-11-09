@@ -36,6 +36,7 @@ function tab(active: boolean): TabContextValue {
     setChats: () => undefined,
     bottomBar: null,
     bottomBarStart: null,
+  sidePanel: null,
   };
 }
 

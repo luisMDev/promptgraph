@@ -24,6 +24,8 @@ export interface TabContextValue {
    * Claude Code status); null until mounted. */
   bottomBar: HTMLElement | null;
   bottomBarStart: HTMLElement | null;
+  /** The slot to the right of the tab's panel: an expanded chat docks there as a side panel (§21.11); null until mounted. */
+  sidePanel: HTMLElement | null;
 }
 
 export const TabContext = createContext<TabContextValue | null>(null);

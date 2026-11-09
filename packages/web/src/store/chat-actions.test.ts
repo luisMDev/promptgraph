@@ -77,4 +77,18 @@ describe("chat actions", () => {
     expect(events).not.toContain("send");
     expect(useToastStore.getState().toasts.at(-1)).toMatchObject({ kind: "error", message: expect.stringMatching(/not saved \(Save failed: disk full\)/) });
   });
+
+  it("lists the graph's linked Linear issues in the context", async () => {
+    const graph: Graph = {
+      ...linearGraph(),
+      issues: [
+        { provider: "linear", id: "i1", identifier: "ENG-1", title: "Login", url: "https://linear.app/x/issue/ENG-1" },
+        { provider: "linear", id: "i2", identifier: "ENG-2", title: "Docs", url: "https://linear.app/x/issue/ENG-2" },
+      ],
+    };
+    const linked = createTestView({ graphId: "g1", persistence: { load: async () => ({ graph, hash: "h0", modifiedOutside: false, activeRunId: null }), save } });
+    await linked.editor.getState().load();
+    expect(currentChatContext(linked).issues).toEqual(["ENG-1", "ENG-2"]);
+    expect(currentChatContext(view)).not.toHaveProperty("issues");
+  });
 });

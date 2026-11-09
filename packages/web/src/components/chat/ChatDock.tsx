@@ -37,7 +37,13 @@ export function ChatDock() {
   const chats = stored && stored.repoId === view.repoId ? stored : null;
   const sessions = useRepoChat(view.repoId, (s) => s.sessions);
   const sessionsLoaded = useRepoChat(view.repoId, (s) => s.sessionsLoaded);
-  const [expanded, setExpanded] = useState(false);
+  // Expanded = docked as a side panel next to the tab's panel (remembered per browser).
+  const [expanded, setExpanded] = useState(readDocked);
+  const toggleExpanded = () =>
+    setExpanded((e) => {
+      writeDocked(!e);
+      return !e;
+    });
 
   useEffect(() => {
     if (!chatApi.getState().sessionsLoaded) void chatApi.getState().loadSessions();
@@ -85,21 +91,45 @@ export function ChatDock() {
 
   return (
     <>
-      {openId && chats && (
-        <ChatWindow
-          key={openId}
-          sessionId={openId}
-          actions={{
-            onMinimize: () => setChats(minimizeChats(chats)),
-            onClose: () => setChats(closeChat(chats, openId)),
-            expanded,
-            onToggleExpanded: () => setExpanded((e) => !e),
-          }}
-        />
-      )}
+      {openId && chats && (() => {
+        const docked = expanded && !!tab?.sidePanel;
+        const chatWindow = (
+          <ChatWindow
+            key={openId}
+            sessionId={openId}
+            docked={docked}
+            actions={{
+              onMinimize: () => setChats(minimizeChats(chats)),
+              onClose: () => setChats(closeChat(chats, openId)),
+              expanded,
+              onToggleExpanded: toggleExpanded,
+            }}
+          />
+        );
+        // Docked: a panel to the right of the tab's panel, which shrinks instead of being covered.
+        return docked ? createPortal(chatWindow, tab.sidePanel!) : chatWindow;
+      })()}
       {tab?.bottomBar ? createPortal(bar, tab.bottomBar) : !tab && <div className="flex h-9 items-center justify-end gap-1 px-1">{bar}</div>}
     </>
   );
+}
+
+const DOCKED_KEY = "pg.chat.docked";
+
+function readDocked(): boolean {
+  try {
+    return localStorage.getItem(DOCKED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDocked(docked: boolean): void {
+  try {
+    localStorage.setItem(DOCKED_KEY, docked ? "1" : "0");
+  } catch {
+    // Storage unavailable: the choice lasts for this page only.
+  }
 }
 
 function ChatBar({

@@ -53,6 +53,7 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
   const chats = tab.chats ?? null;
   const [bottomBar, setBottomBar] = useState<HTMLElement | null>(null);
   const [bottomBarStart, setBottomBarStart] = useState<HTMLElement | null>(null);
+  const [sidePanel, setSidePanel] = useState<HTMLElement | null>(null);
   const context: TabContextValue = useMemo(
     () => ({
       tabId: id,
@@ -65,8 +66,9 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
       setChats: (next) => store.getState().setChats(id, next),
       bottomBar,
       bottomBarStart,
+      sidePanel,
     }),
-    [id, active, store, editors, chats, bottomBar, bottomBarStart],
+    [id, active, store, editors, chats, bottomBar, bottomBarStart, sidePanel],
   );
   useEffect(() => () => void editors.delete(id), [editors, id]);
 
@@ -77,11 +79,15 @@ function TabView({ tab, active, editors, children }: { tab: Tab; active: boolean
     <div data-tab-view={id} hidden={!active} inert={!active} className={active ? cn("flex min-h-0 flex-1 flex-col px-1.5", home && "pb-1.5") : undefined}>
       <LocationContext.Provider value={location}>
         <TabContext.Provider value={context}>
-          <div
-            data-pg-panel=""
-            className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background shadow-xs"
-          >
-            {children}
+          {/* The panel and, to its right, the side slot where an expanded chat docks (empty: no width). */}
+          <div className="flex min-h-0 flex-1">
+            <div
+              data-pg-panel=""
+              className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background shadow-xs"
+            >
+              {children}
+            </div>
+            <div ref={setSidePanel} data-pg-side-panel="" className="flex min-h-0 shrink-0" />
           </div>
           <div data-pg-bottom-bar="" hidden={home} className="flex h-9 shrink-0 items-center gap-1 px-1 text-xs">
             <div ref={setBottomBarStart} className="flex min-w-0 items-center gap-1" />

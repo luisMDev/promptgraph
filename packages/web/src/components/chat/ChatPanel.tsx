@@ -1,5 +1,5 @@
-import type { ChatStatus } from "@promptgraph/shared";
-import { Maximize2Icon, Minimize2Icon, MinusIcon, MoreHorizontalIcon, SendIcon, SquareIcon, XIcon } from "lucide-react";
+import { ASK_USER_QUESTION_TOOL, parseAskUserQuestion, type ChatPermissionRequestItem, type ChatStatus } from "@promptgraph/shared";
+import { MinusIcon, MoreHorizontalIcon, PanelRightCloseIcon, PanelRightOpenIcon, SendIcon, SquareIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +17,7 @@ import { ConfirmDialog } from "../common/PromptDialog";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import { ChatItems, PermissionCard } from "./ChatItems";
+import { QuestionCard } from "./ChatQuestionCard";
 import { DictationPreview, DictationStatus, MicButton } from "./Dictation";
 
 const EMPTY_VIEW = emptyView();
@@ -35,17 +36,23 @@ export interface ChatWindowActions {
 }
 
 /**
- * A floating chat window (DESIGN §21.11): one Claude Code session of the repository, above the tab's panel, opened from
- * the bottom bar. Header with the title, cost and the window actions; then the conversation.
+ * A chat window (DESIGN §21.11): one Claude Code session of the repository, opened from the bottom bar. Floating above
+ * the tab's panel at the bottom right, or, expanded (`docked`), a full-height side panel to the right of the tab's
+ * panel, resizable from its left edge. Header with the title, cost and the window actions; then the conversation.
  */
-export function ChatWindow({ sessionId, actions }: { sessionId: string; actions: ChatWindowActions }) {
+export function ChatWindow({ sessionId, actions, docked = false }: { sessionId: string; actions: ChatWindowActions; docked?: boolean }) {
+  const [width, setWidth] = useState(readDockWidth);
   return (
     <section
       aria-label="Chat"
+      style={docked ? { width } : undefined}
       // nokey: Backspace/Delete typed in the composer must not delete canvas items.
       className={cn(
-        "nokey pointer-events-auto absolute right-3 bottom-3 z-30 flex flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-2xl shadow-black/30",
-        actions.expanded ? "top-3 w-[min(760px,calc(100%-1.5rem))]" : "h-[min(600px,calc(100%-1.5rem))] w-[min(420px,calc(100%-1.5rem))]",
+        "nokey pointer-events-auto flex flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground",
+        docked
+          ? "relative ml-1.5 h-full max-w-[60vw] min-w-80 shadow-xs"
+          : "absolute right-3 bottom-3 z-30 shadow-2xl shadow-black/30",
+        !docked && (actions.expanded ? "top-3 w-[min(760px,calc(100%-1.5rem))]" : "h-[min(600px,calc(100%-1.5rem))] w-[min(420px,calc(100%-1.5rem))]"),
       )}
       onKeyDown={(e) => {
         // Esc minimises, unless something inside (a menu, the permission card) used it or a dictation is on: its own
@@ -56,9 +63,71 @@ export function ChatWindow({ sessionId, actions }: { sessionId: string; actions:
         }
       }}
     >
+      {docked && <ResizeHandle width={width} onResize={setWidth} />}
       <ChatHeader sessionId={sessionId} actions={actions} />
       <ChatConversation sessionId={sessionId} />
     </section>
+  );
+}
+
+const DOCK_WIDTH_KEY = "pg.chat.dockWidth";
+const DOCK_MIN_WIDTH = 320;
+const DOCK_DEFAULT_WIDTH = 440;
+
+function readDockWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(DOCK_WIDTH_KEY));
+    return Number.isFinite(n) && n >= DOCK_MIN_WIDTH ? n : DOCK_DEFAULT_WIDTH;
+  } catch {
+    return DOCK_DEFAULT_WIDTH;
+  }
+}
+
+/** The docked panel's left edge: drag (or ←/→) to resize; the width is remembered per browser. */
+function ResizeHandle({ width, onResize }: { width: number; onResize(width: number): void }) {
+  const clamp = (w: number) => Math.round(Math.min(Math.max(w, DOCK_MIN_WIDTH), window.innerWidth * 0.6));
+  const commit = (w: number) => {
+    onResize(w);
+    try {
+      localStorage.setItem(DOCK_WIDTH_KEY, String(w));
+    } catch {
+      // Storage unavailable: the width lasts for this page only.
+    }
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize chat"
+      aria-valuenow={width}
+      aria-valuemin={DOCK_MIN_WIDTH}
+      tabIndex={0}
+      className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = width;
+        let last = startWidth;
+        const move = (ev: PointerEvent) => {
+          last = clamp(startWidth + startX - ev.clientX);
+          onResize(last);
+        };
+        const up = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          document.body.style.cursor = "";
+          commit(last);
+        };
+        document.body.style.cursor = "col-resize";
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        commit(clamp(width + (e.key === "ArrowLeft" ? 32 : -32)));
+      }}
+    />
   );
 }
 
@@ -78,21 +147,42 @@ export function ChatConversation({ sessionId }: { sessionId: string }) {
         </p>
       )}
       {/* Keyed by session: the scroll position, stick-to-bottom flag and draft belong to one chat. */}
-      <MessageList key={`list-${sessionId}`} view={view} />
+      <MessageList key={`list-${sessionId}`} sessionId={sessionId} view={view} />
       {pending && (
-        <div className="border-t p-2">
-          <PermissionCard
-            key={pending.requestId}
-            request={pending}
-            queued={view.pendingPermissions.length - 1}
-            onAnswer={(allow) => chatApi.getState().answerPermission(sessionId, pending.requestId, allow, allow ? undefined : "Denied by the user")}
-          />
+        <div className="max-h-[70%] shrink-0 overflow-y-auto border-t p-2">
+          <PendingPrompt sessionId={sessionId} request={pending} queued={view.pendingPermissions.length - 1} />
         </div>
       )}
-      <StatusLine status={view.status} warning={view.warning} />
+      <StatusLine status={view.status} warning={view.warning} question={pending?.toolName === ASK_USER_QUESTION_TOOL} />
       <ReplyAnnouncer key={`announce-${sessionId}`} view={view} />
       <Composer key={`composer-${sessionId}`} sessionId={sessionId} status={view.status} />
     </>
+  );
+}
+
+/** The prompt Claude waits on: a question card for AskUserQuestion, else Allow / Deny. */
+function PendingPrompt({ sessionId, request, queued }: { sessionId: string; request: ChatPermissionRequestItem; queued: number }) {
+  const chat = getChatStore(useView().repoId).getState();
+  const questions = request.toolName === ASK_USER_QUESTION_TOOL ? parseAskUserQuestion(request.input) : null;
+  if (questions) {
+    return (
+      <QuestionCard
+        key={request.requestId}
+        request={request}
+        questions={questions}
+        queued={queued}
+        onSubmit={(answers) => chat.answerPermission(sessionId, request.requestId, true, undefined, answers)}
+        onSkip={() => chat.answerPermission(sessionId, request.requestId, false)}
+      />
+    );
+  }
+  return (
+    <PermissionCard
+      key={request.requestId}
+      request={request}
+      queued={queued}
+      onAnswer={(allow) => chat.answerPermission(sessionId, request.requestId, allow, allow ? undefined : "Denied by the user")}
+    />
   );
 }
 
@@ -161,8 +251,8 @@ function ChatHeader({ sessionId, actions }: { sessionId: string; actions: ChatWi
         <IconAction label="Minimize (Esc)" onClick={actions.onMinimize}>
           <MinusIcon />
         </IconAction>
-        <IconAction label={actions.expanded ? "Shrink" : "Expand"} onClick={actions.onToggleExpanded}>
-          {actions.expanded ? <Minimize2Icon /> : <Maximize2Icon />}
+        <IconAction label={actions.expanded ? "Float over the canvas" : "Open as side panel"} onClick={actions.onToggleExpanded}>
+          {actions.expanded ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
         </IconAction>
         <IconAction label="Close chat" onClick={actions.onClose}>
           <XIcon />
@@ -199,7 +289,7 @@ function IconAction({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
-function MessageList({ view }: { view: ChatSessionView }) {
+function MessageList({ sessionId, view }: { sessionId: string; view: ChatSessionView }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const streamedChars = Object.values(view.streaming).reduce((n, t) => n + t.length, 0);
@@ -221,41 +311,69 @@ function MessageList({ view }: { view: ChatSessionView }) {
     >
       {view.loading && view.items.length === 0 && <p className="text-xs text-muted-foreground">Loading chat…</p>}
       {view.loadError && <p role="alert" className="text-xs text-red-700">Could not load this chat: {view.loadError}</p>}
-      {!view.loading && !view.loadError && view.items.length === 0 && view.streamingOrder.length === 0 && <EmptyState />}
-      <ChatItems view={view} />
+      {!view.loading && !view.loadError && view.items.length === 0 && view.streamingOrder.length === 0 && <EmptyState sessionId={sessionId} status={view.status} />}
+      <ChatItems view={view} thinking={view.status === "thinking" || view.status === "starting"} />
     </div>
   );
 }
 
-function EmptyState() {
+/** Starters of an empty chat. Planning ones make Claude ask about the graph's complexity first (§21.2). */
+const STARTERS: { label: string; text: string; needsGraph?: boolean }[] = [
+  { label: "Plan a new graph", text: "Help me plan a new graph for this repository." },
+  { label: "Plan from an idea", text: "I want to build something new. Ask me what it is and how complex the graph should be, then plan it." },
+  { label: "Improve this graph", text: "Review the graph on screen and suggest improvements.", needsGraph: true },
+  { label: "Add a test-fix loop", text: "Add a test-fix loop to the graph on screen.", needsGraph: true },
+];
+
+function EmptyState({ sessionId, status }: { sessionId: string; status: ChatStatus }) {
+  const view = useView();
+  const hasGraph = useEditor((s) => s.graph !== null);
+  const connected = useDaemonStore((s) => s.connection === "open");
+  const starters = STARTERS.filter((s) => !s.needsGraph || hasGraph);
   return (
-    <div className="space-y-2 py-6 text-center text-xs text-muted-foreground">
+    <div className="space-y-3 py-6 text-center text-xs text-muted-foreground">
       <p className="text-sm font-medium text-foreground">Design graphs with Claude</p>
-      <p>Describe what you want to build and Claude drafts a graph, or ask it to change the graph on screen.</p>
-      <ul className="space-y-1 text-left italic">
-        <li>“I want to build a landing page with a hero, pricing and a signup form.”</li>
-        <li>“Add a test step after this node.”</li>
-        <li>“Simplify this graph.”</li>
-      </ul>
+      <p>Describe what you want to build: Claude asks how complex the graph should be, then drafts it. Or ask it to change the graph on screen.</p>
+      <div className="flex flex-wrap justify-center gap-1.5" aria-label="Suggestions">
+        {starters.map((s) => (
+          <button
+            key={s.label}
+            type="button"
+            disabled={!connected || isBusy(status)}
+            onClick={() => void sendChatMessage(view, sessionId, s.text)}
+            className="rounded-full px-2.5 py-1 text-xs text-foreground ring-1 ring-border transition-colors hover:bg-muted disabled:opacity-50"
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
 const STATUS_TEXT: Partial<Record<ChatStatus, string>> = {
   starting: "Starting Claude Code…",
+  // Shown inline in the conversation (ChatItems "Thinking…"); here only for screen readers.
   thinking: "Claude is working…",
   waiting_permission: "Waiting for your permission",
   exited: "Session paused: it resumes on the next message.",
   error: "The Claude Code process failed.",
 };
 
-function StatusLine({ status, warning }: { status: ChatStatus; warning: string | null }) {
-  const text = STATUS_TEXT[status];
+function StatusLine({ status, warning, question = false }: { status: ChatStatus; warning: string | null; question?: boolean }) {
+  const text = status === "waiting_permission" && question ? "Waiting for your answer" : STATUS_TEXT[status];
+  const visible = !!text && status !== "thinking";
   // Always mounted (possibly empty): screen readers announce changes of an existing live region only.
   return (
-    <div role="status" className={cn("space-y-0.5 px-3 text-[11px]", (text || warning) && "border-t py-1")}>
+    <div role="status" className={cn("space-y-0.5 px-3 text-[11px]", (visible || warning) && "border-t py-1")}>
       {text && (
-        <p className={cn("flex items-center gap-1.5", status === "error" ? "text-red-700" : status === "waiting_permission" ? "text-amber-700" : "text-muted-foreground")}>
+        <p
+          className={cn(
+            "flex items-center gap-1.5",
+            status === "error" ? "text-red-700" : status === "waiting_permission" ? "text-amber-700" : "text-muted-foreground",
+            !visible && "sr-only",
+          )}
+        >
           {isBusy(status) && <span className="size-1.5 animate-pulse rounded-full bg-current" aria-hidden="true" />}
           {text}
         </p>
@@ -388,6 +506,7 @@ export function ContextChip() {
   useEditor((s) => s.selectedNodeIds);
   useEditor((s) => s.selectedEdgeIds);
   useEditor((s) => s.activeRunId);
+  useEditor((s) => s.graph?.issues);
   useRun((s) => s.selectedRunId);
   useRun((s) => s.selectedNodeId);
   const ctx = currentChatContext(view);
@@ -398,9 +517,11 @@ export function ContextChip() {
   else if (nodes > 1) parts.push(`${nodes} nodes`);
   if (edges) parts.push(edges === 1 ? "1 edge" : `${edges} edges`);
   if (ctx.runId) parts.push("run");
+  const issues = ctx.issues ?? [];
+  if (issues.length) parts.push(issues.length <= 2 ? issues.join(", ") : `${issues[0]} +${issues.length - 1} issues`);
   if (ctx.graphId && ctx.readOnly) parts.push("read-only");
   const title = ctx.graphId
-    ? `Sent with each message: graph ${ctx.graphId}${nodes ? `, selected nodes ${ctx.selectedNodeIds.join(", ")}` : ""}${edges ? `, selected edges ${ctx.selectedEdgeIds.join(", ")}` : ""}${ctx.runId ? `, run ${ctx.runId}` : ""}`
+    ? `Sent with each message: graph ${ctx.graphId}${nodes ? `, selected nodes ${ctx.selectedNodeIds.join(", ")}` : ""}${edges ? `, selected edges ${ctx.selectedEdgeIds.join(", ")}` : ""}${ctx.runId ? `, run ${ctx.runId}` : ""}${issues.length ? `, linked issues ${issues.join(", ")} (with their Linear descriptions)` : ""}`
     : "No graph is open";
   return (
     <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={title} data-testid="chat-context">
