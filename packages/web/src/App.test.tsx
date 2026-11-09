@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wsClient } from "./api/ws";
 import { AppShell } from "./App";
@@ -144,22 +144,40 @@ describe("App routing (DESIGN §13.2)", () => {
     expect(await screen.findByText("Not found")).toBeTruthy();
   });
 
-  it("/r/<repoId> redirects (replace) to the repository's last graph, else its first", async () => {
+  it("/r/<repoId> shows the overview filtered to the repository instead of redirecting; a card opens its graph", async () => {
     localStorage.setItem(`pg.lastGraph.${REPO}`, "g2");
-    const first = renderAt(R);
-    await waitFor(() => expect(first.where()).toBe(`${R}/graphs/g2`));
-    expect(first.navigations[0]).toEqual({ path: `${R}/graphs/g2`, replace: true });
-    cleanup();
+    const { navigations, where } = renderAt(R);
+    const list = await screen.findByRole("region", { name: "Graphs" });
+    expect(within(list).getByRole("link", { name: "Open Graph 1" }).getAttribute("href")).toBe(`${R}/graphs/g1`);
+    expect(within(list).getByText("last opened")).toBeTruthy();
+    // Each card shows a thumbnail and the graph's stats; g1's run r1 is its last run.
+    const card = within(list).getByRole("listitem", { name: "Graph 1" });
+    expect(await within(card).findByRole("img", { name: "2 steps" })).toBeTruthy();
+    expect(within(card).getByText(/1 run\b/)).toBeTruthy();
+    expect(within(card).getByText("Succeeded")).toBeTruthy();
+    expect(daemon.calls).toContain(`GET /api/repos/${REPO}/graph-overviews`);
+    expect(navigations).toEqual([]);
 
-    localStorage.setItem(`pg.lastGraph.${REPO}`, "deleted-graph");
-    const second = renderAt(R);
-    await waitFor(() => expect(second.where()).toBe(`${R}/graphs/g1`));
+    fireEvent.click(within(list).getByRole("link", { name: "Open Second" }));
+    expect(where()).toBe(`${R}/graphs/g2`);
+    expect(await screen.findByText("Graph settings")).toBeTruthy();
   });
 
-  it("an empty repository shows the editor's empty state", async () => {
+  it("deleting a graph from the list removes it and stays on the list", async () => {
+    const { where } = renderAt(R);
+    const list = await screen.findByRole("region", { name: "Graphs" });
+    fireEvent.click(within(list).getByRole("button", { name: "Delete Second" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(daemon.calls).toContain(`DELETE /api/repos/${REPO}/graphs/g2`));
+    await waitFor(() => expect(within(list).queryByRole("link", { name: "Open Second" })).toBeNull());
+    expect(where()).toBe(R);
+  });
+
+  it("an empty repository shows the overview's empty state with New graph", async () => {
     daemon.repos[REPO]!.graphs = {};
     renderAt(R);
-    expect(await screen.findByText("No graphs in this repository yet.")).toBeTruthy();
+    expect(await screen.findByText("No graphs here yet")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /New graph/ }).length).toBeGreaterThan(0);
   });
 });
 

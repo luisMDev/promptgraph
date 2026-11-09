@@ -20,7 +20,7 @@ import { Button } from "../common/ui";
 
 type Dialog = "create" | "rename" | "delete" | null;
 
-/** Graph dropdown: links to the repository's graphs, plus create / rename / delete in its footer. */
+/** Graph dropdown: links to the repository's graphs, create / rename / delete in its footer, and a link to the repository's overview (§13.3). */
 export function GraphSelector() {
   const view = useView();
   const graphs = useRepo((s) => s.graphs) ?? [];
@@ -100,6 +100,14 @@ export function GraphSelector() {
                 <Icons.trash /> Delete
               </DropdownMenuItem>
             )}
+          </div>
+          <DropdownMenuSeparator className="mx-0 my-0" />
+          <div className="p-1">
+            <DropdownMenuItem className="justify-center text-xs font-medium" asChild>
+              <Link to={webRoutes.repo(view.repoId)}>
+                <Icons.layers /> All graphs
+              </Link>
+            </DropdownMenuItem>
           </div>
         </DropdownMenuContent>
       </DropdownMenu>

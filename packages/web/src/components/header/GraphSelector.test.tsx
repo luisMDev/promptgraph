@@ -78,6 +78,14 @@ describe("GraphSelector", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 
+  it("links to the repository's graph list", async () => {
+    const user = userEvent.setup();
+    render(<GraphSelector />);
+    await user.click(trigger());
+    const item = await screen.findByRole("menuitem", { name: /All graphs/ });
+    expect(item.getAttribute("href")).toBe("/r/repo-0123abcd");
+  });
+
   it("selects a graph with the keyboard (Enter on a link item)", async () => {
     const user = userEvent.setup();
     render(<GraphSelector />);

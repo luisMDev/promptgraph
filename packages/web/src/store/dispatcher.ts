@@ -138,6 +138,10 @@ export function createDispatcher(): Dispatcher {
         refreshPendingSoon(msg.repoId);
         return;
       }
+      case "run:deleted":
+        for (const view of views) if (view.repoId === msg.repoId) view.run.getState().removeRun(msg.runId);
+        refreshPendingSoon(msg.repoId);
+        return;
       case "node:update":
         for (const view of views) {
           const runs = view.run.getState();

@@ -19,6 +19,7 @@ import {
   type GetRunResponse,
   type Graph,
   type ListCommandsResponse,
+  type ListGraphOverviewsResponse,
   type ListGraphsResponse,
   type ListDirsResponse,
   type ListReposResponse,
@@ -171,6 +172,10 @@ export function repoApi(repoId: string) {
     listGraphs(): Promise<ListGraphsResponse> {
       return request("GET", p.graphs);
     },
+    /** The graph list with thumbnails and run stats (DESIGN §13.3). */
+    listGraphOverviews(): Promise<ListGraphOverviewsResponse> {
+      return request("GET", p.graphOverviews);
+    },
     getGraph(id: string): Promise<GetGraphResponse> {
       return request("GET", p.graph(id));
     },
@@ -202,6 +207,10 @@ export function repoApi(repoId: string) {
     },
     async cancelRun(runId: string): Promise<void> {
       await request("POST", p.cancelRun(runId), {});
+    },
+    /** Deletes a finished run from the history (409 run_active while it runs or is paused). */
+    async deleteRun(runId: string): Promise<void> {
+      await request("DELETE", p.run(runId));
     },
     async cleanupRun(runId: string): Promise<void> {
       await request("POST", p.cleanupRun(runId), {});

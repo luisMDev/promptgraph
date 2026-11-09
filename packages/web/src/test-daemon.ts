@@ -1,4 +1,4 @@
-import type { DaemonInfoResponse, GetGraphResponse, Graph, GraphListItem, RepoInfoResponse, RepoSummary, RunDetail, RunReportResponse } from "@promptgraph/shared";
+import type { DaemonInfoResponse, GetGraphResponse, Graph, GraphListItem, GraphOverview, RepoInfoResponse, RepoSummary, RunDetail, RunReportResponse } from "@promptgraph/shared";
 import { vi } from "vitest";
 import { setDesktopBridge } from "./lib/desktop";
 import { useDaemonStore } from "./store/daemon-store";
@@ -65,6 +65,25 @@ function listItem(id: string, g: GetGraphResponse): GraphListItem {
   return { id, name: g.graph.name, loadError: null, updatedAt: 1, hash: g.hash };
 }
 
+/** A graph's overview as the daemon computes it (DESIGN §13.3), from the fake's graphs and runs. */
+function overviewOf(id: string, g: GetGraphResponse, runs: RunDetail[]): GraphOverview {
+  const own = runs.map((r) => r.run).filter((r) => r.graphId === id).sort((a, b) => b.startedAt - a.startedAt);
+  const last = own[0];
+  return {
+    ...listItem(id, g),
+    preview: {
+      nodes: g.graph.nodes.map((n) => ({ id: n.id, type: n.type, x: n.position.x, y: n.position.y })),
+      edges: g.graph.edges.map((e) => ({ source: e.source, target: e.target })),
+    },
+    runs: {
+      total: own.length,
+      active: own.filter((r) => r.status === "running" || r.status === "paused").length,
+      costUsd: own.reduce((sum, r) => sum + r.usage.costUsd, 0),
+      lastRun: last ? { id: last.id, shortId: last.shortId, status: last.status, startedAt: last.startedAt, finishedAt: last.finishedAt } : null,
+    },
+  };
+}
+
 /** Installs the fake as `fetch`; returns it for assertions. */
 export function installFakeDaemon(init: Partial<Pick<FakeDaemon, "repos" | "summaries" | "override">> = {}): FakeDaemon {
   const d: FakeDaemon = { repos: init.repos ?? {}, summaries: init.summaries ?? [], calls: [], bodies: [], override: init.override };
@@ -89,11 +108,16 @@ export function installFakeDaemon(init: Partial<Pick<FakeDaemon, "repos" | "summ
     const repo = d.repos[repoId];
     if (!repo) return json(404, { error: "Unknown repository", code: "unknown_repo" });
     if (rest === "") return json(200, repo.info);
+    if (rest === "/graph-overviews") return json(200, { graphs: Object.entries(repo.graphs).map(([id, g]) => overviewOf(id, g, Object.values(repo.runs))) });
     if (rest === "/graphs") return json(200, { graphs: Object.entries(repo.graphs).map(([id, g]) => listItem(id, g)) });
     const g = /^\/graphs\/([^/]+)$/.exec(rest);
     if (g) {
       const id = decodeURIComponent(g[1]!);
       if (method === "PUT") return json(200, { graph: body as Graph, hash: `h-${d.bodies.length}` });
+      if (method === "DELETE") {
+        delete repo.graphs[id];
+        return json(200, {});
+      }
       const graph = repo.graphs[id];
       return graph ? json(200, graph) : json(404, { error: "Graph not found", code: "not_found" });
     }

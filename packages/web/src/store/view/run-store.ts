@@ -44,6 +44,8 @@ export interface RunStore extends RunState {
   /** (Re)loads the history details of a run. */
   loadRunInfo(runId: string): Promise<void>;
   applyRunUpdate(run: RunSummary): void;
+  /** `run:deleted`, or a delete from this view: the run leaves the list (a view showing it gets "does not exist"). */
+  removeRun(runId: string): void;
   applyNodeUpdate(nodeRun: NodeRun): void;
   applyLaneUpdate(lane: Lane): void;
   /** Releases the run subscription and stops timers (the view unmounted or its repository was removed). */
@@ -224,6 +226,13 @@ export function createRunStore(repoId: string, deps: RunStoreDeps = repoRunDeps(
         } catch (err) {
           if (get().selectedRunId === runId) set({ detailError: errorMessage(err) });
         }
+      },
+
+      removeRun(runId) {
+        const s = get();
+        const { [runId]: _gone, ...runInfo } = s.runInfo;
+        set({ runs: s.runs.filter((r) => r.id !== runId), runInfo });
+        if (s.selectedRunId === runId) set({ detail: null, detailNotFound: true });
       },
 
       applyRunUpdate(run) {

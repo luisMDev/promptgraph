@@ -1,4 +1,4 @@
-import { createEmptyGraph, nodeDisplayLabel, slugifyGraphId, webRoutes, type NodeRun } from "@promptgraph/shared";
+import { createEmptyGraph, nodeDisplayLabel, slugifyGraphId, webRoutes, type NodeRun, type RunSummary } from "@promptgraph/shared";
 import { ApiRequestError, errorMessage } from "../../api/rest";
 import { getRepoCache } from "../repo-cache";
 import { toast } from "../toast-store";
@@ -70,9 +70,9 @@ export async function deleteGraph(view: View, id: string): Promise<void> {
     .getState()
     .refreshGraphs()
     .catch(() => undefined);
+  // Deleting the graph the view shows goes back to the repository's overview (§13.3).
   if (view.editor.getState().graphId !== id) return;
-  const next = cache.getState().graphs?.find((g) => g.id !== id)?.id;
-  view.navigate(next ? webRoutes.graph(view.repoId, next) : webRoutes.repo(view.repoId), { replace: true });
+  view.navigate(webRoutes.repo(view.repoId), { replace: true });
 }
 
 export async function startRun(view: View): Promise<void> {
@@ -122,6 +122,23 @@ export async function cleanupRun(view: View, runId: string): Promise<void> {
   } catch (err) {
     reportError("Cleanup failed", err);
   }
+}
+
+/**
+ * Deletes a finished run (§13.2). A view showing it goes back to the editor of its graph first, so it never shows
+ * "does not exist" for a run the user removed.
+ */
+export async function deleteRun(view: View, run: Pick<RunSummary, "id" | "graphId" | "shortId">): Promise<boolean> {
+  if (view.run.getState().selectedRunId === run.id) view.navigate(webRoutes.graph(view.repoId, run.graphId));
+  try {
+    await view.api.deleteRun(run.id);
+  } catch (err) {
+    reportError(`Could not delete run #${run.shortId}`, err);
+    return false;
+  }
+  view.run.getState().removeRun(run.id);
+  toast("info", `Run #${run.shortId} deleted.`);
+  return true;
 }
 
 /** PTY ids of "Reopen session" terminals (CONTRACTS § PTY ids). */
