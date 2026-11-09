@@ -64,6 +64,9 @@ The tools come from the `promptgraph` MCP server.
   next step as a checkpoint.
 - `pr` steps keep `requireApproval: true`. Do not set `settings.allowPrWithoutApproval`. Add an
   `approval` step before anything the user should look at first.
+- When the graph is linked to Linear issues and the user wants them kept up to date, add a `linear` step (usually
+  after `pr`): it proposes progress comments and state changes, which the user approves in the UI. Leave its
+  `prompt` empty to use the default instructions.
 - Never use `bypassPermissions` (it does not exist in promptgraph). Default to `acceptEdits`. To keep
   unattended runs from stopping at permission prompts, use `allowedTools` with narrow entries such as
   `"Bash(pnpm test:*)"`.
