@@ -21,8 +21,12 @@ The tools come from the `promptgraph` MCP server.
 2. **Learn the format.** Call `graph_reference` once per session. Use `list_commands` before you put a
    slash command in a `command` node, and use only commands it lists.
 3. **Understand the work.** Read the code involved and ask the user what is unclear: the goal, the
-   test command, the base branch, whether the result should become a PR. For an existing graph, see
-   "Editing an existing graph" below.
+   test command, the base branch, whether the result should become a PR. For a new graph, also ask
+   how complex it should be — **Simple** (2–4 sequential steps, no loops), **Standard** (5–8 steps
+   with a test-fix loop or a review) or **Complex** (parallel lanes joined by a merge, review loops,
+   approval gates) — unless the user already said. Ask everything in one go, with the
+   `AskUserQuestion` tool when it is available (it shows clickable options), and design at the depth
+   chosen. For an existing graph, see "Editing an existing graph" below.
 4. **Draft the graph** with the rules below. Give it a short kebab-case `id` and a readable `name`.
    Give every node a short `label` and a meaningful `id` (`implement`, `tests`, `fix`, not `n1`).
 5. **Show the plan before saving.** Show a small outline (steps, which run in parallel, loops, gates).
