@@ -81,6 +81,9 @@ export class WsHub {
     const { bus } = this.ctx;
     this.unsubscribe.push(
       bus.on("run:update", ({ repoId, run }) => this.broadcast({ type: "run:update", repoId, run }, (c) => c.repos.has(repoId))),
+      bus.on("run:deleted", ({ repoId, runId, graphId }) =>
+        this.broadcast({ type: "run:deleted", repoId, runId, graphId }, (c) => c.repos.has(repoId)),
+      ),
       bus.on("graphs:changed", ({ repoId, graphId }) => this.broadcast({ type: "graphs:changed", repoId, graphId }, (c) => c.repos.has(repoId))),
       bus.on("chat", ({ message }) => this.broadcast(message, (c) => c.repos.has(message.repoId))),
       bus.on("repo:changed", ({ repoId }) => this.scheduleStatus(repoId)),

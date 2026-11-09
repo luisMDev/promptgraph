@@ -587,6 +587,32 @@ describe("Engine failure handling and manual controls", () => {
     expect(s.lanes.calls.at(-1)).toBe("cleanup:on-failure:true:force");
   });
 
+  it("deleteRun removes a finished run (worktrees, rows, events, logs) and refuses an active one (§13.2)", async () => {
+    const runner = new FakeRunner(() => {});
+    const s = setup(allTypes(runner));
+    const deleted: unknown[] = [];
+    s.bus.on("run:deleted", (e) => deleted.push(e));
+    s.graphs.save(makeGraph([{ id: "a" }], []));
+    const { run } = await s.engine.startRun("flow");
+    await waitFor(() => runner.last("a"));
+    await expect(s.engine.deleteRun(run.id)).rejects.toMatchObject({ code: "run_active" });
+
+    await s.engine.cancelRun(run.id);
+    s.lanes.calls.length = 0;
+    const logDir = path.join(s.paths.runsDir, run.id);
+    fs.mkdirSync(logDir, { recursive: true });
+    // cancelRun cleaned up already (keepWorktrees: on-failure keeps them); deleting forces it.
+    s.store.updateRun(run.id, { cleanedUp: false });
+    await s.engine.deleteRun(run.id);
+    expect(s.lanes.calls).toEqual(["cleanup:never:false:force"]);
+    expect(s.store.getRun(run.id)).toBeUndefined();
+    expect(s.store.listNodeRuns(run.id)).toEqual([]);
+    expect(s.store.listEvents(run.id)).toEqual([]);
+    expect(fs.existsSync(logDir)).toBe(false);
+    expect(deleted).toEqual([{ repoId: "repo-0123abcd", runId: run.id, graphId: "flow" }]);
+    await expect(s.engine.deleteRun(run.id)).rejects.toMatchObject({ code: "not_found" });
+  });
+
   it("serves approval info, diffs and reopen", async () => {
     const runner = new FakeRunner((e) => {
       if (e.ctx.node.id === "a") queueMicrotask(() => e.succeed({ text: "implemented" }));

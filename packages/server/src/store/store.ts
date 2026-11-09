@@ -7,6 +7,7 @@ import {
   sumUsage,
   type BillingMode,
   type Graph,
+  type GraphRunStats,
   type Lane,
   type LaneStatus,
   type LoopState,
@@ -369,6 +370,45 @@ export class Store {
     return rows.map((r) => this.summaryFromRow(r));
   }
 
+  /**
+   * Run stats of every graph of a repository that has runs, keyed by graph id (DESIGN §13.3): run count, active
+   * (running or paused) count, cost summed over every node run's usage, and the newest run.
+   */
+  graphRunStats(repoPath: string): Map<string, GraphRunStats> {
+    const counts = this.db
+      .prepare(
+        `SELECT graph_id, COUNT(*) AS total, SUM(CASE WHEN status IN ('running', 'paused') THEN 1 ELSE 0 END) AS active
+         FROM runs WHERE repo_path = ? GROUP BY graph_id`,
+      )
+      .all(repoPath) as Array<{ graph_id: string; total: number; active: number }>;
+    const costs = this.db
+      .prepare(
+        `SELECT r.graph_id, SUM(CASE WHEN json_valid(n.output) THEN COALESCE(json_extract(n.output, '$.usage.costUsd'), 0) ELSE 0 END) AS cost
+         FROM node_runs n JOIN runs r ON r.id = n.run_id WHERE r.repo_path = ? GROUP BY r.graph_id`,
+      )
+      .all(repoPath) as Array<{ graph_id: string; cost: number | null }>;
+    const lasts = this.db
+      .prepare(
+        `SELECT id, graph_id, short_id, status, started_at, finished_at FROM (
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY graph_id ORDER BY started_at DESC, rowid DESC) AS rn FROM runs WHERE repo_path = ?
+         ) WHERE rn = 1`,
+      )
+      .all(repoPath) as Array<Pick<RunRow, "id" | "graph_id" | "short_id" | "status" | "started_at" | "finished_at">>;
+    const cost = new Map(costs.map((c) => [c.graph_id, c.cost ?? 0]));
+    const last = new Map(lasts.map((l) => [l.graph_id, l]));
+    const stats = new Map<string, GraphRunStats>();
+    for (const c of counts) {
+      const l = last.get(c.graph_id);
+      stats.set(c.graph_id, {
+        total: c.total,
+        active: c.active,
+        costUsd: cost.get(c.graph_id) ?? 0,
+        lastRun: l ? { id: l.id, shortId: l.short_id, status: l.status, startedAt: l.started_at, finishedAt: l.finished_at } : null,
+      });
+    }
+    return stats;
+  }
+
   /** `repoPath` restricts to one repository's runs (the DB is shared by every server instance). */
   listRunsByStatus(statuses: readonly RunStatus[], filter: { repoPath?: string } = {}): Run[] {
     if (statuses.length === 0) return [];
@@ -589,6 +629,14 @@ export class Store {
       .prepare(`SELECT * FROM chat_sessions WHERE repo_path = ? ORDER BY updated_at DESC, rowid DESC`)
       .all(repoPath) as ChatSessionRow[];
     return rows.map(chatSessionFromRow);
+  }
+
+  /** Deletes a run with its lanes and node runs (cascade) and its event log. Returns whether it existed. */
+  deleteRun(id: string): boolean {
+    return this.transaction(() => {
+      this.db.prepare(`DELETE FROM events WHERE run_id = ?`).run(id);
+      return this.db.prepare(`DELETE FROM runs WHERE id = ?`).run(id).changes > 0;
+    });
   }
 
   deleteChatSession(id: string): boolean {

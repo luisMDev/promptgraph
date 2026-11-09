@@ -5,6 +5,9 @@ import {
   ValidateGraphRequestSchema,
   validateGraph,
   type GetGraphResponse,
+  type GraphOverview,
+  type GraphRunStats,
+  type ListGraphOverviewsResponse,
   type ListGraphsResponse,
   type OkResponse,
   type SaveGraphResponse,
@@ -17,10 +20,35 @@ import { REPO_PREFIX, repoOf, type App } from "../repo-scope.js";
 
 const P = REPO_PREFIX;
 
-/** …/graphs · GET/PUT/DELETE …/graphs/:id · POST …/graphs/:id/validate · POST …/graphs/:id/runs (under /api/repos/:repoId) */
+const NO_RUNS: GraphRunStats = { total: 0, active: 0, costUsd: 0, lastRun: null };
+
+/** …/graphs · …/graph-overviews · GET/PUT/DELETE …/graphs/:id · POST …/graphs/:id/validate · POST …/graphs/:id/runs (under /api/repos/:repoId) */
 export function registerGraphRoutes(app: App, daemon: DaemonContext): void {
   const { store } = daemon;
   app.get(`${P}/graphs`, (c) => c.json<ListGraphsResponse>({ graphs: repoOf(c).graphs.list() }));
+
+  // The graph list with what each card shows (DESIGN §13.3): a thumbnail (node types and positions, edges) and the
+  // graph's run stats. A graph that fails to load (or is removed meanwhile) has no thumbnail.
+  app.get(`${P}/graph-overviews`, (c) => {
+    const { graphs, repo } = repoOf(c);
+    const stats = store.graphRunStats(repo.path);
+    const overviews = graphs.list().map((item): GraphOverview => {
+      let preview: GraphOverview["preview"] = null;
+      if (!item.loadError) {
+        try {
+          const { graph } = graphs.get(item.id);
+          preview = {
+            nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, x: n.position.x, y: n.position.y })),
+            edges: graph.edges.map((e) => ({ source: e.source, target: e.target })),
+          };
+        } catch {
+          preview = null;
+        }
+      }
+      return { ...item, preview, runs: stats.get(item.id) ?? NO_RUNS };
+    });
+    return c.json<ListGraphOverviewsResponse>({ graphs: overviews });
+  });
 
   app.get(`${P}/graphs/:id`, (c) => {
     const { graphs, engine, repo } = repoOf(c);

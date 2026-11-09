@@ -61,6 +61,33 @@ describe("Store", () => {
     expect(() => store.updateRun("missing", { status: "failed" })).toThrow();
   });
 
+  it("aggregates run stats per graph of one repository (DESIGN §13.3)", () => {
+    const store = newStore();
+    const other = GraphSchema.parse({ ...graph, id: "other", name: "Other" });
+    store.insertRun({ id: "r1", repoPath: "/repo", graph, graphHash: "h", shortId: "aaaa", startedAt: 1 });
+    store.insertRun({ id: "r2", repoPath: "/repo", graph, graphHash: "h", shortId: "bbbb", startedAt: 2 });
+    store.insertRun({ id: "r3", repoPath: "/repo", graph: other, graphHash: "h", shortId: "cccc", startedAt: 3 });
+    store.insertRun({ id: "r4", repoPath: "/elsewhere", graph, graphHash: "h", shortId: "dddd", startedAt: 4 });
+    store.updateRun("r1", { status: "succeeded", finishedAt: 5 });
+    store.updateRun("r3", { status: "paused" });
+    store.insertNodeRun({ id: "n1", runId: "r1", nodeId: "a", iteration: 0, attempt: 0, laneId: "main", status: "pending" });
+    store.insertNodeRun({ id: "n2", runId: "r2", nodeId: "a", iteration: 0, attempt: 0, laneId: "main", status: "pending" });
+    store.insertNodeRun({ id: "n3", runId: "r2", nodeId: "a", iteration: 0, attempt: 1, laneId: "main", status: "pending" });
+    store.insertNodeRun({ id: "n4", runId: "r4", nodeId: "a", iteration: 0, attempt: 0, laneId: "main", status: "pending" });
+    store.updateNodeRun("n1", { output: { usage: usage(0.5) } });
+    store.updateNodeRun("n2", { output: { usage: usage(0.25) } });
+    store.updateNodeRun("n3", { output: { text: "no usage" } });
+    store.updateNodeRun("n4", { output: { usage: usage(9) } });
+
+    const stats = store.graphRunStats("/repo");
+    expect([...stats.keys()].sort()).toEqual(["demo", "other"]);
+    const demo = stats.get("demo")!;
+    expect(demo).toMatchObject({ total: 2, active: 1, lastRun: { id: "r2", shortId: "bbbb", status: "running", startedAt: 2, finishedAt: null } });
+    expect(demo.costUsd).toBeCloseTo(0.75);
+    expect(stats.get("other")).toEqual({ total: 1, active: 1, costUsd: 0, lastRun: { id: "r3", shortId: "cccc", status: "paused", startedAt: 3, finishedAt: null } });
+    expect(store.graphRunStats("/nowhere").size).toBe(0);
+  });
+
   it("round-trips node runs incl. JSON columns and derives run counters and usage", () => {
     let t = 100;
     const store = newStore(() => t);

@@ -28,7 +28,7 @@ import {
  *
  * Delivery rules:
  * - `repo:status`, `repo:removed` and `usage:limits` go to every client.
- * - `run:update`, `graphs:changed` and `chat:*` (§21) go to clients subscribed to their repository (`repo:subscribe`).
+ * - `run:update`, `run:deleted`, `graphs:changed` and `chat:*` (§21) go to clients subscribed to their repository (`repo:subscribe`).
  * - `node:update` / `lane:update` go to clients subscribed to that run.
  * - `pty:*` go to clients attached to that pty.
  * - `voice:*` go only to the client that sent the voice:start.
@@ -47,6 +47,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   /** New subscription usage limits were observed (§23.3; account-wide, not per repository). */
   z.object({ type: z.literal("usage:limits"), limits: UsageLimitsSchema }),
   z.object({ type: z.literal("run:update"), repoId: RepoIdSchema, run: RunSummarySchema }),
+  /** A run was deleted from the history (§13.2). */
+  z.object({ type: z.literal("run:deleted"), repoId: RepoIdSchema, runId: z.string(), graphId: z.string() }),
   z.object({ type: z.literal("node:update"), nodeRun: NodeRunSchema }),
   z.object({ type: z.literal("lane:update"), lane: LaneSchema }),
   /** Sent in reply to pty:attach before the replay. `live` = process still running (input accepted). */

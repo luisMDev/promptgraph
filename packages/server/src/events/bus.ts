@@ -16,6 +16,8 @@ export type AttentionKind = "waiting_input" | "waiting_approval" | "idle";
 export interface BusEvents {
   /** After every persisted change to a run or to the counters/usage derived from its node runs. */
   "run:update": { repoId: string; run: RunSummary };
+  /** A run was deleted from the history (§13.2). */
+  "run:deleted": { repoId: string; runId: string; graphId: string };
   /** After every persisted change to a node run. */
   "node:update": { nodeRun: NodeRun };
   "lane:update": { lane: Lane };

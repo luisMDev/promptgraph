@@ -2,6 +2,7 @@ import { z } from "zod";
 import { GraphSchema, NodeTypeSchema } from "./graph.js";
 import { RepoIdSchema } from "./repos.js";
 import { LaneSchema, NodeRunSchema, RunDetailSchema, RunSummarySchema } from "./run.js";
+import { RunStatusSchema } from "./status.js";
 import { ValidationResultSchema } from "./validation/types.js";
 import { VoiceSettingsSchema } from "./voice.js";
 
@@ -98,6 +99,34 @@ export type GraphListItem = z.infer<typeof GraphListItemSchema>;
 /** GET …/graphs */
 export const ListGraphsResponseSchema = z.object({ graphs: z.array(GraphListItemSchema) });
 export type ListGraphsResponse = z.infer<typeof ListGraphsResponseSchema>;
+
+/** A graph reduced to what its thumbnail draws (DESIGN §13.3): node types and positions, and the edges. */
+export const GraphPreviewSchema = z.object({
+  nodes: z.array(z.object({ id: z.string(), type: NodeTypeSchema, x: z.number(), y: z.number() })),
+  edges: z.array(z.object({ source: z.string(), target: z.string() })),
+});
+export type GraphPreview = z.infer<typeof GraphPreviewSchema>;
+
+/** Every run of one graph, aggregated in the DB (runs of deleted graphs are not reported). */
+export const GraphRunStatsSchema = z.object({
+  total: z.number().int(),
+  /** Running or paused. */
+  active: z.number().int(),
+  /** Summed over every node run's usage (estimated at API list prices, §23). */
+  costUsd: z.number(),
+  lastRun: z
+    .object({ id: z.string(), shortId: z.string(), status: RunStatusSchema, startedAt: z.number(), finishedAt: z.number().nullable() })
+    .nullable(),
+});
+export type GraphRunStats = z.infer<typeof GraphRunStatsSchema>;
+
+/** One card of the repository's graph list. `preview` is null when the file does not parse. */
+export const GraphOverviewSchema = GraphListItemSchema.extend({ preview: GraphPreviewSchema.nullable(), runs: GraphRunStatsSchema });
+export type GraphOverview = z.infer<typeof GraphOverviewSchema>;
+
+/** GET …/graph-overviews (same graphs and order as GET …/graphs) */
+export const ListGraphOverviewsResponseSchema = z.object({ graphs: z.array(GraphOverviewSchema) });
+export type ListGraphOverviewsResponse = z.infer<typeof ListGraphOverviewsResponseSchema>;
 
 /** GET …/graphs/:id (422 ApiError{code:"invalid_graph"} when the file does not parse) */
 export const GetGraphResponseSchema = z.object({
@@ -343,12 +372,15 @@ function repoApi(repoId: string) {
     /** GET → RepoInfoResponse. */
     info: base,
     graphs: `${base}/graphs`,
+    /** GET → ListGraphOverviewsResponse (graph list with thumbnails and run stats, §13.3). */
+    graphOverviews: `${base}/graph-overviews`,
     graph: (id: string) => `${base}/graphs/${enc(id)}`,
     /** PUT with optimistic concurrency (SaveGraphQuery). */
     saveGraph: (id: string, baseHash?: string) => `${base}/graphs/${enc(id)}${baseHash ? `?baseHash=${enc(baseHash)}` : ""}`,
     validate: (id: string) => `${base}/graphs/${enc(id)}/validate`,
     startRun: (id: string) => `${base}/graphs/${enc(id)}/runs`,
     runs: `${base}/runs`,
+    /** GET → RunDetail; DELETE → OkResponse (deletes a finished run, §13.2). */
     run: (id: string) => `${base}/runs/${enc(id)}`,
     cancelRun: (id: string) => `${base}/runs/${enc(id)}/cancel`,
     cleanupRun: (id: string) => `${base}/runs/${enc(id)}/cleanup`,

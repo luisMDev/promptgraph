@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   ATTENTION_NODE_STATUSES,
   buildTopology,
@@ -35,7 +36,7 @@ import {
   nodeDisplayLabel,
 } from "@promptgraph/shared";
 import { childEnv } from "../config/child-env.js";
-import { ptyLogPath, type PgPaths } from "../config/paths.js";
+import { ptyLogPath, runDir, type PgPaths } from "../config/paths.js";
 import type { EventBus } from "../events/bus.js";
 import { GraphLoadError, GraphNotFoundError, type GraphStore } from "../graphs/graph-store.js";
 import type { OwnedPtys } from "../pty/pty-manager.js";
@@ -314,6 +315,23 @@ export class Engine {
     await this.deps.lanes.cleanup(runId, { keep: run.graphSnapshot.settings.keepWorktrees, failed: run.status !== "succeeded", force: true });
     this.deps.store.appendEvent(runId, null, "run.cleanup", { manual: true });
     this.emitRun(runId);
+  }
+
+  /**
+   * Deletes a finished run from the history (§13.2): removes its worktrees and the branches cleanup removes (pushed
+   * branches and branches with commits stay), its rows and events, and its terminal logs; its snapshot refs are pruned.
+   * 409 run_active while it is running or paused (cancel it first).
+   */
+  async deleteRun(runId: string): Promise<void> {
+    const run = this.requireRun(runId);
+    if (!isFinalRunStatus(run.status)) throw new EngineError("run_active", `Run ${runId} is still ${run.status}: cancel it first`);
+    if (!run.cleanedUp) await this.deps.lanes.cleanup(runId, { keep: "never", failed: false, force: true });
+    this.live.delete(runId);
+    this.deps.store.deleteRun(runId);
+    fs.rmSync(runDir(this.deps.paths, runId), { recursive: true, force: true });
+    this.deps.bus.emit("run:deleted", { repoId: this.deps.repo.id, runId, graphId: run.graphId });
+    this.emitRepoChanged();
+    void this.pruneSnapshots();
   }
 
   /** A short id (branch names, §9.1) no run of this repository and no existing branch uses yet. */

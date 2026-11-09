@@ -6,7 +6,7 @@ const P = REPO_PREFIX;
 
 /**
  * Under /api/repos/:repoId: GET …/runs · GET …/runs/:id · GET …/runs/:id/report · GET …/runs/:id/lanes/:laneId/diff ·
- * POST …/runs/:id/{cancel,resume,cleanup} · GET …/pending. Another repository's run ids are not_found (its engine owns them).
+ * POST …/runs/:id/{cancel,resume,cleanup} · DELETE …/runs/:id · GET …/pending. Another repository's run ids are not_found (its engine owns them).
  */
 export function registerRunRoutes(app: App, daemon: DaemonContext): void {
   const { store } = daemon;
@@ -32,6 +32,11 @@ export function registerRunRoutes(app: App, daemon: DaemonContext): void {
 
   app.post(`${P}/runs/:id/cleanup`, async (c) => {
     await repoOf(c).engine.cleanupRun(c.req.param("id"));
+    return c.json<OkResponse>({ ok: true });
+  });
+
+  app.delete(`${P}/runs/:id`, async (c) => {
+    await repoOf(c).engine.deleteRun(c.req.param("id"));
     return c.json<OkResponse>({ ok: true });
   });
 

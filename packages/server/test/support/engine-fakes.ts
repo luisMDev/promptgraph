@@ -10,7 +10,7 @@ import {
   type PlannedLane,
   type Run,
 } from "@promptgraph/shared";
-import { getPaths } from "../../src/config/paths.js";
+import { getPaths, type PgPaths } from "../../src/config/paths.js";
 import { Engine, type EngineDeps } from "../../src/engine/engine.js";
 import { EventBus, type BusEvents } from "../../src/events/bus.js";
 import { GraphStore } from "../../src/graphs/graph-store.js";
@@ -147,6 +147,7 @@ export interface Setup {
   events: Array<{ name: keyof BusEvents; payload: unknown }>;
   attention: Array<BusEvents["attention"]>;
   makeEngine: (runners: RunnerRegistry) => Engine;
+  paths: PgPaths;
 }
 
 export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMode?: EngineDeps["billingMode"] } = {}): Setup {
@@ -163,6 +164,7 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMod
   const lanes = new FakeLanes(store, bus, path.join(t.dir, "wt"));
   const ptys = { owner: repoId, killOwned: vi.fn(async () => {}) };
   const claude = { reopen: vi.fn(async () => ({ ptyId: "reopen-x", notice: null })), isSessionActive: vi.fn(() => false) };
+  const paths = getPaths({ PG_HOME: path.join(t.dir, "pg-home") });
   const makeEngine = (r: RunnerRegistry) =>
     new Engine({
       store,
@@ -172,14 +174,14 @@ export function setup(runners: RunnerRegistry, opts: { phase?: 1 | 2; billingMod
       runners: r,
       claude: claude as unknown as ClaudeRunner,
       bus,
-      paths: getPaths({ PG_HOME: path.join(t.dir, "pg-home") }),
+      paths,
       repo: { id: repoId, path: t.dir, name: path.basename(t.dir) },
       phase: opts.phase ?? 1,
       env: {},
       stopTimeoutMs: 500,
       billingMode: opts.billingMode,
     });
-  return { engine: makeEngine(runners), store, graphs, bus, lanes, ptys, claude, events, attention, makeEngine };
+  return { engine: makeEngine(runners), store, graphs, bus, lanes, ptys, claude, events, attention, makeEngine, paths };
 }
 
 export type NodeSpec = { id: string; type?: NodeType; x?: number; y?: number; onError?: "fail-run" | "pause"; label?: string; config?: object };

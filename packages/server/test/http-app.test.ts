@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createEmptyGraph, type GraphInput, type RunDetail } from "@promptgraph/shared";
+import { createEmptyGraph, GraphSchema, ListGraphOverviewsResponseSchema, type GraphInput, type RunDetail } from "@promptgraph/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClaudeAuthProbe, type RawAuthStatus } from "../src/config/claude-auth.js";
 import { repoIdFor } from "../src/config/repo-id.js";
@@ -156,6 +156,31 @@ describe("graph routes", () => {
     expect(await missing.json()).toMatchObject({ code: "not_found" });
   });
 
+  it("lists graph overviews: thumbnail and run stats per graph, none for a broken file (DESIGN §13.3)", async () => {
+    const ctx = await daemon.repo(repoId);
+    const base = promptGraph("demo");
+    const shell = { id: "b", type: "shell" as const, position: { x: 0, y: 200 }, config: { run: "true" } };
+    ctx.graphs.save(GraphSchema.parse({ ...base, nodes: [...base.nodes!, shell], edges: [{ id: "e", source: "a", target: "b" }] }));
+    fs.writeFileSync(path.join(repo, ".promptgraph", "graphs", "broken.json"), "{nope");
+    const snapshot = ctx.graphs.get("demo").graph;
+    daemon.ctx.store.insertRun({ id: "r1", repoPath: ctx.repo.path, graph: snapshot, graphHash: "h", shortId: "abcd", startedAt: 10 });
+
+    const res = await app.request(`${R}/graph-overviews`, { headers: AUTH });
+    expect(res.status).toBe(200);
+    const { graphs: list } = ListGraphOverviewsResponseSchema.parse(await res.json());
+    expect(list.map((g) => g.id)).toEqual(["broken", "demo"]);
+    expect(list[0]).toMatchObject({ preview: null, runs: { total: 0, active: 0, costUsd: 0, lastRun: null } });
+    expect(list[0]!.loadError).toBeTruthy();
+    expect(list[1]!.preview).toEqual({
+      nodes: [
+        { id: "a", type: "prompt", x: 0, y: 0 },
+        { id: "b", type: "shell", x: 0, y: 200 },
+      ],
+      edges: [{ source: "a", target: "b" }],
+    });
+    expect(list[1]!.runs).toMatchObject({ total: 1, active: 1, lastRun: { id: "r1", shortId: "abcd", status: "running" } });
+  });
+
   it("validates bodies", async () => {
     const mismatch = await app.request(`${R}/graphs/other`, { method: "PUT", headers: JSON_AUTH, body: JSON.stringify(promptGraph("demo")) });
     expect(mismatch.status).toBe(400);
@@ -228,6 +253,10 @@ describe("run and node-run routes", () => {
     setup.engine.cleanupRun.mockRejectedValueOnce(new EngineError("invalid_state", "still running"));
     expect((await app.request(`${R}/runs/r1/cleanup`, { method: "POST", headers: AUTH })).status).toBe(409);
     expect(await (await app.request(`${R}/runs/r1/resume`, { method: "POST", headers: AUTH })).json()).toEqual({ ok: true });
+    expect(await (await app.request(`${R}/runs/r1`, { method: "DELETE", headers: AUTH })).json()).toEqual({ ok: true });
+    expect(setup.engine.deleteRun).toHaveBeenCalledWith("r1");
+    setup.engine.deleteRun.mockRejectedValueOnce(new EngineError("run_active", "still running"));
+    expect((await app.request(`${R}/runs/r1`, { method: "DELETE", headers: AUTH })).status).toBe(409);
     expect(setup.engine.resumeRun).toHaveBeenCalledWith("r1");
     expect(await (await app.request(`${R}/ptys/reopen-1`, { method: "DELETE", headers: AUTH })).json()).toEqual({ ok: true });
     expect(setup.engine.closeReopenedSession).toHaveBeenCalledWith("reopen-1");
