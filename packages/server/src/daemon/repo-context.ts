@@ -52,7 +52,7 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
   const lanes = new LaneManager({ store, bus, paths, repo });
   // The port is read when a node starts, i.e. once the daemon listens.
   const claude = new ClaudeRunner({ ptys, hooks, paths, pgHookPath: daemon.pgHookPath, endpoint: () => ({ port: daemon.port, hookSecret: daemon.hookSecret }), env });
-  const runners = createRunnerRegistry({ claude, ptys, lanes, paths, env });
+  const runners = createRunnerRegistry({ claude, ptys, lanes, paths, env, linear: daemon.linear });
   const engine = new Engine({
     store,
     graphs,

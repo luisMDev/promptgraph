@@ -465,7 +465,7 @@ export class Engine {
     const run = this.requireRun(nr.runId);
     const graph = run.graphSnapshot;
     const node = graph.nodes.find((n) => n.id === nr.nodeId);
-    if (!node || (node.type !== "approval" && node.type !== "pr")) {
+    if (!node || (node.type !== "approval" && node.type !== "pr" && node.type !== "linear")) {
       throw new EngineError("invalid_state", `Node run ${nodeRunId} is not an approval gate`);
     }
     const all = this.predecessorsOf(buildTopology(graph), nr.runId, nr.nodeId);
@@ -475,7 +475,8 @@ export class Engine {
     return {
       nodeRun: nr,
       message: node.type === "approval" ? (node.config.message ?? null) : null,
-      showDiff: node.type === "approval" ? node.config.showDiff : true,
+      // A linear gate approves comments and state changes, not code: no diff.
+      showDiff: node.type === "approval" ? node.config.showDiff : node.type === "pr",
       pr:
         node.type === "pr"
           ? {
@@ -485,6 +486,9 @@ export class Engine {
               draft: node.config.draft,
             }
           : null,
+      ...(node.type === "linear"
+        ? { linear: { proposals: nr.output?.linear?.proposals ?? [], allowComments: node.config.allowComments, allowStateChanges: node.config.allowStateChanges } }
+        : {}),
       predecessorOutputs: preds.map((p) => ({
         nodeId: p.nodeId,
         label: p.label,

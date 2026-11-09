@@ -17,6 +17,8 @@ import { LoginCodes } from "./login-codes.js";
 import { createRepoContext } from "./repo-context.js";
 import { RepoRegistry } from "./registry.js";
 import { VoiceService } from "../voice/voice-service.js";
+import { LinearClient, type LinearFetch } from "../linear/client.js";
+import { LinearService } from "../linear/service.js";
 import { Sessions } from "./sessions.js";
 import { UsageLimitsTracker } from "./usage-limits.js";
 
@@ -60,6 +62,8 @@ export interface DaemonContext {
   claudeAuth: ClaudeAuthProbe;
   /** Last observed subscription usage limits (§23.3). */
   usageLimits: UsageLimitsTracker;
+  /** Linear connection (§24): the saved API key and issue lookups. */
+  linear: LinearService;
 }
 
 export interface CreateDaemonContextOptions {
@@ -71,6 +75,8 @@ export interface CreateDaemonContextOptions {
   chatSpawner?: ChatSpawner;
   /** `claude auth status` runner (tests); defaults to the claude CLI. */
   authStatusRunner?: AuthStatusRunner;
+  /** fetch used for Linear's API (tests); defaults to the global fetch. */
+  linearFetch?: LinearFetch;
 }
 
 /**
@@ -130,6 +136,7 @@ export function createDaemonContext(opts: CreateDaemonContextOptions): DaemonCon
     loginCodes: new LoginCodes(),
     sessions,
     voice: new VoiceService({ settings, paths, env }),
+    linear: new LinearService(paths, new LinearClient(opts.linearFetch ? { fetch: opts.linearFetch } : {})),
     ...(opts.chatSpawner ? { chatSpawner: opts.chatSpawner } : {}),
   };
   return ctx;

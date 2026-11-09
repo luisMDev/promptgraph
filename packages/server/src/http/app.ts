@@ -10,6 +10,7 @@ import { registerDaemonRoutes } from "./routes/daemon.js";
 import { registerFsRoutes } from "./routes/fs.js";
 import { registerGraphRoutes } from "./routes/graphs.js";
 import { registerHookRoutes } from "./routes/hooks.js";
+import { registerLinearRoutes } from "./routes/linear.js";
 import { registerLoginRoutes } from "./routes/login.js";
 import { registerRepoMiscRoutes, registerSettingsRoutes } from "./routes/misc.js";
 import { registerNodeRunRoutes } from "./routes/node-runs.js";
@@ -21,7 +22,7 @@ import { registerStatic } from "./static.js";
 /**
  * Hono app of the daemon: noFraming (frame headers on every response, framed loads refused) → localhostOnly (port getter) → fetchMetadata (cookie requests only) → tokenAuth
  * (Bearer token read per request, session cookie, hook tokens; public hello and /login) → GET /login →
- * daemon routes (/api/daemon, /api/repos, /api/fs, /api/settings, /hooks) → repository scope
+ * daemon routes (/api/daemon, /api/repos, /api/fs, /api/settings, /api/voice, /api/linear, /hooks) → repository scope
  * (/api/repos/:repoId/*: load, activate before non-GET) → repository routes → static web (SPA fallback
  * to index.html). Errors: HttpError/EngineError/GraphLoadError/zod errors → ApiError with 4xx/5xx.
  */
@@ -35,6 +36,7 @@ export function createHttpApp(daemon: DaemonContext): Hono<AppEnv> {
   registerDaemonRoutes(app, daemon);
   registerSettingsRoutes(app, daemon);
   registerVoiceRoutes(app, daemon);
+  registerLinearRoutes(app, daemon);
   registerHookRoutes(app, daemon);
   registerRepoScope(app, daemon);
   registerRepoRoutes(app, daemon);

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Lane } from "@promptgraph/shared";
+import type { GraphInput, Lane } from "@promptgraph/shared";
 import { buildMessagePrompt } from "../src/runners/git/messages.js";
 import { PrRunner } from "../src/runners/git/pr-runner.js";
 import type { PredecessorOutput } from "../src/runners/types.js";
@@ -67,8 +67,14 @@ function setup(opts: { origin?: boolean; env?: Record<string, string> } = {}) {
 
 type Setup = ReturnType<typeof setup>;
 
-function start(s: Setup, config: Record<string, unknown> = {}, settings: Record<string, unknown> = {}, predecessors: PredecessorOutput[] = []) {
-  const run = makeRun({ settings: settings as never, nodes: [{ id: "pr", type: "pr", label: "Open PR", config } as never] });
+function start(
+  s: Setup,
+  config: Record<string, unknown> = {},
+  settings: Record<string, unknown> = {},
+  predecessors: PredecessorOutput[] = [],
+  graph: Partial<GraphInput> = {},
+) {
+  const run = makeRun({ ...graph, settings: settings as never, nodes: [{ id: "pr", type: "pr", label: "Open PR", config } as never] });
   const lane = { ...makeLane(s.dir, s.base), branch: BRANCH };
   const ctx = makeCtx({ run, node: run.graphSnapshot.nodes[0]!, lane, predecessors, laneOutputs: [] });
   const exec = new PrRunner({ lanes: s.lanes, env: s.env }).start(ctx);
@@ -124,6 +130,18 @@ describe("PrRunner", () => {
     expect(ctx.patches.some((p) => p.status === "waiting_approval")).toBe(false);
     expect(s.claudeCalls()).toEqual([]);
     expect(s.ghCalls()[0]!.argv).not.toContain("--draft");
+  });
+
+  it("names the graph's Linear issues in the title and body (§24)", async () => {
+    const s = setup();
+    const issue = (n: number) => ({ provider: "linear", id: `i${n}`, identifier: `ENG-${n}`, title: "Issue", url: `https://linear.app/acme/issue/ENG-${n}` }) as const;
+    const { ctx, exec } = start(s, { title: "Fixed", body: "Body text", requireApproval: false }, { allowPrWithoutApproval: true }, [], { issues: [issue(7), issue(8)] });
+    const result = await exec.result;
+    expect(result).toMatchObject({ status: "succeeded", output: { title: "Fixed (ENG-7, ENG-8)", body: "Body text\n\nFixes ENG-7\nFixes ENG-8" } });
+    expect(ctx.patches.some((p) => p.status === "waiting_approval")).toBe(false);
+    const [call] = s.ghCalls();
+    expect(call!.argv).toContain("Fixed (ENG-7, ENG-8)");
+    expect(call!.stdin).toBe("Body text\n\nFixes ENG-7\nFixes ENG-8");
   });
 
   it("requireApproval false without allowPrWithoutApproval still waits", async () => {

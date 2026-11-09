@@ -8,6 +8,7 @@ import { createRepoContext, type RepoContext } from "../../src/daemon/repo-conte
 import { RepoRegistry } from "../../src/daemon/registry.js";
 import type { Engine } from "../../src/engine/engine.js";
 import { VoiceService } from "../../src/voice/voice-service.js";
+import type { LinearFetch } from "../../src/linear/client.js";
 
 export const TEST_TOKEN = "test-token-123";
 /** Hook secret of the test daemon (hook tokens derive from it, never from the token). */
@@ -81,7 +82,14 @@ export interface TestDaemonOptions {
   chatSpawner?: ChatSpawner;
   /** `claude auth status` of every repository (§23.1); default: NO_CLAUDE_AUTH. */
   authStatusRunner?: AuthStatusRunner;
+  /** fetch for Linear's API (§24); default: NO_LINEAR (tests never reach api.linear.app). */
+  linearFetch?: LinearFetch;
 }
+
+/** Default Linear fetch of test daemons: a network error, so no test reaches the real API. */
+export const NO_LINEAR: LinearFetch = async () => {
+  throw new Error("Linear is not available in tests");
+};
 
 /** Default auth status of test daemons: a claude.ai Pro login, without running claude. */
 export const NO_CLAUDE_AUTH: AuthStatusRunner = async () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" });
@@ -94,7 +102,7 @@ export const NO_CLAUDE: ChatSpawner = () => {
 /**
  * A DaemonContext without HTTP server (tests call createHttpApp(ctx) / new WsHub(ctx) themselves): real
  * store, bus, settings, PTY manager, hook router and registry over a temp PG_HOME, token TEST_TOKEN,
- * hook secret TEST_HOOK_SECRET, chat spawner NO_CLAUDE and auth status NO_CLAUDE_AUTH unless given, voice service rooted at `root`.
+ * hook secret TEST_HOOK_SECRET, chat spawner NO_CLAUDE, auth status NO_CLAUDE_AUTH and Linear fetch NO_LINEAR unless given, voice service rooted at `root`.
  * With `mockEngines`, each repository's engine is an EngineMock.
  */
 export async function createTestDaemon(opts: TestDaemonOptions): Promise<TestDaemon> {
@@ -106,6 +114,7 @@ export async function createTestDaemon(opts: TestDaemonOptions): Promise<TestDae
     env,
     chatSpawner: opts.chatSpawner ?? NO_CLAUDE,
     authStatusRunner: opts.authStatusRunner ?? NO_CLAUDE_AUTH,
+    linearFetch: opts.linearFetch ?? NO_LINEAR,
   });
   ctx.hookSecret = TEST_HOOK_SECRET;
   // Never the user's ~/whisper.cpp or ~/.claude: home is the test root; PATH comes only from `env`.

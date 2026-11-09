@@ -21,12 +21,12 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * Files under PG_HOME no agent may read or edit: the token, the state DB (+ WAL/SHM), the run dirs (hook
+ * Files under PG_HOME no agent may read or edit: the token, the Linear API key (§24), the state DB (+ WAL/SHM), the run dirs (hook
  * header files), the discovery records of pre-M7 per-repo servers (`servers/*.json` carry their live API
  * token) and the logs (pre-M7 detached servers printed a token URL to `logs/server-<repo-key>.log`; the
  * daemon's own log holds no credential, but old logs may remain).
  */
-const DENIED_UNDER_HOME = ["token", "state.db*", "runs/**", "servers/**", "logs/**"];
+const DENIED_UNDER_HOME = ["token", "linear-key", "state.db*", "runs/**", "servers/**", "logs/**"];
 
 /** The absolute rule path (`//<path without its leading slash>`) of a directory. */
 const rulePath = (dir: string) => `//${dir.replace(/^\/+/, "").replace(/\/+$/, "")}`;

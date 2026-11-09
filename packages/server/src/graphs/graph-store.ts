@@ -113,7 +113,15 @@ export class GraphStore {
         }
         try {
           const loaded = this.get(id);
-          return { id, name: loaded.graph.name, loadError: null, updatedAt: loaded.updatedAt, hash: loaded.hash };
+          const issues = loaded.graph.issues;
+          return {
+            id,
+            name: loaded.graph.name,
+            loadError: null,
+            updatedAt: loaded.updatedAt,
+            hash: loaded.hash,
+            ...(issues?.length ? { issues: issues.map(({ id, identifier, title, url }) => ({ id, identifier, title, url })) } : {}),
+          };
         } catch (err) {
           if (err instanceof GraphLoadError) {
             const raw = this.readRaw(id);

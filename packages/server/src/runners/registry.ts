@@ -5,6 +5,7 @@ import type { LaneManager } from "../workspace/lane-manager.js";
 import { ApprovalRunner } from "./approval-runner.js";
 import type { ClaudeRunner } from "./claude/claude-runner.js";
 import { ConditionRunner } from "./condition-runner.js";
+import { LinearUpdateRunner, type LinearWriter } from "./linear-runner.js";
 import { CommitRunner } from "./git/commit-runner.js";
 import { MergeRunner } from "./git/merge-runner.js";
 import { PrRunner } from "./git/pr-runner.js";
@@ -18,16 +19,18 @@ export interface RunnerRegistryDeps {
   paths: PgPaths;
   /** Base env for child processes; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
+  /** The daemon's Linear connection (`linear` nodes, §24.5). */
+  linear: LinearWriter;
 }
 
 /** Node types createRunnerRegistry implements (GET /api/daemon `supportedNodeTypes`; Engine.supportedNodeTypes per repository). */
 export const RUNNER_NODE_TYPES: readonly NodeType[] = NODE_TYPES.filter((t) =>
-  (["prompt", "command", "shell", "commit", "merge", "pr", "approval", "condition"] as readonly string[]).includes(t),
+  (["prompt", "command", "shell", "commit", "merge", "pr", "approval", "condition", "linear"] as readonly string[]).includes(t),
 );
 
 /**
  * Maps every implemented node type to its runner (prompt/command share the ClaudeRunner; merge uses it
- * for conflicts; condition judges run headless claude).
+ * for conflicts; condition judges and linear proposals run headless claude).
  */
 export function createRunnerRegistry(deps: RunnerRegistryDeps): RunnerRegistry {
   return {
@@ -39,5 +42,6 @@ export function createRunnerRegistry(deps: RunnerRegistryDeps): RunnerRegistry {
     pr: new PrRunner({ lanes: deps.lanes, env: deps.env }),
     approval: new ApprovalRunner(),
     condition: new ConditionRunner({ env: deps.env }),
+    linear: new LinearUpdateRunner({ linear: deps.linear, env: deps.env }),
   };
 }

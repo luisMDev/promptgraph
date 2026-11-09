@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { GraphNodeOf, NodeRunOutput } from "@promptgraph/shared";
+import { withIssueReferences, type GraphNodeOf, type NodeRunOutput } from "@promptgraph/shared";
 import { childEnv, ghBin } from "../../config/child-env.js";
 import { git, gitOk } from "../../git/exec.js";
 import type { LaneManager } from "../../workspace/lane-manager.js";
@@ -31,6 +31,7 @@ interface Proposal {
  * pr nodes (§6.1, §10). The engine checkpoints a dirty lane first (§18 Q1). Title/body = config, or
  * generateMessage("pr") from `git diff --stat <base>...HEAD`, the lane's commit subjects and the lane
  * outputs + direct predecessors; stored in output {title, body} (the approval dialog reads them).
+ * The linked Linear issues' identifiers are added to both (withIssueReferences, §24).
  * requireApproval (forced unless settings.allowPrWithoutApproval) → waiting_approval until approve()
  * (edited title/body override; reject → failed). Then `git push origin <sha>:refs/heads/<branch>` of
  * exactly the approved commit (approve().headSha, checked against the lane HEAD by the engine; without
@@ -81,7 +82,8 @@ export class PrRunner implements Runner {
 
     try {
       const proposal = await this.proposal(ctx, base, stop.signal, env);
-      let { title, body } = proposal;
+      // A graph linked to Linear issues names them, so Linear links the PR (§24); editable in the approval dialog.
+      let { title, body } = withIssueReferences(proposal, ctx.run.graphSnapshot.issues);
       ctx.update({ output: record({ title, body, ...(proposal.usage ? { usage: proposal.usage } : {}) }) });
       checkStop();
 

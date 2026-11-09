@@ -42,6 +42,7 @@ To change a graph that already exists, use patch_graph with ops (add_node, updat
 | approval | \`message\`, \`showDiff\` (default true) | Pauses until the user approves or rejects in the UI |
 | merge | \`strategy\`: merge \\| squash, \`onConflict\`: claude \\| pause | Joins 2+ lanes. The only node that may have several inputs from parallel lanes |
 | condition | \`evaluator\`: {"kind":"exitCode","equals":0} \\| {"kind":"regex","pattern":"…","flags":""} \\| {"kind":"judge","question":"…"} | Routes to its \`true\` / \`false\` output ports. Evaluates its predecessor's output; exitCode needs a shell predecessor |
+| linear | \`prompt\` (instructions; default: update the linked issues' progress), \`allowComments\` (default true), \`allowStateChanges\` (default true), \`model\`, \`timeoutSec\` | Claude proposes a progress comment and/or a new state for each Linear issue linked to the graph (graph \`issues\`, set in the UI); the user approves (and may edit) them in the UI, then promptgraph applies them. Needs Linear connected in the UI's settings |
 
 Claude node options:
 - \`context\`: \`fresh\` (default: new session, predecessors' outputs prepended), \`resume\` (continue the

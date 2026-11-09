@@ -139,7 +139,7 @@ describe("hooks settings and pg-hook", () => {
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(buildHooksSettings("/x/pg-hook", home));
   });
 
-  it("denies Claude's file tools the token, the state DB, the run dirs, the server records and the logs of the given PG_HOME (§7.6)", () => {
+  it("denies Claude's file tools the token, the Linear key, the state DB, the run dirs, the server records and the logs of the given PG_HOME (§7.6)", () => {
     const pgHome = path.join(tmp(), "pg home");
     const root = `//${pgHome.slice(1)}`;
     const { permissions } = buildHooksSettings("/x/pg-hook", { pgHome: `${pgHome}/` });
@@ -148,6 +148,8 @@ describe("hooks settings and pg-hook", () => {
       `Read(${root})`,
       `Read(${root}/token)`,
       `Edit(${root}/token)`,
+      `Read(${root}/linear-key)`,
+      `Edit(${root}/linear-key)`,
       `Read(${root}/state.db*)`,
       `Edit(${root}/state.db*)`,
       `Read(${root}/runs/**)`,
@@ -161,6 +163,7 @@ describe("hooks settings and pg-hook", () => {
     writeHooksSettings(file, "/x/pg-hook", { pgHome });
     const written = JSON.parse(fs.readFileSync(file, "utf8")).permissions.deny;
     expect(written).toContain(`Read(${root}/token)`);
+    expect(written).toContain(`Read(${root}/linear-key)`);
     expect(written).toContain(`Read(${root}/servers/**)`);
     expect(written).toContain(`Read(${root}/logs/**)`);
   });
@@ -177,9 +180,9 @@ describe("hooks settings and pg-hook", () => {
       expect(deny).toContain(`Read(//${home.slice(1)}/token)`);
       expect(deny).toContain(`Edit(//${home.slice(1)}/runs/**)`);
     }
-    expect(deny).toHaveLength(22);
+    expect(deny).toHaveLength(26);
     // No link: one set of rules.
-    expect(buildHooksSettings("/x/pg-hook", { pgHome: real }).permissions.deny).toHaveLength(11);
+    expect(buildHooksSettings("/x/pg-hook", { pgHome: real }).permissions.deny).toHaveLength(13);
   });
 
   it("installs pg-hook as an executable copy", () => {
