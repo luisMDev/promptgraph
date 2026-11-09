@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BusEvents } from "../src/events/bus.js";
-import { RunBriefer, type Summarize, type SummarizeInput } from "../src/engine/brief.js";
+import { RunBriefer, stepOutcome, type Summarize, type SummarizeInput } from "../src/engine/brief.js";
 import { INTERRUPTED_BRIEF_ERROR, markInterrupted } from "../src/engine/recovery.js";
 import { waitFor } from "./helpers.js";
 import { allTypes, FakeRunner, makeGraph, setup, waitRun } from "./support/engine-fakes.js";
+import { makeNodeRun } from "./support/runner-ctx.js";
 
 const usage = { inputTokens: 10, outputTokens: 5, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0.01, model: "haiku" };
 
@@ -47,6 +48,11 @@ describe("run brief (§13.6)", () => {
     expect(inputs[1]!.prompt).toContain("$ true");
     expect(inputs[2]!.prompt).toContain("The run ended: succeeded.");
     expect(inputs[2]!.prompt).toContain("2. Title 2 (succeeded)");
+    // The closing entry is the run report's summary (§13.1): every step's outcome and four fixed sections.
+    expect(inputs[2]!.prompt).toContain("Outcome of each step");
+    expect(inputs[2]!.prompt).toContain("- A (prompt): succeeded");
+    expect(inputs[2]!.prompt).toContain("Files changed");
+    for (const heading of ["### How it went", "### What changed", "### Decisions", "### To check"]) expect(inputs[2]!.prompt).toContain(heading);
 
     // The summaries' own usage counts in the run's cost; the detail carries the brief.
     expect(s.store.getRunSummary(detail.run.id)!.usage.costUsd).toBeCloseTo(0.03);
@@ -133,5 +139,40 @@ describe("run brief (§13.6)", () => {
     await briefer().idle(detail.run.id);
     await s.engine.deleteRun(detail.run.id);
     expect(s.store.listBriefEntries(detail.run.id)).toEqual([]);
+  });
+});
+
+describe("stepOutcome (the run summary's facts, §13.1)", () => {
+  it("is 'not run' without node runs", () => {
+    expect(stepOutcome([])).toBe("not run");
+  });
+
+  it("reports the latest attempt of the latest iteration with loops and retries", () => {
+    const runs = [
+      makeNodeRun("t0", "test", { status: "failed", output: { exitCode: 1 } }),
+      makeNodeRun("t1", "test", { iteration: 1, status: "failed", output: { exitCode: 1 } }),
+      makeNodeRun("t2", "test", { iteration: 1, attempt: 1, status: "succeeded", output: { exitCode: 0 } }),
+    ];
+    expect(stepOutcome(runs)).toBe("succeeded; 2 loop iterations; 1 retry");
+  });
+
+  it("records the decisions: branch taken, approval with comment, commit, pull request, conflicts, skip", () => {
+    expect(stepOutcome([makeNodeRun("c", "check", { status: "succeeded", output: { port: "false", text: "tests fail" } })])).toBe(
+      "succeeded; took the false branch: tests fail",
+    );
+    expect(stepOutcome([makeNodeRun("g", "gate", { status: "failed", output: { approved: false, comment: "split it" } })])).toBe(
+      "failed; rejected (comment: split it)",
+    );
+    expect(stepOutcome([makeNodeRun("k", "commit", { status: "succeeded", output: { sha: "0123456789abcdef", message: "feat: x\n\nbody" } })])).toBe(
+      'succeeded; commit 01234567 "feat: x"',
+    );
+    expect(stepOutcome([makeNodeRun("p", "pr", { status: "succeeded", output: { prUrl: "https://github.com/o/r/pull/7" } })])).toBe(
+      "succeeded; pull request https://github.com/o/r/pull/7",
+    );
+    expect(stepOutcome([makeNodeRun("m", "merge", { status: "succeeded", output: { conflictedFiles: ["a.ts", "b.ts"] } })])).toBe(
+      "succeeded; merge conflicts in a.ts, b.ts",
+    );
+    expect(stepOutcome([makeNodeRun("s", "lint", { status: "skipped", output: { skippedByUser: true } })])).toBe("skipped; skipped by the user");
+    expect(stepOutcome([makeNodeRun("x", "build", { status: "failed", error: "boom" })])).toBe("failed; error: boom");
   });
 });

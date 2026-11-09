@@ -222,18 +222,8 @@ export class RunBriefer {
         ].join("\n"),
       );
     } else {
-      const current = new Map<string, NodeRun>();
-      for (const nr of store.listNodeRuns(run.id)) current.set(nr.nodeId, nr);
-      const results = graph.nodes.map((n) => `- ${nodeDisplayLabel(n)}: ${current.get(n.id)?.status ?? "not run"}`).join("\n");
-      parts.push(`The run ended: ${run.status}${run.error ? ` (${run.error})` : ""}.\nResult of each step:\n${results}`);
-      parts.push(
-        [
-          "Write the closing entry of the brief, about the whole run:",
-          "- title: one line (at most 80 characters) with the overall result;",
-          "- summary: 2 to 5 short sentences of Markdown: what the run achieved, what failed or is left to do, and what the user should look at next.",
-          "Write in the language of the step instructions (English when unclear). Answer only from the information above.",
-        ].join("\n"),
-      );
+      parts.push(await this.describeRun(run));
+      parts.push(RUN_SUMMARY_INSTRUCTIONS);
     }
     return parts.join("\n\n");
   }
@@ -261,6 +251,33 @@ export class RunBriefer {
     return lines.join("\n");
   }
 
+  /**
+   * The whole run for its closing entry (the run report's summary, §13.1): the result, each step's outcome with the
+   * decisions taken on the way (condition branches, approvals, retries, loop iterations, skips), commits and pull
+   * requests, and what each lane changed since its base.
+   */
+  private async describeRun(run: Run): Promise<string> {
+    const { store } = this.deps;
+    const graph = run.graphSnapshot;
+    const nodeRuns = store.listNodeRuns(run.id);
+    const lines = [`The run ended: ${run.status}${run.error ? ` (${run.error})` : ""}.`];
+    if (run.finishedAt) lines.push(`Duration: ${Math.round((run.finishedAt - run.startedAt) / 1000)} s`);
+    lines.push("Outcome of each step (latest attempt of its latest iteration):");
+    for (const node of graph.nodes) {
+      const runs = nodeRuns.filter((nr) => nr.nodeId === node.id);
+      lines.push(`- ${nodeDisplayLabel(node)} (${node.type}): ${stepOutcome(runs)}`);
+    }
+    const changes: string[] = [];
+    for (const lane of store.listLanes(run.id)) {
+      const ends = nodeRuns.filter((nr) => nr.laneId === lane.id && nr.snapshotEnd && nr.finishedAt !== null);
+      const last = ends.sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0)).at(-1);
+      const stat = last?.snapshotEnd ? await this.diffStat(lane.baseRef, last.snapshotEnd) : "";
+      changes.push(`Lane ${lane.branch}:\n${stat ? truncate(stat, DIFF_STAT_LIMIT) : "no changes recorded"}`);
+    }
+    lines.push(changes.length ? `Files changed, per lane, since its base:\n${changes.join("\n\n")}` : "Files changed: none recorded (no lane).");
+    return lines.join("\n");
+  }
+
   private async diffStat(from: string, to: string): Promise<string> {
     if (from === to) return "";
     try {
@@ -271,6 +288,42 @@ export class RunBriefer {
       return "";
     }
   }
+}
+
+/** What the closing entry (the run report's summary, §13.1) is asked to write. */
+const RUN_SUMMARY_INSTRUCTIONS = [
+  "Write the closing entry of the brief: the summary of the whole run for the person who started it.",
+  "- title: one line (at most 80 characters) with the overall result;",
+  "- summary: Markdown with exactly these four sections, each a `###` heading followed by a short bullet list (at most 5 bullets of one sentence):",
+  "  ### How it went: the overall result, what failed, was retried or is left to do, and why;",
+  "  ### What changed: the files and behaviour changed (per lane when there are several), commits and pull requests;",
+  "  ### Decisions: branches taken by conditions, approvals and rejections with their comments, loops, retries and skips, and the choices the steps report having made;",
+  "  ### To check: what the user should review or do next.",
+  'Write "None." under a section with nothing to say. Write in the language of the step instructions (English when unclear), headings included. Answer only from the information above.',
+].join("\n");
+
+/** One step's outcome for the run summary: its result and the decisions recorded in its node runs. */
+export function stepOutcome(runs: readonly NodeRun[]): string {
+  if (runs.length === 0) return "not run";
+  const latest = runs.reduce((a, b) => (b.iteration > a.iteration || (b.iteration === a.iteration && b.attempt > a.attempt) ? b : a));
+  const out = latest.output;
+  const facts: string[] = [latest.status];
+  const iterations = new Set(runs.map((r) => r.iteration)).size;
+  if (iterations > 1) facts.push(`${iterations} loop iterations`);
+  const retries = runs.filter((r) => r.attempt > 0).length;
+  if (retries > 0) facts.push(`${retries} ${retries === 1 ? "retry" : "retries"}`);
+  if (out?.skippedByUser) facts.push("skipped by the user");
+  if (out?.port) facts.push(`took the ${out.port} branch${out.text ? `: ${truncate(out.text, 300)}` : ""}`);
+  if (out?.approved !== undefined) facts.push(`${out.approved ? "approved" : "rejected"}${out.comment ? ` (comment: ${truncate(out.comment, 300)})` : ""}`);
+  if (out?.sha) facts.push(`commit ${out.sha.slice(0, 8)}${out.message ? ` "${truncate(out.message.split("\n")[0] ?? "", 120)}"` : ""}`);
+  if (out?.noop) facts.push("nothing to commit");
+  if (out?.prUrl) facts.push(`pull request ${out.prUrl}`);
+  if (out?.conflictedFiles?.length) facts.push(`merge conflicts in ${out.conflictedFiles.join(", ")}`);
+  if (out?.exitCode !== undefined && out.exitCode !== null && out.exitCode !== 0) facts.push(`exit code ${out.exitCode}`);
+  if (out?.timedOut) facts.push("timed out");
+  if (out?.loopExhausted) facts.push("loop exhausted");
+  if (latest.error) facts.push(`error: ${truncate(latest.error, 300)}`);
+  return facts.join("; ");
 }
 
 /** The text that tells what a node was asked to do. */

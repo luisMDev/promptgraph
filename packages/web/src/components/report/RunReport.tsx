@@ -22,6 +22,7 @@ import { LaneBadge } from "../common/LaneBadge";
 import { Button, ButtonLink, StatusDot } from "../common/ui";
 import { Link } from "../../lib/router/Link";
 import { BriefTimeline, briefStepLabel } from "../inspector/RunBrief";
+import { Markdown } from "../../lib/markdown";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,6 +103,7 @@ export function RunReport({ runId }: { runId: string }) {
         {report && (
           <>
             <Summary report={report} />
+            <RunSummary runId={runId} />
             <Brief runId={runId} nodeRunPath={nodeRunPath} />
             {report.stalls.length > 0 && <Stalls stalls={report.stalls} status={report.run.status} nodeRunPath={nodeRunPath} nodes={report.nodes} />}
             {report.prs.length > 0 && (
@@ -380,10 +382,54 @@ function Stats({ changes }: { changes: ChangeStats }) {
 
 const NO_BRIEF: never[] = [];
 
-/** §13.6: the run brief, when the graph had it on (from the view's run store, which follows the run live). */
-function Brief({ runId, nodeRunPath }: { runId: string; nodeRunPath: (nodeRunId: string) => string }) {
+/**
+ * §13.1: the run's closing brief entry (§13.6) as the report's summary: how it went, what changed, the decisions taken
+ * and what to check. The latest one wins (a resumed run that ends again gets a new one).
+ */
+export function RunSummary({ runId }: { runId: string }) {
   const entries = useRun((s) => (s.detail?.run.id === runId ? (s.detail.brief ?? NO_BRIEF) : NO_BRIEF));
+  const enabled = useRun((s) => (s.detail?.run.id === runId ? s.detail.run.graphSnapshot.settings.brief.enabled : true));
+  const status = useRun((s) => (s.detail?.run.id === runId ? s.detail.run.status : null));
+  const entry = entries.filter((e) => e.kind === "run").at(-1);
+  let body: ReactNode;
+  if (entry?.status === "ready") {
+    body = (
+      <div className="max-w-3xl space-y-1">
+        <p className="text-sm font-medium text-foreground">{entry.title}</p>
+        {entry.summary && <Markdown text={entry.summary} className="text-sm text-foreground/85" />}
+      </div>
+    );
+  } else if (entry?.status === "pending") {
+    body = (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Icons.refresh className="size-3 animate-spin" /> Summarising the run…
+      </p>
+    );
+  } else if (entry?.status === "failed") {
+    body = <p className="text-xs text-muted-foreground italic">No summary: {entry.error}</p>;
+  } else if (!enabled) {
+    body = (
+      <p className="text-xs text-muted-foreground">
+        Turn on <span className="font-medium">Run brief</span> in the graph settings to get a summary of each run: how it went, what changed and the
+        decisions taken.
+      </p>
+    );
+  } else if (status && !isFinalRunStatus(status)) {
+    body = <p className="text-xs text-muted-foreground">The summary is written when the run ends.</p>;
+  } else {
+    return null;
+  }
+  return <ReportSection title="Run summary">{body}</ReportSection>;
+}
+
+/**
+ * §13.6: the run brief's step entries, when the graph had it on (from the view's run store, which follows the run
+ * live). The closing entry is the report's Run summary.
+ */
+function Brief({ runId, nodeRunPath }: { runId: string; nodeRunPath: (nodeRunId: string) => string }) {
+  const all = useRun((s) => (s.detail?.run.id === runId ? (s.detail.brief ?? NO_BRIEF) : NO_BRIEF));
   const nodes = useRun((s) => (s.detail?.run.id === runId ? s.detail.run.graphSnapshot.nodes : undefined));
+  const entries = all.filter((e) => e.kind === "node");
   if (entries.length === 0) return null;
   return (
     <ReportSection title="Brief">
