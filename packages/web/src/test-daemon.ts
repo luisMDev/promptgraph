@@ -109,7 +109,7 @@ export function installFakeDaemon(init: Partial<Pick<FakeDaemon, "repos" | "summ
     if (over) return over;
     const p = u.pathname;
     if (p === "/api/daemon") return json(200, daemonInfo);
-    if (p === "/api/settings") return json(200, { notifications: true });
+    if (p === "/api/settings") return json(200, { notifications: true, bypassPermissions: false });
     if (p === "/api/linear") return json(200, { connected: false, viewer: null, workspace: null, error: null });
     if (p === "/api/repos" && method === "GET") return json(200, { repos: d.summaries });
     const m = /^\/api\/repos\/([^/]+)(\/.*)?$/.exec(p);

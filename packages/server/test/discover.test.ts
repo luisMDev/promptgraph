@@ -62,11 +62,11 @@ describe("AppSettingsStore", () => {
     cleanups.push(cleanup);
     const file = path.join(dir, "nested", "settings.json");
     const store = new AppSettingsStore(file);
-    expect(store.get()).toEqual({ notifications: true });
-    expect(store.update({ notifications: false })).toEqual({ notifications: false });
-    expect(new AppSettingsStore(file).get()).toEqual({ notifications: false });
-    expect(store.update({})).toEqual({ notifications: false });
+    expect(store.get()).toEqual({ notifications: true, bypassPermissions: false });
+    expect(store.update({ notifications: false })).toEqual({ notifications: false, bypassPermissions: false });
+    expect(new AppSettingsStore(file).get()).toEqual({ notifications: false, bypassPermissions: false });
+    expect(store.update({})).toEqual({ notifications: false, bypassPermissions: false });
     fs.writeFileSync(file, "{oops");
-    expect(store.get()).toEqual({ notifications: true });
+    expect(store.get()).toEqual({ notifications: true, bypassPermissions: false });
   });
 });

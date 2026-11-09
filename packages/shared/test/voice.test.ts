@@ -32,8 +32,8 @@ describe("voice constants", () => {
 
 describe("voice settings", () => {
   it("keeps settings files written before voice existed valid", () => {
-    expect(AppSettingsSchema.parse({ notifications: false })).toEqual({ notifications: false });
-    expect(AppSettingsSchema.parse({})).toEqual({ notifications: true });
+    expect(AppSettingsSchema.parse({ notifications: false })).toEqual({ notifications: false, bypassPermissions: false });
+    expect(AppSettingsSchema.parse({})).toEqual({ notifications: true, bypassPermissions: false });
   });
 
   it("accepts a full voice object and an empty one", () => {

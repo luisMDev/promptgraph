@@ -21,7 +21,7 @@ describe("voice settings", () => {
     updateSettings.mockClear();
     getStatus.mockClear();
     setVoiceDeps({ getStatus });
-    useDaemonStore.setState({ settings: { notifications: true }, updateSettings });
+    useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: false }, updateSettings });
     view = createTestView();
   });
   afterEach(() => {
@@ -44,7 +44,7 @@ describe("voice settings", () => {
   it("saves the voice object as a whole and rechecks the status", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    useDaemonStore.setState({ settings: { notifications: true, voice: { language: "es" } } });
+    useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: false, voice: { language: "es" } } });
     view.render(<VoiceSettingsDialog onClose={onClose} />);
     await user.type(screen.getByRole("textbox", { name: /whisper-cli binary/ }), "/opt/whisper/whisper-cli");
     await user.selectOptions(screen.getByRole("combobox", { name: /Mode/ }), "hold");

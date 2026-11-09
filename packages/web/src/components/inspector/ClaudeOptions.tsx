@@ -9,6 +9,7 @@ import {
   type PermissionMode,
 } from "@promptgraph/shared";
 import { useId } from "react";
+import { useDaemonStore } from "../../store/daemon-store";
 import { LinesInput, OptionalNumber, OptionalText, Select } from "../common/fields";
 import { Field } from "../common/ui";
 
@@ -22,10 +23,10 @@ export const EFFORT_OPTIONS: readonly { value: Effort; label: string }[] = [
   { value: "max", label: "Max" },
 ];
 
-/** bypassPermissions is deliberately absent (§7.6). */
+/** bypassPermissions is not a graph value: only the app setting turns it on (§7.6). */
 export const PERMISSION_OPTIONS: readonly { value: PermissionMode; label: string }[] = [
-  { value: "acceptEdits", label: "Accept edits" },
   { value: "auto", label: "Auto" },
+  { value: "acceptEdits", label: "Accept edits" },
   { value: "manual", label: "Manual (ask for everything)" },
   { value: "dontAsk", label: "Don't ask (deny unlisted tools)" },
   { value: "plan", label: "Plan" },
@@ -54,6 +55,7 @@ export function ClaudeOptions({
   disabled: boolean;
 }) {
   const modelsListId = useId();
+  const bypass = useDaemonStore((s) => s.settings?.bypassPermissions ?? false);
   return (
     <div className="space-y-3">
       <Field label="Context">
@@ -78,6 +80,7 @@ export function ClaudeOptions({
           value={value.permissionMode}
           options={PERMISSION_OPTIONS}
           inherited={defaults.permissionMode}
+          inheritedLabel={bypass ? "Bypass permissions, from Settings" : undefined}
           disabled={disabled}
           onChange={(permissionMode) => onChange({ permissionMode })}
         />
@@ -106,16 +109,19 @@ export function InheritSelect<T extends string>({
   value,
   options,
   inherited,
+  inheritedLabel: labelOverride,
   onChange,
   disabled,
 }: {
   value: T | undefined;
   options: readonly { value: T; label: string }[];
   inherited: T | undefined;
+  /** Shown instead of the inherited option's label (e.g. the app setting replaces the graph default). */
+  inheritedLabel?: string;
   onChange: (v: T | undefined) => void;
   disabled?: boolean;
 }) {
-  const inheritedLabel = options.find((o) => o.value === inherited)?.label ?? "Claude Code default";
+  const inheritedLabel = labelOverride ?? options.find((o) => o.value === inherited)?.label ?? "Claude Code default";
   return (
     <Select<string>
       value={value ?? ""}

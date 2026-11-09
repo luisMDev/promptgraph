@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { AppSettings } from "@promptgraph/shared";
 import { MicIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
@@ -50,10 +51,10 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
     return () => window.removeEventListener(OPEN_VOICE_SETTINGS_EVENT, open);
   }, []);
 
-  const toggleNotifications = (notifications: boolean) => {
+  const save = (patch: Partial<AppSettings>) => {
     useDaemonStore
       .getState()
-      .updateSettings({ notifications })
+      .updateSettings(patch)
       .catch((err: unknown) => toast("error", `Could not save settings: ${String(err)}`));
   };
 
@@ -85,7 +86,7 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
           <DropdownMenuCheckboxItem
             checked={notifyAvailable && (settings?.notifications ?? true)}
             disabled={!settings || !notifyAvailable}
-            onCheckedChange={(v) => toggleNotifications(v === true)}
+            onCheckedChange={(v) => save({ notifications: v === true })}
             // Keep the menu open so the new state is visible.
             onSelect={(e) => e.preventDefault()}
           >
@@ -94,6 +95,22 @@ export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) 
           <p className="px-1.5 py-1 text-[11px] leading-snug text-muted-foreground">
             {!notifyAvailable && "No notifier was found on this system (notify-send, or PowerShell on WSL). "}
             Notify when a node waits for input, approval, or finished a turn (notify-send on Linux, a toast on WSL).
+          </p>
+          <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem
+            checked={settings?.bypassPermissions ?? false}
+            disabled={!settings}
+            onCheckedChange={(v) => save({ bypassPermissions: v === true })}
+            onSelect={(e) => e.preventDefault()}
+          >
+            Bypass permissions
+          </DropdownMenuCheckboxItem>
+          <p className="px-1.5 py-1 text-[11px] leading-snug text-muted-foreground">
+            Claude consoles start in bypassPermissions mode instead of the graph&apos;s default (a node&apos;s own mode
+            still wins). Claude no longer asks before running commands or reading outside its worktree.
+            {settings?.bypassPermissions && (
+              <span className="text-amber-600/90"> On: a step can push or approve its own gates without asking you.</span>
+            )}
           </p>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setVoiceOpen(true)}>

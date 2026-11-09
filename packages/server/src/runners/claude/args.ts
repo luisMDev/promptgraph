@@ -11,14 +11,20 @@ export interface ClaudeLaunchSpec {
   name: string;
   /** Absolute path of the run's hooks.json (--settings). */
   settingsPath: string;
-  permissionMode: PermissionMode;
+  permissionMode: LaunchPermissionMode;
   model?: string;
   effort?: Effort;
   allowedTools?: string[];
 }
 
+/**
+ * The mode a Claude PTY starts in: a graph/node mode, or `bypassPermissions`, which only the per-user app setting
+ * can select (DESIGN §7.6), never a graph file.
+ */
+export type LaunchPermissionMode = PermissionMode | "bypassPermissions";
+
 /** promptgraph "manual" → Claude Code "default"; others pass through. */
-export function toCliPermissionMode(mode: PermissionMode): string {
+export function toCliPermissionMode(mode: LaunchPermissionMode): string {
   return mode === "manual" ? "default" : mode;
 }
 

@@ -55,7 +55,7 @@ describe("schema defaults", () => {
       maxParallelClaude: 3,
       keepWorktrees: "on-failure",
       autoTrustWorktrees: true,
-      defaults: { permissionMode: "acceptEdits", completion: { mode: "auto", graceSec: 5 } },
+      defaults: { permissionMode: "auto", completion: { mode: "auto", graceSec: 5 } },
     });
     expect(graph.nodes[0]!.config).toMatchObject({ prompt: "x", context: "fresh" });
     expect(graph.nodes[1]!.config).toEqual({ generateMessage: true, squashCheckpoints: true });

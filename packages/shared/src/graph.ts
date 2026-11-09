@@ -28,7 +28,8 @@ export type Effort = z.infer<typeof EffortSchema>;
 
 /**
  * "manual" is promptgraph's name for Claude Code's "default" mode (ask for everything).
- * `bypassPermissions` is deliberately not offered.
+ * `bypassPermissions` is deliberately not a graph value: a committed graph must never turn it on. It is only a
+ * per-user app setting (`AppSettings.bypassPermissions`, DESIGN §7.6).
  */
 export const PermissionModeSchema = z.enum(["acceptEdits", "auto", "manual", "dontAsk", "plan"]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
@@ -239,7 +240,7 @@ export type GraphEdge = z.infer<typeof EdgeSchema>;
 export const GraphDefaultsSchema = z.object({
   model: z.string().optional(),
   effort: EffortSchema.optional(),
-  permissionMode: PermissionModeSchema.default("acceptEdits"),
+  permissionMode: PermissionModeSchema.default("auto"),
   allowedTools: z.array(z.string()).optional(),
   completion: CompletionPolicySchema.prefault(DEFAULT_COMPLETION),
 });

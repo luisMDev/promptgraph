@@ -493,8 +493,8 @@ describe("AppSettingsStore", () => {
       JSON.stringify({ notifications: false, voice: { language: "es-ES", whisperBin: "~/whisper.cpp/build/bin/whisper-cli", mode: "tap", threads: 4 } }),
     );
     const store = new AppSettingsStore(file);
-    expect(store.get()).toEqual({ notifications: false, voice: { mode: "tap", threads: 4 } });
+    expect(store.get()).toEqual({ notifications: false, bypassPermissions: false, voice: { mode: "tap", threads: 4 } });
     store.update({ voice: { mode: "hold" } });
-    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ notifications: false, voice: { mode: "hold" } });
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ notifications: false, bypassPermissions: false, voice: { mode: "hold" } });
   });
 });

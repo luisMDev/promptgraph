@@ -77,6 +77,11 @@ export const AppSettingsSchema = z.object({
   notifications: z.boolean().default(true),
   /** Voice dictation (§22). Absent in files written before it existed; absent fields = defaults. */
   voice: VoiceSettingsSchema.optional(),
+  /**
+   * Start Claude node consoles in Claude Code's `bypassPermissions` mode (DESIGN §7.6): it replaces the graph's
+   * default permission mode; a node's own mode still wins. Off by default; lives only on this machine, never in a graph.
+   */
+  bypassPermissions: z.boolean().default(false),
 });
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 

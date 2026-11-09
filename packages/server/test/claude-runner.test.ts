@@ -62,14 +62,23 @@ async function setup(extraEnv: Record<string, string> = {}) {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   cleanups.push(() => new Promise<void>((r) => server.close(() => r())));
   const port = (server.address() as AddressInfo).port;
-  const runner = new ClaudeRunner({ ptys: ptys.owned("repo"), hooks, paths, pgHookPath, endpoint: () => ({ port, hookSecret: TOKEN }), env });
+  const settings = { bypassPermissions: false };
+  const runner = new ClaudeRunner({
+    ptys: ptys.owned("repo"),
+    hooks,
+    paths,
+    pgHookPath,
+    endpoint: () => ({ port, hookSecret: TOKEN }),
+    env,
+    bypassPermissions: () => settings.bypassPermissions,
+  });
   const worktree = path.join(t.dir, "worktree");
   fs.mkdirSync(worktree);
   const invocations = () =>
     fs.existsSync(fakeLog)
       ? fs.readFileSync(fakeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { argv: string[]; env: Record<string, string>; cwd: string })
       : [];
-  return { dir: t.dir, env, paths, ptys, hooks, runner, worktree, invocations, hookCalls };
+  return { dir: t.dir, env, paths, ptys, hooks, runner, worktree, invocations, hookCalls, settings };
 }
 
 type Setup = Awaited<ReturnType<typeof setup>>;
@@ -116,7 +125,7 @@ describe("ClaudeRunner (fake claude)", () => {
     expect(inv!.argv[0]).toBe("build it [[write:out.txt:hello]]");
     const sid = inv!.argv[inv!.argv.indexOf("--session-id") + 1];
     expect(sid).toMatch(/^[0-9a-f-]{36}$/);
-    expect(inv!.argv).toEqual(expect.arrayContaining(["--name", "pg:g1/Build", "--settings", hooksSettingsPath(s.paths, run.id), "--permission-mode", "acceptEdits", "--model", "sonnet"]));
+    expect(inv!.argv).toEqual(expect.arrayContaining(["--name", "pg:g1/Build", "--settings", hooksSettingsPath(s.paths, run.id), "--permission-mode", "auto", "--model", "sonnet"]));
     expect(inv!.env).toMatchObject({ PG_NODE_RUN_ID: "nr-n1", TERM: "xterm-256color" });
     // The session token never reaches Claude: hooks authenticate with a per-node-run header file.
     expect(inv!.env.PG_TOKEN).toBeUndefined();
@@ -315,6 +324,35 @@ describe("ClaudeRunner (fake claude)", () => {
     const argv = s.invocations()[1]!.argv;
     expect(argv.slice(1, 3)).toEqual(["--resume", sid]);
     expect(argv[0]).toMatch(/^Context from previous steps:\n\n### Green\? \(condition, succeeded\)\nCondition result: false\n2 tests fail[\s\S]*fix it$/);
+  });
+
+  it("the bypass app setting starts and reopens consoles in bypassPermissions, unless the node sets its own mode (§7.6)", async () => {
+    const s = await setup();
+    s.settings.bypassPermissions = true;
+    const { ctx, exec, run } = start(s, { prompt: "x", completion: auto0 });
+    await exec.result;
+    const modeOf = (i: number) => {
+      const argv = s.invocations()[i]!.argv;
+      return argv[argv.indexOf("--permission-mode") + 1];
+    };
+    expect(modeOf(0)).toBe("bypassPermissions");
+    const reopened = await s.runner.reopen(run, ctx.current, makeLane(s.worktree), s.dir);
+    await waitFor(() => s.invocations().length === 2);
+    expect(modeOf(1)).toBe("bypassPermissions");
+    s.runner.closeReopened(reopened.ptyId);
+    await s.ptys.get(reopened.ptyId)!.exited;
+    // Outside the worktree (it is gone), a reopened session still asks before edits.
+    const fallback = await s.runner.reopen(run, ctx.current, makeLane(path.join(s.dir, "gone")), s.dir);
+    await waitFor(() => s.invocations().length === 3);
+    expect(modeOf(2)).toBe("default");
+    s.runner.closeReopened(fallback.ptyId);
+    await s.ptys.get(fallback.ptyId)!.exited;
+    // A node's own mode wins; turning the setting off applies to the next console.
+    await start(s, { prompt: "x", completion: auto0, permissionMode: "plan" }, { id: "n2" }).exec.result;
+    expect(modeOf(3)).toBe("plan");
+    s.settings.bypassPermissions = false;
+    await start(s, { prompt: "x", completion: auto0 }, { id: "n3" }).exec.result;
+    expect(modeOf(4)).toBe("auto");
   });
 
   it("context resume without a predecessor session fails clearly", async () => {

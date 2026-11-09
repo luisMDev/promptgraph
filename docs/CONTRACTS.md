@@ -691,7 +691,9 @@ Generated messages use `runHeadless` with `GENERATED_MESSAGE_JSON_SCHEMA` and re
   `lane.baseRef`** (history shared with a parent lane stays intact).
 - `CompletionController.onActivity()` (PreToolUse after idle/grace → running). Hold is remembered even when set
   before the controller exists and is seeded from `nodeRun.hold`.
-- `resolveClaudeOptions(node, defaults)` and `describePredecessor(p)` are exported (merge/judge reuse).
+- `resolveClaudeOptions(node, defaults, bypass = false)` and `describePredecessor(p)` are exported (merge/judge reuse).
+  `bypass` (`ClaudeRunnerDeps.bypassPermissions()`, the app setting read at every start, DESIGN §7.6) replaces the
+  graph default permission mode with `bypassPermissions` (`LaunchPermissionMode` in `args.ts`); a node's own mode wins.
 - Notification `idle_prompt` is ignored after a Stop (the completion policy already decided); other
   notifications → `waiting_input`. `context:"resume"` with no same-lane Claude predecessor session → failed.
 - Graceful stop (at the input prompt only) writes `/exit`, then `\r` 100 ms later (verified with real Claude
@@ -950,7 +952,7 @@ recent attach/resize drives PTY size.
 - `http/errors.ts` (new): `HttpError`, `toApiError`, `readBody(c, schema)` (empty body = `{}`), `readJson`.
   Extra codes: `unauthorized` 401, `forbidden_host` 403, `id_mismatch` 400 (PUT graph), `internal` 500.
 - `AppSettingsStore.update` applies only keys present in the patch (`UpdateAppSettingsRequestSchema` is
-  `.partial()` of a schema with defaults, so parsing `{}` yields `{notifications: true}`); PUT /api/settings
+  `.partial()` of a schema with defaults, so parsing `{}` yields `{notifications: true, bypassPermissions: false}`); PUT /api/settings
   validates the raw body and passes it on unparsed.
 - `GET …/graphs/:id`: `modifiedOutside` is true also when no hash is known yet (never run/saved by the app).
 - Hooks: unknown event → 404; everything else (unknown node run, bad payload/JSON) → 204.

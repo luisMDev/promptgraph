@@ -4,6 +4,7 @@ import { CompletionEditor, EFFORT_OPTIONS, InheritSelect, MODEL_SUGGESTIONS, PER
 import { LinesInput, OptionalNumber, OptionalText, Select, TextArea } from "../common/fields";
 import { useId } from "react";
 import { useRepo, useView } from "../../store/view/context";
+import { useDaemonStore } from "../../store/daemon-store";
 import { Checkbox, Field } from "../common/ui";
 
 const KEEP_OPTIONS: readonly { value: KeepWorktrees; label: string }[] = [
@@ -19,6 +20,7 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
   const view = useView();
   const branches = useRepo((s) => s.info?.branches ?? EMPTY);
   const modelsListId = useId();
+  const bypass = useDaemonStore((s) => s.settings?.bypassPermissions ?? false);
   const update = (patch: Partial<GraphSettings>) => view.editor.getState().updateSettings((s) => ({ ...s, ...patch }));
   const updateDefaults = (patch: Partial<GraphSettings["defaults"]>) =>
     view.editor.getState().updateSettings((s) => ({ ...s, defaults: { ...s.defaults, ...patch } }));
@@ -98,7 +100,7 @@ export function GraphSettingsForm({ graphId, settings, disabled }: { graphId: st
           <InheritSelect value={settings.defaults.effort} options={EFFORT_OPTIONS} inherited={undefined} disabled={disabled} onChange={(effort) => updateDefaults({ effort })} />
         </Field>
       </div>
-      <Field label="Permission mode">
+      <Field label="Permission mode" hint={bypass ? "Bypass permissions is on in Settings: it replaces this default on this machine." : undefined}>
         <Select value={settings.defaults.permissionMode} options={PERMISSION_OPTIONS} disabled={disabled} onChange={(permissionMode) => updateDefaults({ permissionMode })} />
       </Field>
       <Field label="Allowed tools" hint="One per line.">

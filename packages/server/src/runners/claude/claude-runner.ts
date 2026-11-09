@@ -11,7 +11,6 @@ import {
   type NodeRun,
   type NodeRunOutput,
   type NodeStatus,
-  type PermissionMode,
   type Run,
 } from "@promptgraph/shared";
 import { childEnv, claudeBin, type PgHookEnv } from "../../config/child-env.js";
@@ -23,7 +22,7 @@ import type { NodeRunPatch } from "../../store/store.js";
 import { newId, newSessionId } from "../../util/ids.js";
 import { stripAnsi, errorMessage } from "../../util/text.js";
 import type { NodeControls, NodeExecution, Runner, RunnerContext, RunnerResult } from "../types.js";
-import { buildClaudeArgs, toCliPermissionMode } from "./args.js";
+import { buildClaudeArgs, toCliPermissionMode, type LaunchPermissionMode } from "./args.js";
 import { CompletionController } from "./completion.js";
 import { buildInitialMessage, INTERRUPTED_MESSAGE } from "./context.js";
 import { writeHooksSettings } from "./hooks-settings.js";
@@ -54,22 +53,28 @@ export interface ClaudeRunnerDeps {
   /** Filled once the HTTP server listens (hooks need the port). */
   endpoint: () => ServerEndpoint;
   env?: NodeJS.ProcessEnv;
+  /** The app setting `bypassPermissions` (§7.6), read at every start so a change applies to the next console. */
+  bypassPermissions?: () => boolean;
 }
 
 /** Options of a Claude node after applying graph defaults. */
 export interface ResolvedClaudeOptions {
   model?: string;
   effort?: Effort;
-  permissionMode: PermissionMode;
+  permissionMode: LaunchPermissionMode;
   allowedTools?: string[];
   completion: CompletionPolicy;
 }
 
-export function resolveClaudeOptions(node: ClaudeNode, defaults: GraphDefaults): ResolvedClaudeOptions {
+/**
+ * Node config ?? graph defaults. `bypass` (the app setting, §7.6) replaces the graph's default permission mode with
+ * `bypassPermissions`; a mode set on the node itself (e.g. "plan") still wins.
+ */
+export function resolveClaudeOptions(node: ClaudeNode, defaults: GraphDefaults, bypass = false): ResolvedClaudeOptions {
   return {
     model: node.config.model ?? defaults.model,
     effort: node.config.effort ?? defaults.effort,
-    permissionMode: node.config.permissionMode ?? defaults.permissionMode,
+    permissionMode: node.config.permissionMode ?? (bypass ? "bypassPermissions" : defaults.permissionMode),
     allowedTools: node.config.allowedTools ?? defaults.allowedTools,
     completion: node.config.completion ?? defaults.completion,
   };
@@ -125,6 +130,10 @@ export class ClaudeRunner implements Runner {
 
   constructor(private readonly deps: ClaudeRunnerDeps) {}
 
+  private bypass(): boolean {
+    return this.deps.bypassPermissions?.() ?? false;
+  }
+
   start(ctx: RunnerContext): NodeExecution {
     const execution = new ClaudeExecution(this.deps, ctx, {
       claim: (sid) => this.claimSession(sid),
@@ -178,7 +187,7 @@ export class ClaudeRunner implements Runner {
     if (inWorktree && run.graphSnapshot.settings.autoTrustWorktrees) await preTrustDirectory(cwd, env);
     const node = run.graphSnapshot.nodes.find((n) => n.id === nodeRun.nodeId);
     const defaults = run.graphSnapshot.settings.defaults;
-    const opts = node && isClaudeNode(node) ? resolveClaudeOptions(node, defaults) : null;
+    const opts = node && isClaudeNode(node) ? resolveClaudeOptions(node, defaults, this.bypass()) : null;
     const mode = inWorktree ? toCliPermissionMode(opts?.permissionMode ?? defaults.permissionMode) : "default";
     const args = ["--resume", sessionId, "--permission-mode", mode];
     if (opts?.model) args.push("--model", opts.model);
@@ -363,7 +372,7 @@ class ClaudeExecution {
   private plan(): LaunchPlan {
     const { node, run, predecessors, previousAttempt, nodeRun } = this.ctx;
     if (!isClaudeNode(node)) throw new Error(`ClaudeRunner cannot run ${node.type} nodes`);
-    const options = resolveClaudeOptions(node, run.graphSnapshot.settings.defaults);
+    const options = resolveClaudeOptions(node, run.graphSnapshot.settings.defaults, this.deps.bypassPermissions?.() ?? false);
     if (previousAttempt?.status === "interrupted" && previousAttempt.sessionId) {
       const sid = previousAttempt.sessionId;
       const transcript = previousAttempt.transcriptPath;

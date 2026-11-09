@@ -315,12 +315,12 @@ describe("misc routes", () => {
   });
 
   it("reads and persists app settings without resetting unspecified keys", async () => {
-    expect(await (await app.request("/api/settings", { headers: AUTH })).json()).toEqual({ notifications: true });
+    expect(await (await app.request("/api/settings", { headers: AUTH })).json()).toEqual({ notifications: true, bypassPermissions: false });
     const off = await app.request("/api/settings", { method: "PUT", headers: JSON_AUTH, body: JSON.stringify({ notifications: false }) });
-    expect(await off.json()).toEqual({ notifications: false });
+    expect(await off.json()).toEqual({ notifications: false, bypassPermissions: false });
     const noop = await app.request("/api/settings", { method: "PUT", headers: JSON_AUTH, body: "{}" });
-    expect(await noop.json()).toEqual({ notifications: false });
-    expect(JSON.parse(fs.readFileSync(setup.ctx.paths.settingsFile, "utf8"))).toEqual({ notifications: false });
+    expect(await noop.json()).toEqual({ notifications: false, bypassPermissions: false });
+    expect(JSON.parse(fs.readFileSync(setup.ctx.paths.settingsFile, "utf8"))).toEqual({ notifications: false, bypassPermissions: false });
     const bad = await app.request("/api/settings", { method: "PUT", headers: JSON_AUTH, body: JSON.stringify({ notifications: "yes" }) });
     expect(bad.status).toBe(400);
   });

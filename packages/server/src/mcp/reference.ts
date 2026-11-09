@@ -19,7 +19,7 @@ parallel lanes are joined only through a \`merge\` node.
     "baseBranch": "main",              // lanes branch off this
     "maxParallelClaude": 3,
     "workspaceSetup": "pnpm install",  // shell run once in each new worktree
-    "defaults": { "permissionMode": "acceptEdits", "model": "sonnet", "completion": { "mode": "auto", "graceSec": 5 } },
+    "defaults": { "permissionMode": "auto", "model": "sonnet", "completion": { "mode": "auto", "graceSec": 5 } },
     "keepWorktrees": "on-failure"      // never | on-failure | always
   },
   "nodes": [ { "id": "impl", "type": "prompt", "label": "Implement", "config": { "prompt": "…" } } ],
@@ -47,7 +47,8 @@ To change a graph that already exists, use patch_graph with ops (add_node, updat
 Claude node options:
 - \`context\`: \`fresh\` (default: new session, predecessors' outputs prepended), \`resume\` (continue the
   single predecessor Claude node's session; it must be in the same lane), \`clean\` (prompt only).
-- \`permissionMode\`: acceptEdits (default) | auto | manual | dontAsk | plan. bypassPermissions does not exist.
+- \`permissionMode\`: auto (default) | acceptEdits | manual | dontAsk | plan. bypassPermissions is not a graph value
+  (only the user's own app setting can start consoles in it).
 - \`completion\`: {"mode":"auto","graceSec":5} (done when Claude stops, after a grace period) |
   {"mode":"manual"} (the user clicks Done) | {"mode":"marker","token":"<<PG_DONE>>"} (done when the last
   message contains the token; tell Claude in the prompt to print it).

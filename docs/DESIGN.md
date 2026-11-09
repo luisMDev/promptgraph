@@ -199,7 +199,7 @@ type GraphSettings = {
   defaults: {
     model?: string;                 // "opus" | "sonnet" | full id
     effort?: "low" | "medium" | "high" | "xhigh" | "max";
-    permissionMode: "acceptEdits" | "auto" | "manual" | "dontAsk" | "plan"; // default "acceptEdits"
+    permissionMode: "acceptEdits" | "auto" | "manual" | "dontAsk" | "plan"; // default "auto"
     allowedTools?: string[];
     completion: CompletionPolicy;   // see §7.4
   };
@@ -349,7 +349,20 @@ Output of a Claude node = text of the **last assistant message**, read from `tra
 
 ### 7.6 Permissions
 
-- Default `permissionMode: "acceptEdits"`. `bypassPermissions` is not offered in the UI.
+- Default `permissionMode: "auto"` (Claude Code's auto mode: it decides which actions need a prompt). Graph files
+  written before this change store `"acceptEdits"` explicitly and keep it.
+- **`bypassPermissions` is a per-user app setting, never a graph value.** Settings → *Bypass permissions*
+  (`AppSettings.bypassPermissions` in `~/.promptgraph/settings.json`, off by default) starts every Claude node console
+  in Claude Code's `bypassPermissions` mode in place of the graph's default; a mode set on the node itself (e.g. a
+  `plan` step) still wins. The runner reads the setting when a console starts, so a change applies to the next one, and
+  "Reopen session" follows it while the lane worktree exists (in the main checkout it keeps asking, as before).
+  `PermissionModeSchema` deliberately has no `bypassPermissions`: a graph committed to a repository, cloned by someone
+  else, can never turn it on. The inspector's "Default (…)" and the graph settings say when the setting replaces the
+  graph default. Claude Code asks once, in the terminal, to accept the mode. **What it costs:** Claude no longer asks
+  before running commands or before reading outside its worktree, so the `blockReadsOutsideWorkingDirectories`
+  prompt below no longer protects the token; only the `permissions.deny` rules remain. A step could then read the
+  token, approve its own gate and push. The setting's description says so, and turning it on is the user's explicit
+  choice (invariant 5). The chat (§21) never uses it.
 - When a permission prompt appears, `Notification` turns the node yellow; you answer it in the terminal.
 - `allowedTools` per node to make unattended runs smoother (e.g. `Bash(pnpm test:*)`).
 - The generated `--settings` file (§7.2) also carries `permissions.deny` rules for promptgraph's own secrets: `Read` of `<PG_HOME>` itself (a recursive `grep`/`find` naming it, or `..` from a lane worktree, which lives under it), and `Read` and `Edit` of `<PG_HOME>/token`, `<PG_HOME>/linear-key` (§24), `<PG_HOME>/state.db*`, `<PG_HOME>/runs/**` (the hook header files), `<PG_HOME>/servers/**` (the discovery records of pre-M7 per-repository servers, which hold that server's live API token) and `<PG_HOME>/logs/**` (pre-M7 detached servers printed a token URL to their logs; the daemon logs no credential, but old logs may remain), as absolute rule paths (`//…`), written for `PG_HOME` as given and, when it is a symlink, for its realpath too. Deny rules alone do not contain Bash: Claude Code runs its built-in read-only commands (`cat`, `grep`, `find`, `head`, …) without a prompt in every mode, also outside the working directory, and a deny rule does not apply to a command that reads files without naming them (`grep -r x .` run from a parent directory). So the file also sets `permissions.blockReadsOutsideWorkingDirectories: true` (Claude Code ≥ 2.1.257): the file tools refuse paths outside the session's working directory (the lane worktree; Claude Code's own files such as skills and plugins stay readable) and recognised file-reading Bash commands on such paths prompt the user even in `acceptEdits` mode. A step that needs a directory outside its worktree gets it with `/add-dir` in its terminal. An agent therefore cannot read the token and approve its own gate through the API without the user approving the read (invariant: nothing leaves the machine without approval). `PG_HOME` is not passed to children. Other programs an approved command runs (a script that opens files itself) are not contained; shell nodes are trusted graph code (§14).
@@ -580,7 +593,7 @@ Terminal logs: `~/.promptgraph/runs/<run-id>/<node-run-id>.log`.
 | `locks/daemon.pid` | 0600 | Pid of the daemon, for messages only; the lock itself is an abstract Unix socket held by the kernel (§4.1 item 1) |
 | `locks/<repo-key>.pid` | 0600 | Legacy per-repository locks, written by the daemon for every registered repository so pre-M7 binaries refuse to start (§4.4) |
 | `logs/daemon.log` | 0600 | Output of a detached daemon (appended; rotated to `daemon.log.1` above 5 MB at start) |
-| `state.db`, `settings.json`, `runs/`, `worktrees/`, `bin/pg-hook` | | As before; `settings.json` (notifications) is global to the daemon |
+| `state.db`, `settings.json`, `runs/`, `worktrees/`, `bin/pg-hook` | | As before; `settings.json` (notifications, voice, bypass permissions) is global to the daemon |
 
 The daemon re-asserts the modes of the directory, `token` and `state.db` on every start.
 
@@ -820,7 +833,7 @@ The trust boundary is the user's account on one machine: anything running as the
   - The bundled Node is pinned by version and SHA-256, verified on every use of the tarball, cached or not (§20.6). The installed runtime (`~/.local/share/promptgraph/runtime`, directory mode 0700) and the `~/.local/bin/promptgraph` command are owned by the user and trusted like any program in their home; the installer refuses a runtime directory that is a symlink or owned by another user, and a `~/.local/bin` owned by another user, writable by others, or writable by a group other than the user's private group (§20.7, §20.8). The app writes the command only after the user agreed, and never replaces a file it did not write without asking, even if one appears between the check and the write (§20.8).
   - The desktop-only switches (`PG_DESKTOP_AUTO_ANSWER`, `PG_DESKTOP_UPDATES`) are removed from the environment of every process the shell starts and from the daemon's children, so a step that starts the app or a nested promptgraph never inherits an automatic answer.
 - **Linear** (§24): the only outbound requests the daemon makes itself (`gh` and `git` make their own). The personal API key lives in `~/.promptgraph/linear-key` (0600) and is write-only: no route, WS message or MCP tool returns it, it is never logged, never put in a child's environment, sent only to `https://api.linear.app/graphql`, and the `--settings` file denies Claude's file tools access to it (§7.6). Reads carry the picker's search text and issue ids. The only writes are a `linear` node's comments and state changes (§24.5), each shown to and approved (possibly edited) by the user first, posted as the key's user; they may summarise the run's work, which is why they are gated. The `/api/linear` GETs read Linear and change nothing locally.
-- No `bypassPermissions` by default; nothing is pushed without an approval gate.
+- No `bypassPermissions` by default; nothing is pushed without an approval gate. The user may turn on the *Bypass permissions* app setting (§7.6), which weakens that guarantee for Claude steps (a step can then read the token without a prompt); graph files can never turn it on.
 - Shell nodes run arbitrary commands by design: graph files are trusted like any script in the repo. The UI shows a warning when opening a graph modified outside the app since the last run (hash comparison).
 - Binary WebSocket frames are accepted only as voice audio (§22): routed to the sending client's active voice session, ignored when it has none, at most 64 KiB per frame and 2 minutes of audio (3 840 000 bytes) per session. Audio is never logged, never persisted beyond a mode-0600 temp WAV (in a per-server 0700 directory) deleted after each transcription pass, and never leaves the machine. whisper-cli is spawned with an argument array (no shell), and nothing derived from the audio is ever put in its arguments.
 
@@ -1203,7 +1216,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose --inc
 - With the plugin, MCP tools are named `mcp__plugin_promptgraph_promptgraph__<tool>` (server `plugin:promptgraph:promptgraph`). When the running server does not bundle the plugin, `--mcp-config` registers `{"mcpServers":{"promptgraph":{"command":<node>,"args":[<cli entry>,"mcp"],"env":{…}}}}` (tools `mcp__promptgraph__<tool>`); there are no skills then, and `chat:status` carries a warning.
 - `AskUserQuestion` is allowed and never pre-allowed: in stream-json mode it arrives as a `can_use_tool` prompt, which the panel answers with a question card (§21.4). (Before, it was disallowed and Claude asked in plain text.)
 - No built-in tool is pre-allowed. In `default` mode Claude Code reads inside the cwd (the repository) without asking; a bare `Read` / `Grep` / `Glob` / `LS` allow rule would also silence the prompt for reads outside it (`~/.ssh`, `~/.promptgraph` with the session token, other repositories), and the pre-allowed `save_graph` / `patch_graph` could then copy what was read into a committed graph file without any prompt.
-- `bypassPermissions` is never used (invariant 5). Destructive MCP tools (`delete_graph`, `cancel_run`, `cleanup_run`) and every write or shell tool are not pre-allowed, so they go through the permission card (§21.4).
+- `bypassPermissions` is never used, whatever the app setting of §7.6 says (invariant 5). Destructive MCP tools (`delete_graph`, `cancel_run`, `cleanup_run`) and every write or shell tool are not pre-allowed, so they go through the permission card (§21.4).
 - `CHAT_SYSTEM_PROMPT` (server chat module) tells Claude where it runs: the user sees the graph live; each message starts with a context block (§21.3); use the promptgraph MCP tools (`save_graph` for new graphs, `patch_graph` for edits, keeping ids and positions) and the `design-graph` skill; never call `start_server` or `open_ui`; never approve gates; ask before destructive tools; do not edit repository files or run commands unless asked, because real work happens in graph runs; keep replies short and say what changed in the graph.
 - It also has Claude ask with `AskUserQuestion` whenever the user has to choose, and, when planning a new graph, ask first (one call, up to 4 questions) about the graph's complexity — **Simple** (2–4 sequential steps), **Standard** (5–8 steps with a test-fix loop or a review), **Complex** (parallel lanes joined by a merge, review loops, approval gates) — plus only what the message and the repository leave open (how the result is checked, how it ends: commit, PR behind an approval, merge; parallelism). No questions for one specific change to the graph on screen. The empty chat offers starters ("Plan a new graph", …) that send such a request.
 

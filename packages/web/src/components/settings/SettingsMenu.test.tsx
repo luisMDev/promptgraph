@@ -12,17 +12,17 @@ const daemon: DaemonInfoResponse = { version: "0.0.0", pid: 1, port: 4777, start
 
 describe("settings menu", () => {
   const originalUpdate = useDaemonStore.getState().updateSettings;
-  let updateSettings: ReturnType<typeof vi.fn<(patch: { notifications?: boolean }) => Promise<void>>>;
+  let updateSettings: ReturnType<typeof vi.fn<(patch: { notifications?: boolean; bypassPermissions?: boolean }) => Promise<void>>>;
   let view: TestView;
   const render = (ui: Parameters<TestView["render"]>[0]) => view.render(ui);
 
   beforeEach(() => {
-    updateSettings = vi.fn((patch: { notifications?: boolean }) => {
+    updateSettings = vi.fn((patch: { notifications?: boolean; bypassPermissions?: boolean }) => {
       const prev = useDaemonStore.getState().settings;
       if (prev) useDaemonStore.setState({ settings: { ...prev, ...patch } });
       return Promise.resolve();
     });
-    useDaemonStore.setState({ settings: { notifications: true }, info: daemon, updateSettings });
+    useDaemonStore.setState({ settings: { notifications: true, bypassPermissions: false }, info: daemon, updateSettings });
     view = createTestView({ repoInfo: null });
   });
   afterEach(() => {
@@ -86,6 +86,20 @@ describe("settings menu", () => {
     expect(useSettingsMenu.getState().open).toBe(true);
     expect(screen.getByRole("menu")).toBeTruthy();
     expect(screen.getByRole("menuitemcheckbox", { name: "Desktop notifications" }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("bypass permissions is off by default; turning it on saves it and shows the warning", async () => {
+    const user = userEvent.setup();
+    render(<SettingsMenu />);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const item = await screen.findByRole("menuitemcheckbox", { name: "Bypass permissions" });
+    expect(item.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByText(/approve its own gates/)).toBeNull();
+
+    await user.click(item);
+    expect(updateSettings).toHaveBeenCalledWith({ bypassPermissions: true });
+    expect(screen.getByRole("menuitemcheckbox", { name: "Bypass permissions" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/approve its own gates/)).toBeTruthy();
   });
 
   it("Escape closes the menu and returns focus to the trigger", async () => {
