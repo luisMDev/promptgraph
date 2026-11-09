@@ -1,5 +1,6 @@
 import {
   GRAPH_CONFLICT_CODE,
+  isLaidOut,
   layeredLayout,
   validateGraph,
   type GetGraphResponse,
@@ -90,7 +91,10 @@ export interface EditorStore extends EditorState, EditorValidation {
   updateNode(id: string, fn: (node: GraphNode) => GraphNode): void;
   updateEdge(id: string, fn: (edge: GraphEdge) => GraphEdge): void;
   moveNodes(positions: ReadonlyMap<string, Position>): void;
-  /** Re-lays out every node with the layered top-to-bottom layout (§19.3). */
+  /**
+   * Re-lays out every node with the layered top-to-bottom layout (§19.3), overwriting their saved positions (autosaved,
+   * one undo step). Nothing happens when the graph is already arranged.
+   */
   autoLayout(): void;
   /** Returns the refusal reason, or null when connected. */
   connect(req: ops.ConnectRequest): string | null;
@@ -416,6 +420,9 @@ export function createEditorStore(repoId: string, graphId: string | null, opts: 
       },
 
       autoLayout() {
+        const graph = get().graph;
+        // Already arranged: no edit, so no save and no undo step.
+        if (!graph || isLaidOut(graph)) return;
         get().edit((g) => ops.moveNodes(g, layeredLayout(g)));
       },
 

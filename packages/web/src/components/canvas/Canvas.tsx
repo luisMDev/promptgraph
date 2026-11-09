@@ -177,7 +177,7 @@ function EditCanvas() {
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={GRID[0]} size={1} color="var(--pg-canvas-dots)" />
-        <CanvasControls manual={manual} editable={!readOnly} />
+        <CanvasControls manual={manual} />
         <AutoFit manual={manual} fitOnInit={fitOnMount} />
         <RevealRequestedNode measured={measured} />
         <WideEnoughForMinimap>
@@ -360,15 +360,21 @@ function AutoFit({ manual, fitOnInit }: { manual: RefObject<boolean>; fitOnInit:
 }
 
 /**
- * Zoom buttons count as a manual viewport; our fit button replaces React Flow's (which ignores the minimum zoom).
- * `editable`: also an auto-layout button (re-places every node top to bottom, then fits the view).
+ * Zoom buttons count as a manual viewport; our fit button replaces React Flow's (which ignores the minimum zoom). A fit
+ * requested from outside the canvas (`ui.requestFit()`, e.g. after Arrange) also fits once the moved nodes are drawn.
  */
-function CanvasControls({ manual, editable = false }: { manual: RefObject<boolean>; editable?: boolean }) {
-  const { editor } = useView();
+function CanvasControls({ manual }: { manual: RefObject<boolean> }) {
   const fit = useReadableFit();
+  const fitRequest = useViewUi((s) => s.fitRequest);
   const markManual = useCallback(() => {
     manual.current = true;
   }, [manual]);
+  useEffect(() => {
+    if (fitRequest === 0) return;
+    manual.current = false;
+    const frame = requestAnimationFrame(() => fit(FIT_ANIMATION_MS));
+    return () => cancelAnimationFrame(frame);
+  }, [fitRequest, manual, fit]);
   return (
     <Controls showInteractive={false} showFitView={false} onZoomIn={markManual} onZoomOut={markManual}>
       <ControlButton
@@ -381,19 +387,6 @@ function CanvasControls({ manual, editable = false }: { manual: RefObject<boolea
       >
         <Icons.fit />
       </ControlButton>
-      {editable && (
-        <ControlButton
-          title="Auto layout: arrange the graph top to bottom (error handlers to the right)"
-          aria-label="Auto layout"
-          onClick={() => {
-            editor.getState().autoLayout();
-            manual.current = false;
-            requestAnimationFrame(() => fit(FIT_ANIMATION_MS));
-          }}
-        >
-          <Icons.layout />
-        </ControlButton>
-      )}
     </Controls>
   );
 }

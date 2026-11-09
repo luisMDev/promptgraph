@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { formatElapsed } from "../../lib/voice/pcm";
 import type { Dictation } from "../../lib/voice/use-dictation";
-import { useView } from "../../store/view/context";
+import { useSettingsMenu } from "../settings/SettingsMenu";
 import { useVoiceStore } from "../../store/voice-store";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
@@ -96,7 +96,6 @@ export function MicButton({ dictation, disabled }: { dictation: Dictation; disab
 
 /** Why dictation cannot run and how to set it up (promptgraph never downloads whisper or a model itself). */
 export function VoiceUnavailable() {
-  const view = useView();
   const status = useVoiceStore((s) => s.status);
   const loading = useVoiceStore((s) => s.statusLoading);
   const statusError = useVoiceStore((s) => s.statusError);
@@ -123,7 +122,7 @@ export function VoiceUnavailable() {
           size="sm"
           className="px-1.5 text-xs"
           onClick={() => {
-            view.ui.getState().setSettingsOpen(false);
+            useSettingsMenu.getState().setOpen(false);
             window.dispatchEvent(new CustomEvent(OPEN_VOICE_SETTINGS_EVENT));
           }}
         >

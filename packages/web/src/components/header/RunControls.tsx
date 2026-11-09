@@ -1,24 +1,23 @@
-import { costLabel, isFinalRunStatus, webRoutes } from "@promptgraph/shared";
-import { Loader2Icon, Redo2Icon, Undo2Icon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { costLabel, isFinalRunStatus, isLaidOut, webRoutes, type RunSummary } from "@promptgraph/shared";
+import { FileTextIcon, LayoutGridIcon, Loader2Icon, Redo2Icon, Undo2Icon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatDuration } from "../../lib/format";
+import { useNow } from "../../lib/use-now";
 import { RUN_STATUS_STYLE } from "../../lib/status-style";
 import { Link } from "../../lib/router/Link";
 import { installUndoKeys } from "../../lib/undo-keys";
-import { cancelRun, resumeRun, startRun } from "../../store/view/actions";
+import { cancelRun, deleteRun, resumeRun, startRun } from "../../store/view/actions";
 import { useEditor, useRepo, useRun, useTabActive, useView } from "../../store/view/context";
-import { canRedo, canUndo } from "../../store/view/editor-store";
+import { canRedo, canUndo, isReadOnly } from "../../store/view/editor-store";
 import { Icons } from "../common/icons";
 import { ConfirmDialog } from "../common/PromptDialog";
 import { Button, ButtonLink, StatusDot } from "../common/ui";
@@ -41,6 +40,42 @@ export function UndoRedoControls() {
         <Redo2Icon />
       </IconAction>
     </div>
+  );
+}
+
+/**
+ * Arrange: re-places every node with the automatic top-to-bottom layout (§19.3), overwriting the saved positions
+ * (autosaved; Undo restores them), then fits the graph in view. Disabled while there is nothing to arrange (fewer than
+ * two nodes, or already arranged), while the graph is read-only and while a run is shown.
+ */
+export function ArrangeButton() {
+  const { editor, ui } = useView();
+  const runMode = useRun((s) => s.selectedRunId !== null);
+  const readOnly = useEditor((s) => isReadOnly(s));
+  const graph = useEditor((s) => s.graph);
+  const arranged = useMemo(() => !graph || graph.nodes.length < 2 || isLaidOut(graph), [graph]);
+  const disabled = runMode || readOnly || arranged;
+  const hint = runMode || readOnly ? "The graph is read-only" : arranged ? "Already arranged" : "Lay out the nodes top to bottom and save their positions";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* A disabled button gets no pointer events: the wrapper keeps the tooltip working. */}
+        <span className="inline-flex rounded-lg bg-card shadow-soft ring-1 ring-border">
+          <Button
+            variant="ghost"
+            className="gap-1.5"
+            disabled={disabled}
+            onClick={() => {
+              editor.getState().autoLayout();
+              ui.getState().requestFit();
+            }}
+          >
+            <LayoutGridIcon /> Arrange
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -136,6 +171,7 @@ export function RunControls() {
           <Icons.play /> Resume
         </Button>
       )}
+      <ArrangeButton />
       <UndoRedoControls />
       {cancellable ? (
         <Button variant="danger" onClick={() => setConfirmCancel(true)}>
@@ -196,73 +232,183 @@ export function SaveIndicator() {
 }
 
 /** Value of the editor entry in the run selector's radio group (run ids are never empty). */
-const EDITOR_VALUE = "";
 
-/** Switch between the editor and live/historical runs of the current graph; every entry is a link. */
+/**
+ * The run menu (§13.2): what the canvas shows, the editor or one of the graph's runs. Each run shows its status, start,
+ * duration, cost and what waits for the user, with Report and Delete (finished runs only, after a confirmation). A
+ * popover with a list rather than a menu, so each row can hold its own buttons; ↑/↓ move between the rows.
+ */
 export function RunSelector() {
   const view = useView();
   const runs = useRun((s) => s.runs);
   const selectedRunId = useRun((s) => s.selectedRunId);
   const graph = useEditor((s) => s.graph);
   const graphId = useEditor((s) => s.graphId);
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState<RunSummary | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   if (!graph || !graphId) return null;
   const selected = runs.find((r) => r.id === selectedRunId);
 
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const links = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-run-nav]") ?? [])];
+    const i = links.indexOf(document.activeElement as HTMLElement);
+    const next = links[e.key === "ArrowDown" ? Math.min(i + 1, links.length - 1) : Math.max(i - 1, 0)];
+    if (next) {
+      e.preventDefault();
+      next.focus();
+    }
+  };
+
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button className="gap-2 px-2.5 font-normal">
-          {selected ? (
-            <>
-              <StatusDot className={RUN_STATUS_STYLE[selected.status].dot} />
-              <span>Run #{selected.shortId}</span>
-              <span className="text-xs text-muted-foreground">{isFinalRunStatus(selected.status) ? "history" : "live"}</span>
-            </>
-          ) : selectedRunId ? (
-            <span>Run</span>
-          ) : (
-            <>
-              <Icons.edit className="text-muted-foreground" />
-              <span>Editor</span>
-            </>
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button className="gap-2 px-2.5 font-normal" aria-haspopup="dialog">
+            {selected ? (
+              <>
+                <StatusDot className={RUN_STATUS_STYLE[selected.status].dot} />
+                <span>Run #{selected.shortId}</span>
+                <span className="text-xs text-muted-foreground">{isFinalRunStatus(selected.status) ? "history" : "live"}</span>
+              </>
+            ) : selectedRunId ? (
+              <span>Run</span>
+            ) : (
+              <>
+                <Icons.edit className="text-muted-foreground" />
+                <span>Editor</span>
+              </>
+            )}
+            <Icons.chevronDown className="text-muted-foreground" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          aria-label="Editor and runs"
+          className="w-96 p-1"
+          onOpenAutoFocus={(e) => {
+            // Focus the row shown on the canvas, so ↑/↓ start from there.
+            e.preventDefault();
+            (listRef.current?.querySelector<HTMLElement>("[data-run-nav][aria-current]") ?? listRef.current?.querySelector<HTMLElement>("[data-run-nav]"))?.focus();
+          }}
+        >
+          <div ref={listRef} onKeyDown={onKeyDown}>
+          <ul className="space-y-0.5">
+            <li>
+              <Link
+                data-run-nav=""
+                to={webRoutes.graph(view.repoId, graphId)}
+                aria-current={selectedRunId === null ? "page" : undefined}
+                onClick={() => setOpen(false)}
+                className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${selectedRunId === null ? "bg-accent" : ""}`}
+              >
+                <Icons.edit className="text-muted-foreground" />
+                <span>Editor</span>
+                <span className="ml-auto text-[11px] text-muted-foreground">edit the graph</span>
+              </Link>
+            </li>
+            {runs.length > 0 && (
+              <li className="px-2.5 pt-2 pb-1 text-[11px] font-medium text-muted-foreground" aria-hidden="true">
+                Runs · {runs.length}
+              </li>
+            )}
+            {runs.length === 0 && <li className="px-2.5 py-2 text-xs text-muted-foreground">No runs yet.</li>}
+          </ul>
+          {runs.length > 0 && (
+            <ul aria-label="Runs" className="max-h-96 space-y-0.5 overflow-y-auto">
+              {runs.map((r) => (
+                <RunMenuRow
+                  key={r.id}
+                  run={r}
+                  selected={r.id === selectedRunId}
+                  onNavigate={() => setOpen(false)}
+                  onDelete={() => {
+                    setOpen(false);
+                    setDeleting(r);
+                  }}
+                />
+              ))}
+            </ul>
           )}
-          <Icons.chevronDown className="text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-80">
-        <DropdownMenuRadioGroup value={selectedRunId ?? EDITOR_VALUE}>
-          <DropdownMenuRadioItem value={EDITOR_VALUE} className="gap-2 py-1.5 pl-3" asChild>
-            <Link to={webRoutes.graph(view.repoId, graphId)}>
-              <Icons.edit className="text-muted-foreground" />
-              <span>Editor</span>
-            </Link>
-          </DropdownMenuRadioItem>
-          <div className="max-h-80 overflow-y-auto">
-            {runs.map((r) => (
-              <DropdownMenuRadioItem key={r.id} value={r.id} className="gap-2 py-1.5 pl-3" asChild>
-                <Link to={webRoutes.run(view.repoId, r.id)}>
-                  <StatusDot className={RUN_STATUS_STYLE[r.status].dot} />
-                  <span className="font-mono text-xs">#{r.shortId}</span>
-                  <span className="text-xs text-muted-foreground">{formatDateTime(r.startedAt)}</span>
-                  <span className={`text-xs ${RUN_STATUS_STYLE[r.status].text}`}>{isFinalRunStatus(r.status) ? RUN_STATUS_STYLE[r.status].label : "live"}</span>
-                  <span className="ml-auto font-mono text-xs text-muted-foreground" title={costLabel(r.usage.costUsd, r.billingMode).title}>
-                    {costLabel(r.usage.costUsd, r.billingMode).text}
-                  </span>
-                </Link>
-              </DropdownMenuRadioItem>
-            ))}
           </div>
-        </DropdownMenuRadioGroup>
-        {runs.length > 0 && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="px-3 py-1.5 text-xs text-muted-foreground" onSelect={() => view.ui.getState().setLeftPanel("history")}>
-              Open run history…
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </PopoverContent>
+      </Popover>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete run #${deleting.shortId}`}
+          message="The run, its steps, logs and worktrees are removed. Branches that were pushed or have commits are kept."
+          confirmLabel="Delete"
+          onConfirm={() => void deleteRun(view, deleting)}
+          onClose={() => setDeleting(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function RunMenuRow({ run, selected, onNavigate, onDelete }: { run: RunSummary; selected: boolean; onNavigate(): void; onDelete(): void }) {
+  const view = useView();
+  const final = isFinalRunStatus(run.status);
+  // A paused run (e.g. the server stopped) does not keep counting.
+  const now = useNow(!final && run.status !== "paused");
+  const style = RUN_STATUS_STYLE[run.status];
+  const waiting = run.pendingApprovals + run.waitingInput;
+  const cost = costLabel(run.usage.costUsd, run.billingMode);
+  return (
+    <li aria-current={selected ? "true" : undefined} className={`group flex items-center gap-0.5 rounded-md pr-1 hover:bg-accent/70 ${selected ? "bg-accent" : ""}`}>
+      <Link
+        data-run-nav=""
+        to={webRoutes.run(view.repoId, run.id)}
+        aria-current={selected ? "page" : undefined}
+        aria-label={`Run #${run.shortId}, ${style.label}`}
+        onClick={onNavigate}
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <StatusDot className={`${style.dot} ${run.status === "running" ? "animate-pulse" : ""}`} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2 text-xs">
+            <span className="font-mono font-medium text-foreground">#{run.shortId}</span>
+            <span className={style.text}>{final ? style.label : run.status === "paused" ? style.label : "live"}</span>
+            {waiting > 0 && <Badge className="h-4 bg-amber-500/20 px-1.5 text-[10px] font-normal text-amber-700">{waiting} waiting</Badge>}
+          </span>
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="truncate">{formatDateTime(run.startedAt)}</span>
+            <span aria-hidden="true">·</span>
+            <span className="tabular-nums">{formatDuration((run.finishedAt ?? now) - run.startedAt)}</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono" title={cost.title}>
+              {cost.text}
+            </span>
+          </span>
+        </span>
+      </Link>
+      <RowTooltip hint="Report: results, changes, commits, cost">
+        <ButtonLink to={webRoutes.report(view.repoId, run.id)} variant="ghost" size="icon-sm" aria-label={`Report of run #${run.shortId}`} className={ROW_ACTION} onClick={onNavigate}>
+          <FileTextIcon />
+        </ButtonLink>
+      </RowTooltip>
+      <RowTooltip hint={final ? "Delete this run" : "Cancel the run before deleting it"}>
+        <Button variant="ghost" size="icon-sm" aria-label={`Delete run #${run.shortId}`} disabled={!final} className={ROW_ACTION} onClick={onDelete}>
+          <Icons.trash />
+        </Button>
+      </RowTooltip>
+    </li>
+  );
+}
+
+/** Row actions show on hover or focus of their row, and always on the selected row. */
+const ROW_ACTION = "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-[current]:opacity-100 focus-visible:opacity-100";
+
+function RowTooltip({ hint, children }: { hint: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* A disabled button gets no pointer events: the wrapper keeps the tooltip working. */}
+        <span className="inline-flex">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -282,7 +428,7 @@ export function PendingApprovals() {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={label} className={`relative ${count ? "text-violet-700" : "text-muted-foreground"}`}>
+            <Button variant="ghost" size="icon-sm" aria-label={label} className={`relative ${count ? "text-violet-700" : "text-muted-foreground"}`}>
               <Icons.bell />
               {count > 0 && (
                 <Badge className="absolute -top-0.5 -right-0.5 h-4 min-w-4 bg-violet-500 px-1 text-[10px] font-semibold text-white">{count}</Badge>

@@ -7,6 +7,7 @@ import {
   LAYOUT_DX,
   LAYOUT_DY,
   layeredLayout,
+  isLaidOut,
   deriveEdgeId,
   validateGraph,
   type Graph,
@@ -461,6 +462,15 @@ describe("insert_after / insert_before", () => {
 });
 
 describe("layout helpers", () => {
+  it("isLaidOut: true once every node sits where layeredLayout puts it (half-pixel tolerance)", () => {
+    const graph = g([{ id: "a", x: 500, y: 500 }, { id: "b" }], [{ source: "a", target: "b" }]);
+    expect(isLaidOut(graph)).toBe(false);
+    const pos = layeredLayout(graph);
+    const arranged = { ...graph, nodes: graph.nodes.map((n) => ({ ...n, position: { x: pos.get(n.id)!.x + 0.2, y: pos.get(n.id)!.y } })) };
+    expect(isLaidOut(arranged)).toBe(true);
+    expect(isLaidOut(g([]))).toBe(true);
+  });
+
   it("layeredLayout places rows by longest path", () => {
     const graph = g([{ id: "a" }, { id: "b" }, { id: "c" }], [{ source: "a", target: "b" }, { source: "a", target: "c" }, { source: "b", target: "c" }]);
     const pos = layeredLayout(graph);

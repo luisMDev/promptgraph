@@ -6,7 +6,7 @@ import { THEME_STORAGE_KEY } from "../../lib/theme";
 import type { DaemonInfoResponse } from "@promptgraph/shared";
 import { useDaemonStore } from "../../store/daemon-store";
 import { createTestView, type TestView } from "../../store/view/test-view";
-import { SettingsMenu } from "./SettingsMenu";
+import { SettingsMenu, useSettingsMenu } from "./SettingsMenu";
 
 const daemon: DaemonInfoResponse = { version: "0.0.0", pid: 1, port: 4777, startedAt: 1, phase: 2, warnings: [], supportedNodeTypes: [], notificationsAvailable: true };
 
@@ -15,7 +15,6 @@ describe("settings menu", () => {
   let updateSettings: ReturnType<typeof vi.fn<(patch: { notifications?: boolean }) => Promise<void>>>;
   let view: TestView;
   const render = (ui: Parameters<TestView["render"]>[0]) => view.render(ui);
-  const useUiStore = { getState: () => view.ui.getState() };
 
   beforeEach(() => {
     updateSettings = vi.fn((patch: { notifications?: boolean }) => {
@@ -28,6 +27,7 @@ describe("settings menu", () => {
   });
   afterEach(() => {
     cleanup();
+    useSettingsMenu.setState({ open: false });
     useDaemonStore.setState({ settings: null, info: null, updateSettings: originalUpdate });
   });
 
@@ -38,7 +38,7 @@ describe("settings menu", () => {
     trigger.focus();
     await user.keyboard("{Enter}");
 
-    expect(useUiStore.getState().settingsOpen).toBe(true);
+    expect(useSettingsMenu.getState().open).toBe(true);
     const menu = await screen.findByRole("menu");
     await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
   });
@@ -67,7 +67,7 @@ describe("settings menu", () => {
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     expect(screen.getByRole("menuitemradio", { name: "Light" }).getAttribute("aria-checked")).toBe("true");
-    expect(useUiStore.getState().settingsOpen).toBe(true);
+    expect(useSettingsMenu.getState().open).toBe(true);
 
     await user.click(screen.getByRole("menuitemradio", { name: "Dark" }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
@@ -83,7 +83,7 @@ describe("settings menu", () => {
 
     await user.click(item);
     expect(updateSettings).toHaveBeenCalledWith({ notifications: false });
-    expect(useUiStore.getState().settingsOpen).toBe(true);
+    expect(useSettingsMenu.getState().open).toBe(true);
     expect(screen.getByRole("menu")).toBeTruthy();
     expect(screen.getByRole("menuitemcheckbox", { name: "Desktop notifications" }).getAttribute("aria-checked")).toBe("false");
   });
@@ -97,7 +97,7 @@ describe("settings menu", () => {
     await screen.findByRole("menu");
 
     await user.keyboard("{Escape}");
-    expect(useUiStore.getState().settingsOpen).toBe(false);
+    expect(useSettingsMenu.getState().open).toBe(false);
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     expect(document.activeElement).toBe(trigger);
   });
@@ -105,8 +105,7 @@ describe("settings menu", () => {
   it("disables the toggle when no notifier is available", async () => {
     const user = userEvent.setup();
     useDaemonStore.setState({ info: { ...daemon, notificationsAvailable: false } });
-    view.cache.setState({ info: { id: "repo-0123abcd", path: "/tmp/repo", name: "repo", currentBranch: "main", branches: ["main"] } });
-    render(<SettingsMenu />);
+    render(<SettingsMenu repoPath="/tmp/repo" />);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     const item = await screen.findByRole("menuitemcheckbox", { name: "Desktop notifications (unavailable)" });
     expect(item.getAttribute("aria-disabled")).toBe("true");

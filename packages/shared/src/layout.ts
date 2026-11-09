@@ -46,6 +46,15 @@ export function layeredLayout(graph: Pick<Graph, "nodes" | "edges">): Map<string
   return positions;
 }
 
+/** Whether every node already sits where layeredLayout puts it (within half a pixel): arranging changes nothing. */
+export function isLaidOut(graph: Pick<Graph, "nodes" | "edges">): boolean {
+  const layout = layeredLayout(graph);
+  return graph.nodes.every((n) => {
+    const p = layout.get(n.id);
+    return !!p && Math.abs(p.x - n.position.x) < 0.5 && Math.abs(p.y - n.position.y) < 0.5;
+  });
+}
+
 /** Condition ports lean their targets apart, matching the true (left) / false (right) handles. */
 const PORT_BIAS: Partial<Record<string, number>> = { true: -LAYOUT_DX / 4, false: LAYOUT_DX / 4 };
 

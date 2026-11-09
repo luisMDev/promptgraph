@@ -8,7 +8,6 @@ export interface UiState {
   activeTerminal: string | null;
   drawerHeight: number;
   approvalNodeRunId: string | null;
-  settingsOpen: boolean;
   /** Diff dialog: one node's changes (with a switch to its whole lane), or a lane of a run. */
   diffTarget: DiffTarget | null;
 }
@@ -23,12 +22,10 @@ export interface TerminalTabMeta {
   nodeRunId: string | null;
 }
 
-export type LeftPanel = "palette" | "history";
 
 export interface UiStore extends UiState {
   tabMeta: Record<string, TerminalTabMeta>;
   drawerOpen: boolean;
-  leftPanel: LeftPanel;
   /** Left sidebar expanded (it collapses off-canvas via its header trigger or its edge rail). */
   sidebarOpen: boolean;
   /** Right sidebar (inspector) expanded (it collapses off-canvas via its edge rail). */
@@ -38,10 +35,13 @@ export interface UiStore extends UiState {
   inspectorWidth: number;
   /** Node the edit canvas should pan to when it is outside the viewport (palette click-to-append). */
   revealNodeId: string | null;
+  /** Bumped to ask the canvas to fit the graph in view (e.g. after Arrange); 0 = never asked. */
+  fitRequest: number;
   /** Edge id → the loop spec it had before "loop back-edge" was unticked (restored when ticked again). */
   lastLoopSpec: Record<string, LoopSpec>;
 
   revealNode(nodeId: string | null): void;
+  requestFit(): void;
   openTerminal(ptyId: string, meta: TerminalTabMeta): void;
   closeTerminal(ptyId: string): void;
   setActiveTerminal(ptyId: string): void;
@@ -49,10 +49,8 @@ export interface UiStore extends UiState {
   setDrawerOpen(open: boolean): void;
   setDrawerHeight(px: number): void;
   openApproval(nodeRunId: string | null): void;
-  setSettingsOpen(open: boolean): void;
   openDiff(target: DiffTarget | null): void;
   /** Shows a left panel, expanding the sidebar if it was collapsed. */
-  setLeftPanel(panel: LeftPanel): void;
   setSidebarOpen(open: boolean): void;
   setInspectorOpen(open: boolean): void;
   setSidebarWidth(px: number): void;
@@ -100,20 +98,23 @@ export function createViewUiStore(): ViewUiStoreApi {
     activeTerminal: null,
     drawerHeight: 300,
     approvalNodeRunId: null,
-    settingsOpen: false,
     diffTarget: null,
     tabMeta: {},
     drawerOpen: false,
-    leftPanel: "palette",
     sidebarOpen: true,
     inspectorOpen: true,
     sidebarWidth: loadWidth(WIDTH_KEYS.sidebar, SIDEBAR_WIDTH),
     inspectorWidth: loadWidth(WIDTH_KEYS.inspector, INSPECTOR_WIDTH),
     revealNodeId: null,
+    fitRequest: 0,
     lastLoopSpec: {},
 
     revealNode(nodeId) {
       set({ revealNodeId: nodeId });
+    },
+
+    requestFit() {
+      set({ fitRequest: get().fitRequest + 1 });
     },
 
     openTerminal(ptyId, meta) {
@@ -156,17 +157,11 @@ export function createViewUiStore(): ViewUiStoreApi {
       set({ approvalNodeRunId: nodeRunId });
     },
 
-    setSettingsOpen(open) {
-      set({ settingsOpen: open });
-    },
 
     openDiff(target) {
       set({ diffTarget: target });
     },
 
-    setLeftPanel(panel) {
-      set({ leftPanel: panel, sidebarOpen: true });
-    },
 
     setSidebarOpen(open) {
       set({ sidebarOpen: open });

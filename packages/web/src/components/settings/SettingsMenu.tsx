@@ -12,26 +12,31 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MicIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { create } from "zustand";
 import { setTheme, type Theme, useTheme } from "../../lib/theme";
 import { useDaemonStore } from "../../store/daemon-store";
 import { toast } from "../../store/toast-store";
-import { useRepoInfo, useView, useViewUi } from "../../store/view/context";
 import { Icons } from "../common/icons";
 import { Button } from "../common/ui";
 import { OPEN_VOICE_SETTINGS_EVENT } from "../chat/Dictation";
 import { VoiceSettingsDialog } from "./VoiceSettingsDialog";
 
+/** Whether the settings menu is open: one menu per window, in the tab strip (DESIGN §13.4). */
+export const useSettingsMenu = create<{ open: boolean; setOpen(open: boolean): void }>()((set) => ({
+  open: false,
+  setOpen: (open) => set({ open }),
+}));
+
 /**
- * App settings menu (theme, desktop notifications toggle, voice dictation dialog, repo/version info). A Radix dropdown menu whose open state
- * lives in the UI store (`settingsOpen`): keyboard navigation, focus return to the trigger, Escape and
- * outside-click dismissal come from Radix. The info text is static content, so it is not focusable.
+ * App settings menu (theme, desktop notifications toggle, voice dictation dialog, repo/version info), at the end of the
+ * tab strip. A Radix dropdown menu whose open state lives in `useSettingsMenu`: keyboard navigation, focus return to the
+ * trigger, Escape and outside-click dismissal come from Radix. The info text is static content, so it is not
+ * focusable. `repoPath`: the repository of the active tab, shown with the version (none on Home).
  */
-export function SettingsMenu() {
-  const view = useView();
-  const open = useViewUi((s) => s.settingsOpen);
+export function SettingsMenu({ repoPath = null }: { repoPath?: string | null }) {
+  const open = useSettingsMenu((s) => s.open);
   const settings = useDaemonStore((s) => s.settings);
   const daemon = useDaemonStore((s) => s.info);
-  const repo = useRepoInfo();
   const notifyAvailable = daemon?.notificationsAvailable ?? true;
   const theme = useTheme();
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -52,7 +57,7 @@ export function SettingsMenu() {
 
   return (
     <>
-      <DropdownMenu open={open} onOpenChange={(o) => view.ui.getState().setSettingsOpen(o)}>
+      <DropdownMenu open={open} onOpenChange={(o) => useSettingsMenu.getState().setOpen(o)}>
         <Tooltip>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -92,13 +97,15 @@ export function SettingsMenu() {
           <DropdownMenuItem onSelect={() => setVoiceOpen(true)}>
             <MicIcon /> Voice dictation…
           </DropdownMenuItem>
-          {repo && daemon && (
+          {daemon && (
             <>
               <DropdownMenuSeparator />
               <div className="space-y-1 px-1.5 py-1 text-[11px] text-muted-foreground">
-                <div className="truncate font-mono" title={repo.path}>
-                  {repo.path}
-                </div>
+                {repoPath && (
+                  <div className="truncate font-mono" title={repoPath}>
+                    {repoPath}
+                  </div>
+                )}
                 <div>
                   promptgraph {daemon.version} · phase {daemon.phase}
                 </div>

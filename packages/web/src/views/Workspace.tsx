@@ -8,7 +8,6 @@ import { Icons } from "../components/common/icons";
 import { Button } from "../components/common/ui";
 import { Header } from "../components/header/Header";
 import { RunControls, SaveIndicator } from "../components/header/RunControls";
-import { RunHistory } from "../components/history/RunHistory";
 import { Inspector } from "../components/inspector/Inspector";
 import { Palette } from "../components/palette/Palette";
 import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
@@ -19,7 +18,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import type { RepoRoute } from "../lib/router/routes";
 import { createGraph } from "../store/view/actions";
 import { useEditor, useRepo, useRun, useView, useViewUi } from "../store/view/context";
-import type { LeftPanel } from "../store/view/ui-store";
 
 /** Lazy: the dialog pulls in diff2html, which the rest of the app does not need. */
 const ApprovalDialog = lazy(() => import("../components/approval/ApprovalDialog").then((m) => ({ default: m.ApprovalDialog })));
@@ -159,13 +157,10 @@ function RightSidebar() {
   );
 }
 
-/** The left sidebar: the palette or the run history, as chosen with the header's Nodes / Runs switch. */
+/** The left sidebar: the node palette (runs are picked in the header's run menu, §13.2). */
 function LeftSidebar() {
   const view = useView();
-  const panel = useViewUi((s) => s.leftPanel);
-  const runMode = useRun((s) => s.selectedRunId !== null);
-  const shown: LeftPanel = runMode ? "history" : panel;
-  const title = shown === "palette" ? "Nodes" : "Runs";
+  const title = "Nodes";
   return (
     // shadcn's desktop sidebar container is `fixed inset-y-0 h-svh`; it is re-anchored to the (relative) layout row
     // with `absolute h-full` because the header + banners above it have no fixed height.
@@ -175,7 +170,9 @@ function LeftSidebar() {
           <h2 className="min-w-0 flex-1 truncate px-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h2>
           <SidebarToggle side="left" label="Collapse sidebar" />
         </SidebarHeader>
-        <SidebarContent className="min-h-0">{shown === "palette" ? <Palette /> : <RunHistory />}</SidebarContent>
+        <SidebarContent className="min-h-0">
+          <Palette />
+        </SidebarContent>
       </section>
       <SidebarRail aria-label="Collapse or resize sidebar" title="Click to collapse, drag to resize" onResize={(px) => view.ui.getState().setSidebarWidth(px)} />
     </Sidebar>

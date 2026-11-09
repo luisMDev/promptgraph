@@ -1,6 +1,6 @@
 import { LAYOUT_DY, type NodeType } from "@promptgraph/shared";
 import { NODE_TYPE_META, PALETTE_ORDER } from "../../lib/node-meta";
-import { useEditor, useView } from "../../store/view/context";
+import { useEditor, useRun, useView } from "../../store/view/context";
 import { isReadOnly } from "../../store/view/editor-store";
 import { PALETTE_MIME } from "../canvas/Canvas";
 import { Badge } from "@/components/ui/badge";
@@ -10,10 +10,12 @@ import { Button } from "../common/ui";
 /** Node types to drag onto the canvas (click adds one below the last node). */
 export function Palette() {
   const view = useView();
-  const readOnly = useEditor(isReadOnly);
+  // A run shown on the canvas is its snapshot: nothing can be added to it.
+  const runMode = useRun((s) => s.selectedRunId !== null);
+  const readOnly = useEditor(isReadOnly) || runMode;
   const phase = useEditor((s) => s.phase);
   const supported = useEditor((s) => s.supportedNodeTypes);
-  const hint = useEditor((s) =>
+  const editorHint = useEditor((s) =>
     !s.graph
       ? s.loadError
         ? "This graph could not be loaded."
@@ -22,6 +24,7 @@ export function Palette() {
         ? "The graph is read-only while a run is active."
         : "Drag onto the canvas, or click to append.",
   );
+  const hint = runMode ? "Viewing a run: switch to the editor to add nodes." : editorHint;
 
   const addByClick = (type: NodeType) => {
     const g = view.editor.getState().graph;

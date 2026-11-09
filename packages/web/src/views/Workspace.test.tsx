@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { linearGraph } from "../test-fixtures";
@@ -22,20 +22,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("workspace layout", () => {
-  it("switches the left panel from the header's Nodes / Runs switch and collapses it from inside the sidebar", async () => {
+  it("shows the node palette on the left (no Nodes / Runs switch) and collapses it from inside the sidebar", async () => {
     const user = userEvent.setup();
     const { container } = renderWorkspace();
     await screen.findByText("Implement");
 
-    const header = container.querySelector("header")!;
-    const runsItem = screen.getByRole("radio", { name: /^Runs/ });
-    expect(header.contains(runsItem)).toBe(true);
-    expect(screen.getByRole("radio", { name: "Nodes" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("radio", { name: /^Runs/ })).toBeNull();
     expect(screen.getByRole("region", { name: "Nodes" }).textContent).toContain("Prompt");
-    await user.click(runsItem);
-    expect(runsItem.getAttribute("aria-checked")).toBe("true");
-    expect(view.ui.getState().leftPanel).toBe("history");
-    expect(screen.getByRole("region", { name: "Runs" }).textContent).toContain("No runs yet.");
 
     const sidebar = container.querySelector('[data-slot="sidebar"]');
     const panel = container.querySelector('[data-slot="sidebar-container"]');
@@ -56,18 +49,7 @@ describe("workspace layout", () => {
     await user.click(expand);
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");
     expect(screen.queryByRole("button", { name: "Expand sidebar" })).toBeNull();
-
-    // Asking for a panel (e.g. "Open run history…" in the run menu) re-expands a collapsed sidebar.
-    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
-    expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
-    act(() => view.ui.getState().setLeftPanel("history"));
-    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
     expect(panel?.hasAttribute("inert")).toBe(false);
-
-    // So does clicking the switch, also on the panel already shown.
-    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
-    await user.click(screen.getByRole("radio", { name: /^Runs/ }));
-    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
   });
 
   it("collapses the inspector from its edge rail and brings it back from the canvas", async () => {
@@ -115,12 +97,11 @@ describe("workspace layout", () => {
     expect(container.querySelector('[data-slot="sidebar"][data-side="left"]')?.getAttribute("data-state")).toBe("expanded");
   });
 
-  it("leaving run mode with the Nodes switch navigates back to the graph", async () => {
-    const user = userEvent.setup();
+  it("keeps the palette while a run is shown, disabled: nothing can be added to a run", async () => {
     view.run.setState({ selectedRunId: "r1" });
     renderWorkspace();
-    expect(screen.getByRole("radio", { name: /^Runs/ }).getAttribute("aria-checked")).toBe("true");
-    await user.click(screen.getByRole("radio", { name: "Nodes" }));
-    expect(view.location.navigations.at(-1)?.path).toBe(`/r/${TEST_REPO_ID}/graphs/g1`);
+    const palette = screen.getByRole("region", { name: "Nodes" });
+    expect(palette.textContent).toContain("Viewing a run: switch to the editor to add nodes.");
+    expect((within(palette).getAllByRole("button").find((b) => /Prompt/.test(b.textContent ?? "")) as HTMLButtonElement).disabled).toBe(true);
   });
 });
