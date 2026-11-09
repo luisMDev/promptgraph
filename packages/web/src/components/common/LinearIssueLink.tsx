@@ -14,10 +14,11 @@ export function IssueStateDot({ state, className }: { state: LinearIssue["state"
 
 /**
  * A linked Linear issue as a link to it (DESIGN §24.3), with its current state from Linear (useLinearIssueState) when
- * known: the title Linear has now, else the snapshot in the graph file. `header`: the diagram's top bar (identifier,
- * title, state); `badge`: an overview card (identifier and state), raised above the card's cover link.
+ * known: the title Linear has now, else the snapshot in the graph file. `canvas`: floating over the top left of the
+ * diagram's canvas (identifier, title, state); `badge`: an overview card (identifier and state), raised above the card's
+ * cover link.
  */
-export function LinearIssueLink({ issue, variant, className }: { issue: IssueRef; variant: "header" | "badge"; className?: string }) {
+export function LinearIssueLink({ issue, variant, className }: { issue: IssueRef; variant: "canvas" | "badge"; className?: string }) {
   const live = useLinearIssueState(issue.id)?.issue ?? null;
   const title = live?.title ?? issue.title;
   const url = live?.url ?? issue.url;
@@ -51,7 +52,7 @@ export function LinearIssueLink({ issue, variant, className }: { issue: IssueRef
       title={tooltip}
       aria-label={label}
       className={cn(
-        "inline-flex h-8 min-w-0 max-w-96 items-center gap-2 rounded-lg px-2.5 text-sm ring-1 ring-border ring-inset hover:bg-accent",
+        "inline-flex h-8 min-w-0 max-w-96 items-center gap-2 rounded-lg bg-card px-2.5 text-sm shadow-soft ring-1 ring-border hover:bg-accent",
         className,
       )}
     >
@@ -69,19 +70,28 @@ export function LinearIssueLink({ issue, variant, className }: { issue: IssueRef
 }
 
 /** How many issues show before "+N" (the rest are in its popover). */
-const VISIBLE = { header: 3, badge: 2 } as const;
+const VISIBLE = { canvas: 3, badge: 2 } as const;
 
 /**
- * A graph's linked issues (DESIGN §24.3). One issue in the header shows in full (identifier, title, state); several
+ * A graph's linked issues (DESIGN §24.3). One issue over the canvas shows in full (identifier, title, state); several
  * show as compact links (identifier and state). The first VISIBLE[variant] show; "+N" opens a popover with the rest.
  */
-export function LinearIssueLinks({ issues, variant, className }: { issues: readonly IssueRef[]; variant: "header" | "badge"; className?: string }) {
-  if (issues.length === 1 && variant === "header") return <LinearIssueLink issue={issues[0]!} variant="header" className={className} />;
+export function LinearIssueLinks({ issues, variant, className }: { issues: readonly IssueRef[]; variant: "canvas" | "badge"; className?: string }) {
+  if (issues.length === 1 && variant === "canvas") return <LinearIssueLink issue={issues[0]!} variant="canvas" className={className} />;
   const shown = issues.slice(0, VISIBLE[variant]);
   const rest = issues.slice(VISIBLE[variant]);
-  const compact = variant === "header" ? "h-6 px-1.5 text-[11px]" : undefined;
+  const compact = variant === "canvas" ? "h-6 px-1.5 text-[11px]" : undefined;
   return (
-    <div className={cn("flex min-w-0 items-center gap-1", variant === "badge" && "relative z-10", className)} aria-label="Linear issues">
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-1",
+        variant === "badge" && "relative z-10",
+        // Over the canvas: one floating card holding the compact links.
+        variant === "canvas" && "h-8 rounded-lg bg-card px-1 shadow-soft ring-1 ring-border",
+        className,
+      )}
+      aria-label="Linear issues"
+    >
       {shown.map((issue) => (
         <LinearIssueLink key={issue.id} issue={issue} variant="badge" className={compact} />
       ))}

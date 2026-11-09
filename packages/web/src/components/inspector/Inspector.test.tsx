@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { nodeRunOf, runDetailOf, testFixLoopGraph } from "../../test-fixtures";
+import { graphOf, nodeRunOf, runDetailOf, testFixLoopGraph } from "../../test-fixtures";
 import { createTestView, type TestView } from "../../store/view/test-view";
 import { Inspector } from "./Inspector";
 
@@ -106,5 +106,27 @@ describe("inspector (phase 2)", () => {
     expect(useEditorStore.getState().graph!.edges.find((e) => e.id === "e1")!.when).toBe("always");
     fireEvent.click(screen.getByLabelText("Loop back-edge"));
     expect(useEditorStore.getState().graph!.edges.find((e) => e.id === "e1")!.loop).toEqual({ maxIterations: 3, onExhausted: "fail" });
+  });
+
+  it("renames the graph from the graph settings on Enter; Escape and an empty name restore it", async () => {
+    const user = userEvent.setup();
+    useEditorStore.setState({ graph: graphOf({ id: "g1", name: "Original" }), graphId: "g1", loading: false, loadError: null, activeRunId: null });
+    render(<Inspector />);
+    const name = "Original";
+    const field = screen.getByRole("textbox", { name: /^Name/ });
+    expect((field as HTMLInputElement).value).toBe(name);
+
+    await user.clear(field);
+    await user.type(field, "Draft{Escape}");
+    expect(useEditorStore.getState().graph!.name).toBe(name);
+    expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe(name);
+
+    await user.clear(screen.getByRole("textbox", { name: /^Name/ }));
+    await user.tab();
+    expect(useEditorStore.getState().graph!.name).toBe(name);
+
+    await user.clear(screen.getByRole("textbox", { name: /^Name/ }));
+    await user.type(screen.getByRole("textbox", { name: /^Name/ }), "Renamed graph{Enter}");
+    expect(useEditorStore.getState().graph!.name).toBe("Renamed graph");
   });
 });

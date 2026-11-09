@@ -1064,7 +1064,8 @@ components/home/FolderPicker.tsx PathInput (path combobox with folder suggestion
 views/RoutedView.tsx             the view of the location: Home, NotFound, or RepoRoot (RepoRemoved while removed, else RepoView)
 views/RepoView.tsx               one view of a repository: own run + UI stores, shared editor store, repo subscription, route sync;
                                  active from the TabContext (prop overrides; true outside tabs); reports its title and editor to the tab
-views/Workspace.tsx              editor / run layout (header, sidebars, canvas, drawer, dialogs); report route replaces the canvas row
+views/Workspace.tsx              editor / run layout (banners, sidebars, canvas, drawer, dialogs; no top bar: CanvasOverlay floats the
+                                 run menu and linked issues top left, run controls top right); report route replaces the canvas row
 views/NotFound.tsx               FullScreenMessage, NotFound (link Home), RepoRemoved (Add again / Close tab; outside tabs: Home)
 components/tabs/TabStrip.tsx     role=tablist, roving tabindex (arrows, Home/End; Enter/Space activate, Delete closes); per tab: title,
                                  attention dot ("Needs attention"), × ("Close <title>"); middle-click closes; "+" (New tab) opens Home
@@ -1095,7 +1096,7 @@ components/tabs/use-tab-title.ts useTabTitle(tab) (daemon summary name or cache 
 components/common/SessionBanners Reconnecting / Unreachable / version banners, SignedOut full screen. Prop `bridge`: in the desktop
                                  window SessionBanners runs useAutoReloginWhenUnreachable and the Unreachable banner has Retry
                                  (relogin); SignedOut calls relogin(current path) once by itself, then shows "Sign in again"
-components/header/               graph selector (links), Run/Cancel, pending approvals (links), run selector (links), run cost total
+components/header/               Run/Cancel, pending approvals (links), run selector (links, floated over the canvas), run cost total
 components/palette/              draggable node types (prompt, command, shell, commit, pr, approval, merge; condition when phase 2)
 components/canvas/               React Flow canvas: snap grid, minimap, edge creation (error/true/false ports in phase 2), read-only in run mode
 components/nodes/                node cards: status colour (§8.2), elapsed time, activity, lane badge, tokens/cost, validation outline + tooltip
@@ -1125,7 +1126,7 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   available repositories' `GET …/graph-overviews`, search in `useOverviewQuery`, `groupItems` recent/repo/none,
   `pg.overview.group`), `OverviewLayout` (`RepoSidebar`: `useSidebarPrefs {order, favorites, width}`, the pure `sidebar-order` `arrangeRepos` / `moveRepo` / `clampSidebarWidth`, a vertical drag built on the tab strip's `tabDragTarget` / `tabGap` / `tabShift`; and `GraphThumbnail` cards) and the dialogs of
   `components/home/RepoDialogs` (`AddRepositoryForm`/`Dialog`, `RemoveRepoDialog`, `NewGraphDialog({repos?, repoId, onClose,
-  create?, takenIds?})`: also the editor's new-graph dialog (GraphSelector, Workspace's empty state) with `create` =
+  create?, takenIds?})`: also the editor's new-graph dialog (Workspace's empty state) with `create` =
   `createGraph(view, {name, issues})` and `takenIds` for the file hint); `deleteGraph` of the shown graph navigates there.
 - Linear (DESIGN §24): `store/linear-store` (`useLinearStore {status, load(force?), connect(apiKey), disconnect()}`,
   `resetLinearStore` in `resetGlobals`), `components/common/GraphNameField` (`{name, issues}`: the name, auto-filled from the first issue until typed, and
@@ -1135,15 +1136,15 @@ The UI is English. Only `errors` disable Run; `warnings` are shown but non-block
   (`LINEAR_STATE_GROUPS`, `loadStateGroups`, `pg.linear.states`), checkable results, selection across searches, Add / Cancel;
   at most `MAX_GRAPH_ISSUES`; `Modal` (`size?: "md" | "lg" | "xl"`)
   keeps the dialog open on Escape while a `role=combobox` is `aria-expanded`), `components/settings/LinearSettingsDialog`
-  (Settings → Linear…), `store/linear-issue-store` (`useLinearIssueState(id)`, `requestIssueState`: ids of one tick batched into `daemonApi.linearIssueStates`, answers kept `LINEAR_STATE_TTL_MS`, nothing asked while not connected, `resetLinearIssueStore(clock?)` in `resetGlobals`), `components/common/LinearIssueLink({issue, variant: "header" | "badge"})` and `LinearIssueLinks({issues, variant})` (one issue in the header in full; otherwise compact links, 3 in the header / 2 on cards, then "+N" with a popover; in `Header` and on overview cards), `LinkedIssues` (the picker) + `EditorState.setIssues(issues)` in the inspector.
+  (Settings → Linear…), `store/linear-issue-store` (`useLinearIssueState(id)`, `requestIssueState`: ids of one tick batched into `daemonApi.linearIssueStates`, answers kept `LINEAR_STATE_TTL_MS`, nothing asked while not connected, `resetLinearIssueStore(clock?)` in `resetGlobals`), `components/common/LinearIssueLink({issue, variant: "canvas" | "badge"})` and `LinearIssueLinks({issues, variant})` (one issue over the canvas in full; otherwise compact links in one floating card, 3 over the canvas / 2 on cards, then "+N" with a popover; in Workspace's `CanvasOverlay` and on overview cards), `LinkedIssues` (the picker) + `EditorState.setIssues(issues)` in the inspector.
 - Not found: repo info 404, editor `notFound`
   (graph 404), run `detailNotFound` (404), or a nodeRun id missing from the loaded run. A repo info 409 / network error
   shows a retryable message.
-- Navigation: GraphSelector and PendingApprovals items are `DropdownMenu(Radio)Item asChild` + `<Link>` (the
+- Navigation: PendingApprovals items are `DropdownMenu(Radio)Item asChild` + `<Link>` (the
   vendored `DropdownMenuRadioItem` supports `asChild` via `Slot.Slottable`); a plain click on a pending approval also
   opens its dialog in this view. RunSelector is a Popover with a list: Editor and run rows are `<Link>`s (↑/↓ move
   between them), each run row has Report (a link) and Delete (ConfirmDialog → `deleteRun(view, run)`). Report, Banners (View live run, Back to
-  editor), Header (logo and repo name → Home), RunReport (close and Show on canvas → run, steps/stalls → node run) are
+  editor), RunReport (close and Show on canvas → run, steps/stalls → node run) are
   links. Canvas run mode: a node click `showNodeRun` + `navigate(nodeRun route, {replace})`; a node without a node run
   or a pane click selects/deselects and replaces with the run route. Leaving run mode (Nodes tab) navigates to the graph.
   `startRun` shows the detail (`showRun`) and navigates to the run. Opening a graph with an active run stays on the

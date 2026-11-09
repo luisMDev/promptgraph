@@ -231,8 +231,8 @@ describe("tab views: shared stores (DESIGN §13.4)", () => {
     const editor = findEditorStore(REPO, "g1")!;
     act(() => editor.getState().rename("Edited in two"));
     // Both views render the same store.
-    expect(within(viewOf(one)).getByRole("button", { name: /Edited in two/, hidden: true })).toBeTruthy();
-    expect(within(viewOf(two)).getByRole("button", { name: /Edited in two/ })).toBeTruthy();
+    expect(within(viewOf(one)).getByDisplayValue("Edited in two")).toBeTruthy();
+    expect(within(viewOf(two)).getByDisplayValue("Edited in two")).toBeTruthy();
     act(() => s().close(two));
     expect(findEditorStore(REPO, "g1")).toBe(editor);
     expect(puts()).toEqual([]);

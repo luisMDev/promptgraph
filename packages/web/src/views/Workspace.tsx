@@ -6,8 +6,8 @@ import { Banners } from "../components/common/Banners";
 import { NewGraphDialog } from "../components/home/RepoDialogs";
 import { Icons } from "../components/common/icons";
 import { Button } from "../components/common/ui";
-import { Header } from "../components/header/Header";
-import { RunControls, SaveIndicator } from "../components/header/RunControls";
+import { LinearIssueLinks } from "../components/common/LinearIssueLink";
+import { RunControls, RunSelector, SaveIndicator } from "../components/header/RunControls";
 import { Inspector } from "../components/inspector/Inspector";
 import { Palette } from "../components/palette/Palette";
 import { RunReport, useAutoOpenReport } from "../components/report/RunReport";
@@ -17,6 +17,7 @@ import { Sidebar, SidebarContent, SidebarHeader, SidebarProvider, SidebarRail } 
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import type { RepoRoute } from "../lib/router/routes";
 import { createGraph } from "../store/view/actions";
+import { Link } from "../lib/router/Link";
 import { useEditor, useRepo, useRun, useView, useViewUi } from "../store/view/context";
 
 /** Lazy: the dialog pulls in diff2html, which the rest of the app does not need. */
@@ -24,8 +25,9 @@ const ApprovalDialog = lazy(() => import("../components/approval/ApprovalDialog"
 const DiffDialog = lazy(() => import("../components/approval/DiffDialog").then((m) => ({ default: m.DiffDialog })));
 
 /**
- * Graph editor and run views (§13): header / palette | canvas | inspector / terminal drawer. The report route
- * replaces the canvas row (which stays mounted) with the run report.
+ * Graph editor and run views (§13): banners / palette | canvas | inspector / terminal drawer. There is no top bar:
+ * graphs are picked in the overview (§13.3), and the run menu and the linked issues float over the canvas
+ * (CanvasOverlay). The report route replaces the canvas row (which stays mounted) with the run report.
  */
 export function Workspace({ route }: { route: RepoRoute }) {
   const ui = useView().ui;
@@ -46,11 +48,10 @@ export function Workspace({ route }: { route: RepoRoute }) {
       className="min-h-0 flex-1 flex-col bg-background text-foreground"
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
-      <Header />
       <Banners />
       {reportRunId && <RunReport runId={reportRunId} />}
       {/* `relative` + `overflow-hidden`: the left Sidebar is positioned against this row (not the viewport), so it
-          always sits below the header and any banners, and slides out of view when collapsed. */}
+          always sits below any banners, and slides out of view when collapsed. */}
       <div className={`relative flex min-h-0 flex-1 overflow-hidden ${reportRunId ? "hidden" : ""}`}>
         <LeftSidebar />
         <SidebarProvider
@@ -123,17 +124,23 @@ function SidebarToggle({ side, label, className }: { side: "left" | "right"; lab
 const FLOATING = "bg-card shadow-soft ring-1 ring-border";
 
 /**
- * Controls floating over the top corners of the canvas: the left sidebar's expand button while it is collapsed, and
- * at the top right the autosave indicator, the run controls (problems, Run / Cancel, …) and the inspector's expand
- * button. The save indicator sits left of Run so that appearing and disappearing never shifts the Run button.
- * The row itself lets pointer events through, so only its buttons cover the canvas.
+ * Controls floating over the top corners of the canvas. Top left: the left sidebar's expand button while it is
+ * collapsed, the run menu (the editor or one of the graph's runs, §13.2) and the graph's linked Linear issues (§24.3).
+ * Top right: the autosave indicator, the run controls (problems, Run / Cancel, …) and the inspector's expand button.
+ * The save indicator sits left of Run so that appearing and disappearing never shifts the Run button.
+ * The rows themselves let pointer events through, so only their buttons cover the canvas.
  */
-function CanvasOverlay() {
+export function CanvasOverlay() {
   const sidebarOpen = useViewUi((s) => s.sidebarOpen);
   const inspectorOpen = useViewUi((s) => s.inspectorOpen);
+  const issues = useEditor((s) => s.graph?.issues);
   return (
     <>
-      {!sidebarOpen && <SidebarToggle side="left" label="Expand sidebar" className={`absolute top-2 left-2 z-10 ${FLOATING}`} />}
+      <div className="pointer-events-none absolute top-2 left-2 z-10 flex max-w-[calc(100%-34rem)] min-w-0 items-center gap-2 *:pointer-events-auto">
+        {!sidebarOpen && <SidebarToggle side="left" label="Expand sidebar" className={FLOATING} />}
+        <RunSelector className={FLOATING} />
+        {issues?.length ? <LinearIssueLinks issues={issues} variant="canvas" className="min-w-0" /> : null}
+      </div>
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-2 *:pointer-events-auto">
         <SaveIndicator />
         <RunControls />
@@ -198,7 +205,13 @@ function CanvasArea() {
           <Icons.alert className="mx-auto text-2xl text-red-600" />
           <p className="text-sm font-medium text-red-700">This graph cannot be loaded</p>
           <pre className="rounded-md bg-muted p-3 text-left text-xs whitespace-pre-wrap text-muted-foreground">{loadError}</pre>
-          <p className="text-xs text-muted-foreground">Fix the JSON file in .promptgraph/graphs/ or delete it from the graph menu.</p>
+          <p className="text-xs text-muted-foreground">
+            Fix the JSON file in .promptgraph/graphs/ or delete it from{" "}
+            <Link to={webRoutes.repo(view.repoId)} className="underline underline-offset-2 hover:text-foreground">
+              the repository&apos;s graphs
+            </Link>
+            .
+          </p>
         </div>
       </Centered>
     );
@@ -207,10 +220,17 @@ function CanvasArea() {
     return (
       <Centered>
         <div className="space-y-3 text-center">
-          <p className="text-sm text-muted-foreground">{graphCount ? "Select a graph from the menu above." : "No graphs in this repository yet."}</p>
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            <Icons.plus /> New graph
-          </Button>
+          <p className="text-sm text-muted-foreground">{graphCount ? "No graph is open." : "No graphs in this repository yet."}</p>
+          <div className="flex items-center justify-center gap-2">
+            {graphCount > 0 && (
+              <Link to={webRoutes.repo(view.repoId)} className="inline-flex h-8 items-center gap-2 rounded-lg px-3 text-sm ring-1 ring-border hover:bg-accent">
+                <Icons.layers /> All graphs
+              </Link>
+            )}
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              <Icons.plus /> New graph
+            </Button>
+          </div>
         </div>
         {creating && <NewGraphDialog repoId={view.repoId} create={(v) => createGraph(view, v)} onClose={() => setCreating(false)} />}
       </Centered>

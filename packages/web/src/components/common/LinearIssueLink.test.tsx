@@ -46,7 +46,7 @@ describe("LinearIssueLink (DESIGN §24.3)", () => {
     install(CONNECTED);
     render(
       <>
-        <LinearIssueLink issue={A} variant="header" />
+        <LinearIssueLink issue={A} variant="canvas" />
         <LinearIssueLink issue={A} variant="badge" />
         <LinearIssueLink issue={B} variant="badge" />
       </>,
@@ -78,7 +78,7 @@ describe("LinearIssueLink (DESIGN §24.3)", () => {
 
   it("falls back to the graph file's snapshot when Linear is not connected or fails", async () => {
     install({ connected: false, viewer: null, workspace: null, error: null });
-    render(<LinearIssueLink issue={A} variant="header" />);
+    render(<LinearIssueLink issue={A} variant="canvas" />);
     const link = screen.getByRole("link", { name: "ENG-1 in Linear" });
     expect(link.textContent).toContain("Old title");
     await new Promise((r) => setTimeout(r, 10));
@@ -88,7 +88,7 @@ describe("LinearIssueLink (DESIGN §24.3)", () => {
     resetGlobals();
     resetLinearIssueStore(() => clock);
     install(CONNECTED, () => json(502, { error: "down", code: "linear_unavailable" }));
-    render(<LinearIssueLink issue={A} variant="header" />);
+    render(<LinearIssueLink issue={A} variant="canvas" />);
     await waitFor(() => expect(stateCalls()).toHaveLength(1));
     expect(screen.getByRole("link", { name: "ENG-1 in Linear" }).textContent).toContain("Old title");
   });

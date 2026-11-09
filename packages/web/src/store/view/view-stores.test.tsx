@@ -57,7 +57,7 @@ describe("per-view stores (DESIGN §13.4)", () => {
     const editor = findEditorStore(REPO, "g1")!;
     act(() => editor.getState().rename("Renamed"));
     // Both views show the edit: they render the same store.
-    expect(screen.getAllByRole("button", { name: /Renamed/ })).toHaveLength(2);
+    expect(screen.getAllByDisplayValue("Renamed")).toHaveLength(2);
     await waitFor(() => expect(puts()).toHaveLength(1), { timeout: AUTOSAVE_DELAY_MS * 4 });
     await new Promise((r) => setTimeout(r, AUTOSAVE_DELAY_MS + 100));
     expect(puts()).toEqual([`PUT /api/repos/${REPO}/graphs/g1?baseHash=h0`]);

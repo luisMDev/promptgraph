@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDateTime, formatDuration } from "../../lib/format";
 import { useNow } from "../../lib/use-now";
@@ -238,7 +239,7 @@ export function SaveIndicator() {
  * duration, cost and what waits for the user, with Report and Delete (finished runs only, after a confirmation). A
  * popover with a list rather than a menu, so each row can hold its own buttons; ↑/↓ move between the rows.
  */
-export function RunSelector() {
+export function RunSelector({ className }: { className?: string }) {
   const view = useView();
   const runs = useRun((s) => s.runs);
   const selectedRunId = useRun((s) => s.selectedRunId);
@@ -265,7 +266,7 @@ export function RunSelector() {
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button className="gap-2 px-2.5 font-normal" aria-haspopup="dialog">
+          <Button className={cn("gap-2 px-2.5 font-normal", className)} aria-haspopup="dialog">
             {selected ? (
               <>
                 <StatusDot className={RUN_STATUS_STYLE[selected.status].dot} />

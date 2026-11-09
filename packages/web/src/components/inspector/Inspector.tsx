@@ -11,7 +11,7 @@ import {
   type SourcePort,
   nodeDisplayLabel,
 } from "@promptgraph/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatDuration } from "../../lib/format";
 import { DEFAULT_LOOP, setEdgeLoop, setEdgeWhen } from "../../lib/graph-ops";
 import { NODE_TYPE_META } from "../../lib/node-meta";
@@ -73,6 +73,7 @@ function EditInspector() {
         <ValidationList validation={validation} />
       </Section>
       <Section title="Graph settings">
+        <GraphNameField key={graph.name} name={graph.name} graphId={graph.id} disabled={readOnly} onRename={(name) => view.editor.getState().rename(name)} />
         <LinkedIssues issues={graph.issues ?? []} disabled={readOnly} onChange={(issues) => view.editor.getState().setIssues(issues)} />
         <GraphSettingsForm graphId={graph.id} settings={graph.settings} disabled={readOnly} />
       </Section>
@@ -323,5 +324,38 @@ function RunOverview() {
       <LaneLegend />
       <UsageSection usage={run.usage} billingMode={run.billingMode} title={`Usage · ${costLabel(run.usage.costUsd, run.billingMode).text}`} />
     </>
+  );
+}
+
+/**
+ * The graph's name (§13.2: there is no graph menu, so it is renamed here). Saved on blur or Enter, so one rename is one
+ * undo step; Escape or an empty value restores the current name. The file name (id) stays the same.
+ */
+function GraphNameField({ name, graphId, disabled, onRename }: { name: string; graphId: string; disabled: boolean; onRename: (name: string) => void }) {
+  const [value, setValue] = useState(name);
+  // Escape blurs the field too: the blur that follows must not save the value typed before it.
+  const cancelled = useRef(false);
+  const commit = () => {
+    const cancel = cancelled.current;
+    cancelled.current = false;
+    if (!cancel && value.trim() && value.trim() !== name) onRename(value);
+    else setValue(name);
+  };
+  return (
+    <Field label="Name" hint={<>File: <code className="text-foreground">{graphId}.json</code></>}>
+      <Input
+        value={value}
+        disabled={disabled}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "Escape") {
+            cancelled.current = true;
+            e.currentTarget.blur();
+          }
+        }}
+      />
+    </Field>
   );
 }

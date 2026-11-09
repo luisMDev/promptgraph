@@ -2,11 +2,11 @@
 import { cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { graphOf } from "../../test-fixtures";
-import { createTestView } from "../../store/view/test-view";
-import { resetLinearIssueStore } from "../../store/linear-issue-store";
-import { resetLinearStore } from "../../store/linear-store";
-import { Header } from "./Header";
+import { graphOf } from "../test-fixtures";
+import { createTestView } from "../store/view/test-view";
+import { resetLinearIssueStore } from "../store/linear-issue-store";
+import { resetLinearStore } from "../store/linear-store";
+import { CanvasOverlay } from "./Workspace";
 
 const ISSUE = { provider: "linear", id: "id-9", identifier: "ENG-9", title: "Ship it", url: "https://linear.app/acme/issue/ENG-9" } as const;
 
@@ -28,11 +28,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Header (DESIGN §24.3)", () => {
+describe("canvas overlay: run menu and linked issues (DESIGN §13.2, §24.3)", () => {
   it("shows the linked issue with its current state as a link to Linear", async () => {
     const view = createTestView({ graphId: "g1", graphs: [], path: "/r/repo-0123abcd/graphs/g1" });
     view.editor.setState({ graph: { ...graphOf({ id: "g1", name: "ENG-9 Ship it" }), issues: [ISSUE] }, loading: false, loadError: null, activeRunId: null });
-    view.render(<Header />);
+    view.render(<CanvasOverlay />);
     const link = await screen.findByRole("link", { name: "ENG-9 in Linear: In Review" });
     expect(link.getAttribute("href")).toBe(ISSUE.url);
   });
@@ -41,7 +41,7 @@ describe("Header (DESIGN §24.3)", () => {
     const issues = [1, 2, 3, 4].map((n) => ({ ...ISSUE, id: `id-${n}`, identifier: `ENG-${n}`, url: `https://linear.app/acme/issue/ENG-${n}` }));
     const view = createTestView({ graphId: "g1", graphs: [], path: "/r/repo-0123abcd/graphs/g1" });
     view.editor.setState({ graph: { ...graphOf({ id: "g1", name: "Several" }), issues }, loading: false, loadError: null, activeRunId: null });
-    view.render(<Header />);
+    view.render(<CanvasOverlay />);
     const group = screen.getByLabelText("Linear issues");
     expect(screen.getAllByRole("link", { name: /^ENG-\d in Linear/ }).map((a) => a.getAttribute("href"))).toEqual(issues.slice(0, 3).map((i) => i.url));
     await userEvent.setup().click(screen.getByRole("button", { name: "1 more Linear issues" }));
@@ -49,10 +49,18 @@ describe("Header (DESIGN §24.3)", () => {
     expect(group).toBeTruthy();
   });
 
+  it("shows the run menu (Editor) at the top left and no graph menu", () => {
+    const view = createTestView({ graphId: "g1", graphs: [], path: "/r/repo-0123abcd/graphs/g1" });
+    view.editor.setState({ graph: graphOf({ id: "g1", name: "Plain" }), loading: false, loadError: null, activeRunId: null });
+    view.render(<CanvasOverlay />);
+    expect(screen.getByRole("button", { name: /Editor/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Plain/ })).toBeNull();
+  });
+
   it("shows nothing for a graph without an issue", () => {
     const view = createTestView({ graphId: "g1", graphs: [], path: "/r/repo-0123abcd/graphs/g1" });
     view.editor.setState({ graph: graphOf({ id: "g1", name: "Plain" }), loading: false, loadError: null, activeRunId: null });
-    view.render(<Header />);
+    view.render(<CanvasOverlay />);
     expect(screen.queryByRole("link", { name: /in Linear/ })).toBeNull();
   });
 });
