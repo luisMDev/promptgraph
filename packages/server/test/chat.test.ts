@@ -42,7 +42,9 @@ describe("buildChatArgs", () => {
     expect(after("--plugin-dir")).toBe("/opt/pg/plugins/promptgraph");
     expect(args).not.toContain("--mcp-config");
     expect(after("--append-system-prompt")).toBe(CHAT_SYSTEM_PROMPT);
-    expect(args.slice(args.indexOf("--disallowedTools") + 1, args.indexOf("--allowedTools"))).toEqual(["AskUserQuestion"]);
+    // AskUserQuestion is answered by the panel's question card (§21.4), so nothing is disallowed.
+    expect(args).not.toContain("--disallowedTools");
+    expect(CHAT_SYSTEM_PROMPT).toMatch(/AskUserQuestion/);
     expect(args).not.toContain("--model");
     expect(args.join(" ")).not.toMatch(/bypassPermissions|dangerously/);
     const tools = args.slice(args.indexOf("--allowedTools") + 1);
@@ -230,6 +232,19 @@ describe("ChatNormalizer", () => {
     expect(truncateToolResult("short")).toBe("short");
   });
 
+  it("attaches AskUserQuestion answers from tool_use_result (stream) and toolUseResult (transcript)", () => {
+    const content = [{ type: "tool_result", tool_use_id: "tq", content: 'Your questions have been answered: "How complex?"="Simple".' }];
+    const answers = { "How complex?": "Simple" };
+    for (const extra of [{ tool_use_result: { questions: [], answers } }, { toolUseResult: { questions: [], answers } }]) {
+      const [event] = make().handle({ type: "user", message: { role: "user", content }, ...extra });
+      expect(event).toMatchObject({ kind: "item", item: { kind: "tool_result", toolUseId: "tq", answers } });
+    }
+    const [plain] = make().handle({ type: "user", message: { role: "user", content }, tool_use_result: "text result" });
+    expect(plain).toMatchObject({ kind: "item", item: { kind: "tool_result" } });
+    expect((plain as { item: object }).item).not.toHaveProperty("answers");
+    expect(summarizeToolUse("AskUserQuestion", { questions: [{}, {}] })).toBe("AskUserQuestion · 2 questions");
+  });
+
   it("reports a failed promptgraph MCP server once, but not a pending one", () => {
     const failed = make();
     const events = all(failed, [initLine("s", "failed"), initLine("s", "failed")]);
@@ -252,7 +267,7 @@ describe("ChatNormalizer", () => {
     ).toEqual([
       {
         kind: "permission",
-        item: { id: "id1", ts: 1000, kind: "permission_request", requestId: "req-1", toolName: "Bash", displayName: "Bash", input: { command: "ls" }, description: "List" },
+        item: { id: "id1", ts: 1000, kind: "permission_request", requestId: "req-1", toolName: "Bash", displayName: "Bash", input: { command: "ls" }, description: "List", toolUseId: "tu" },
       },
     ]);
     expect(norm.handle({ type: "control_request", request_id: "r2", request: { subtype: "hook_callback" } })).toEqual([
@@ -453,6 +468,138 @@ describe("ChatManager", () => {
     const written = child.written.length;
     manager.interrupt("sess-1");
     expect(child.written).toHaveLength(written);
+  });
+
+  function waitingOnQuestion(): FakeChatChild {
+    manager.create();
+    manager.send("sess-1", "plan a landing page", CONTEXT);
+    const child = fake.last();
+    child.emit(initLine("sess-1"), {
+      type: "control_request",
+      request_id: "q-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        input: { questions: [{ question: "How complex?", header: "Complexity", multiSelect: false, options: [{ label: "Simple" }, { label: "Complex" }] }] },
+        tool_use_id: "tu-q",
+        requires_user_interaction: true,
+      },
+    });
+    return child;
+  }
+
+  it("answers AskUserQuestion with updatedInput.answers", () => {
+    const child = waitingOnQuestion();
+    expect(manager.get("sess-1")!.pendingPermissions).toMatchObject([{ requestId: "q-1", toolName: "AskUserQuestion" }]);
+    manager.answerPermission("sess-1", "q-1", true, undefined, { "How complex?": "Simple" });
+    expect(child.writtenJson.at(-1)).toEqual({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "q-1",
+        response: {
+          behavior: "allow",
+          updatedInput: {
+            questions: [{ question: "How complex?", header: "Complexity", multiSelect: false, options: [{ label: "Simple" }, { label: "Complex" }] }],
+            answers: { "How complex?": "Simple" },
+          },
+        },
+      },
+    });
+    expect(items().at(-1)).toMatchObject({ kind: "permission_resolved", requestId: "q-1", allowed: true, by: "user" });
+  });
+
+  it("refuses an AskUserQuestion allow without answers", () => {
+    waitingOnQuestion();
+    expect(() => manager.answerPermission("sess-1", "q-1", true)).toThrow(/needs the user's answers/);
+    expect(manager.get("sess-1")!.pendingPermissions).toHaveLength(1);
+  });
+
+  it("refuses answers for a tool other than AskUserQuestion", () => {
+    const child = waitingOnPermission();
+    expect(() => manager.answerPermission("sess-1", "perm-1", true, undefined, { a: "b" })).toThrow(/only accepted/);
+    expect(child.writtenJson.filter((l) => (l as { type?: string }).type === "control_response")).toEqual([]);
+  });
+
+  it("tells Claude to use defaults when the questions are skipped", () => {
+    const child = waitingOnQuestion();
+    manager.answerPermission("sess-1", "q-1", false);
+    expect(child.writtenJson.at(-1)).toMatchObject({ response: { response: { behavior: "deny", message: expect.stringMatching(/skipped these questions/) } } });
+  });
+
+  describe("linked issues", () => {
+    const ISSUES = [{ identifier: "ENG-1", title: "Login", url: "https://linear.app/x/issue/ENG-1", state: "Todo", description: "Build the login page." }];
+    const withIssues: ChatContext = { ...CONTEXT, issues: ["ENG-1"] };
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+
+    it("tells Claude about the linked issues once, and again when they change", async () => {
+      let issues = ISSUES;
+      const linkedIssues = vi.fn(async () => ({ issues }));
+      manager = makeManager({ linkedIssues });
+      manager.create();
+      manager.send("sess-1", "plan it", withIssues);
+      expect(kinds()).toEqual(["user"]);
+      await flush();
+      const child = fake.last();
+      expect(linkedIssues).toHaveBeenCalledWith("landing");
+      expect(userContent(child, 0)).toMatch(/^<promptgraph-context [^\n]*issues="ENG-1"[^\n]*\/>\n<promptgraph-issues graph="landing">[\s\S]*Build the login page\.[\s\S]*<\/promptgraph-issues>\n\nplan it$/);
+      child.emit(initLine("sess-1"), resultLine("success", 0.01));
+      manager.send("sess-1", "again", withIssues);
+      await flush();
+      expect(userContent(child, 1)).not.toContain("<promptgraph-issues");
+      child.emit(resultLine("success", 0.02));
+      issues = [...ISSUES, { identifier: "ENG-2", title: "Docs", url: "https://linear.app/x/issue/ENG-2", state: "Todo", description: "" }];
+      manager.send("sess-1", "and now", { ...CONTEXT, issues: ["ENG-1", "ENG-2"] });
+      await flush();
+      expect(userContent(child, 2)).toContain('<issue identifier="ENG-2"');
+    });
+
+    it("does not look issues up for a graph without links, and keeps turn order", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const linkedIssues = vi.fn(async () => {
+        await gate;
+        return { issues: ISSUES };
+      });
+      manager = makeManager({ linkedIssues });
+      manager.create();
+      manager.send("sess-1", "first", withIssues);
+      manager.send("sess-1", "second", CONTEXT);
+      await flush();
+      // Only the turn with linked issues looks them up; the second one waits for the first one's issues.
+      expect(linkedIssues).toHaveBeenCalledTimes(1);
+      expect(fake.children).toHaveLength(0);
+      release();
+      await flush();
+      await flush();
+      const child = fake.last();
+      expect(userContent(child, 0)).toMatch(/first$/);
+      child.emit(initLine("sess-1"), resultLine("success", 0.01));
+      expect(userContent(child, 1)).toMatch(/second$/);
+    });
+
+    it("drops a turn still waiting for its issues when stopped", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      manager = makeManager({ linkedIssues: async () => (await gate, { issues: ISSUES }) });
+      manager.create();
+      manager.send("sess-1", "plan it", withIssues);
+      expect(manager.get("sess-1")!.session.status).toBe("thinking");
+      manager.interrupt("sess-1");
+      release();
+      await flush();
+      expect(fake.children).toHaveLength(0);
+      expect(manager.get("sess-1")!.session.status).not.toBe("thinking");
+    });
+
+    it("still sends the turn when the lookup fails", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      manager = makeManager({ linkedIssues: async () => Promise.reject(new Error("graph not found")) });
+      manager.create();
+      manager.send("sess-1", "plan it", withIssues);
+      await flush();
+      expect(userContent(fake.last(), 0)).toMatch(/\/>\n\nplan it$/);
+    });
   });
 
   it("lists every open permission prompt in the detail, oldest first", () => {

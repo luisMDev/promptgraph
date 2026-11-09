@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  ASK_USER_QUESTION_TOOL,
+  buildChatIssuesBlock,
   CHAT_TITLE_MAX_CHARS,
   withChatContext,
   type ChatContext,
+  type ChatIssue,
   type ChatItem,
   type ChatPermissionRequestItem,
   type ChatSessionDetail,
@@ -59,6 +62,17 @@ export interface ChatManagerOptions {
   newSessionId?: () => string;
   /** Subscription usage limits reported by a chat process (§23.3; account-wide, so handed to the daemon). */
   onRateLimit?: (info: RateLimitInfo) => void;
+  /**
+   * The Linear issues a graph is linked to, with their state and description when Linear answers (§21.3, §24). The
+   * chat tells Claude about them once per session and again when the set changes. Absent: no issue context.
+   */
+  linkedIssues?: (graphId: string) => Promise<LinkedIssues>;
+}
+
+/** What linkedIssues resolves to; `note` explains missing descriptions (Linear not connected, unavailable). */
+export interface LinkedIssues {
+  issues: ChatIssue[];
+  note?: string;
 }
 
 /** A chat:* message before publish() stamps the repository on it. */
@@ -104,6 +118,12 @@ interface ChatSessionState {
   /** Deleted: late output of its closing process is ignored. */
   deleted: boolean;
   nextItem: number;
+  /** Turns whose linked issues are being looked up, chained so turns keep their order; null when none. */
+  prep: Promise<void> | null;
+  /** Bumped by interrupt: turns still being prepared are dropped. */
+  prepEpoch: number;
+  /** "<graphId>:<issue ids>" of the issues Claude was last told about in this session. */
+  issuesSent: string | null;
 }
 
 /**
@@ -189,7 +209,56 @@ export class ChatManager {
       session.record = this.opts.store.updateChatSession(id, {});
     }
     this.pushItem(session, { id: this.itemId(session), ts: this.now(), kind: "user", text });
-    session.queued.push(userTurnLine(withChatContext(context, text)));
+    const graphId = context.graphId;
+    const resolve = this.opts.linkedIssues;
+    if (!resolve || !graphId || (!context.issues?.length && session.issuesSent === null)) {
+      const line = userTurnLine(withChatContext(context, text));
+      if (session.prep) this.chainPrep(session, async () => line);
+      else this.enqueue(session, line);
+      return;
+    }
+    // The linked issues are looked up before the turn is written; meanwhile the chat shows Claude working.
+    if (session.status === "idle" || session.status === "exited" || session.status === "error") this.setStatus(session, "thinking");
+    this.chainPrep(session, async () => userTurnLine(withChatContext(context, text, await this.issuesBlock(session, graphId, resolve))));
+  }
+
+  /** Runs `build` after the turns already being prepared, then queues its line (unless interrupted or deleted). */
+  private chainPrep(session: ChatSessionState, build: () => Promise<string>): void {
+    const epoch = session.prepEpoch;
+    const prep: Promise<void> = (session.prep ?? Promise.resolve())
+      .then(build)
+      .then((line) => {
+        if (session.deleted || this.closing || session.prepEpoch !== epoch) return;
+        this.enqueue(session, line);
+      })
+      .catch((err: unknown) => console.error(`[chat] ${session.record.id}: could not prepare a turn: ${errorMessage(err)}`))
+      .finally(() => {
+        if (session.prep === prep) session.prep = null;
+      });
+    session.prep = prep;
+  }
+
+  /**
+   * The issues block for this turn: the full block when the graph's linked issues differ from what Claude was last
+   * told in this session, else "". A lookup failure gives "" (the turn is still sent).
+   */
+  private async issuesBlock(session: ChatSessionState, graphId: string, resolve: (graphId: string) => Promise<LinkedIssues>): Promise<string> {
+    let linked: LinkedIssues;
+    try {
+      linked = await resolve(graphId);
+    } catch (err) {
+      console.error(`[chat] ${session.record.id}: could not read the linked issues of ${graphId}: ${errorMessage(err)}`);
+      return "";
+    }
+    const key = linked.issues.length ? `${graphId}:${linked.issues.map((i) => i.identifier).join(",")}` : null;
+    if (key === session.issuesSent) return "";
+    session.issuesSent = key;
+    return key ? buildChatIssuesBlock(graphId, linked.issues, linked.note) : "";
+  }
+
+  /** Queues a prepared user turn and writes it, spawning (or resuming) the process when there is none. */
+  private enqueue(session: ChatSessionState, line: string): void {
+    session.queued.push(line);
     const proc = session.proc;
     if (proc?.stopping) {
       // The previous process is exiting (idle timeout): the turn goes to the next one.
@@ -210,24 +279,34 @@ export class ChatManager {
     const session = this.require(id);
     const proc = session.proc;
     session.queued = [];
+    if (session.prep) {
+      // Turns still waiting for their issues are dropped too.
+      session.prepEpoch++;
+      if (!proc || proc.pendingTurns === 0) this.setStatus(session, proc ? "idle" : "exited");
+    }
     if (!proc || proc.stopping || proc.pendingTurns === 0) return;
     proc.child.writeLine(interruptLine(`pg-interrupt-${++this.interrupts}`));
     this.resolvePermissions(session, proc, "interrupt");
     if (session.status === "waiting_permission") this.setStatus(session, "thinking");
   }
 
-  /** Answers a `can_use_tool` prompt. */
-  answerPermission(id: string, requestId: string, allow: boolean, message?: string): void {
+  /**
+   * Answers a `can_use_tool` prompt. For AskUserQuestion, `answers` (keyed by question text) are the user's
+   * choices: they go back as `updatedInput.answers`, which Claude Code turns into the tool result (§21.4).
+   */
+  answerPermission(id: string, requestId: string, allow: boolean, message?: string, answers?: Record<string, string>): void {
     const session = this.require(id);
     const proc = session.proc;
     const request = proc?.permissions.get(requestId);
     if (!proc || !request) throw new ChatError("invalid_state", `No pending permission request ${requestId}`);
+    const question = request.toolName === ASK_USER_QUESTION_TOOL;
+    if (answers && (!allow || !question)) throw new ChatError("invalid_state", "Answers are only accepted when answering AskUserQuestion");
+    if (allow && question && !answers) throw new ChatError("invalid_state", "AskUserQuestion needs the user's answers");
     proc.permissions.delete(requestId);
+    const input = answers ? { ...(isRecord(request.input) ? request.input : {}), answers } : request.input;
+    const denial = question ? "The user skipped these questions: continue with sensible defaults and say which ones you chose" : "The user denied this tool call";
     proc.child.writeLine(
-      permissionResponseLine(
-        requestId,
-        allow ? { allow: true, input: request.input } : { allow: false, message: message?.trim() || "The user denied this tool call" },
-      ),
+      permissionResponseLine(requestId, allow ? { allow: true, input } : { allow: false, message: message?.trim() || denial }),
     );
     this.pushItem(session, { id: this.itemId(session), ts: this.now(), kind: "permission_resolved", requestId, allowed: allow, by: "user" });
     this.setStatus(session, proc.permissions.size > 0 ? "waiting_permission" : "thinking");
@@ -443,7 +522,19 @@ export class ChatManager {
     if (existing) return existing;
     const rec = record ?? this.opts.store.getChatSession(id);
     if (!rec || rec.repoPath !== this.opts.repoPath) return undefined;
-    const session: ChatSessionState = { record: rec, status: "idle", reportedModel: null, items: null, proc: null, queued: [], deleted: false, nextItem: 0 };
+    const session: ChatSessionState = {
+      record: rec,
+      status: "idle",
+      reportedModel: null,
+      items: null,
+      proc: null,
+      queued: [],
+      deleted: false,
+      nextItem: 0,
+      prep: null,
+      prepEpoch: 0,
+      issuesSent: null,
+    };
     this.sessions.set(id, session);
     return session;
   }
@@ -510,6 +601,10 @@ export class ChatManager {
 export function chatTitle(text: string): string {
   const line = text.replace(/\s+/g, " ").trim() || UNTITLED_CHAT;
   return line.length <= CHAT_TITLE_MAX_CHARS ? line : `${line.slice(0, CHAT_TITLE_MAX_CHARS - 1)}…`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function roundUsd(n: number): number {

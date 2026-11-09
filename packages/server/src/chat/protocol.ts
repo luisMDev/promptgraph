@@ -36,10 +36,21 @@ export const AssistantLineSchema = z.looseObject({
   }),
 });
 
+/** Structured result of a tool call: `tool_use_result` on stream-json lines, `toolUseResult` in transcripts. */
+const ToolUseResultSchema = z.looseObject({ answers: z.record(z.string(), z.string()).optional() });
+
 export const UserLineSchema = z.looseObject({
   type: z.literal("user"),
   message: z.looseObject({ content: z.union([z.string(), z.array(ContentBlockSchema)]).optional() }),
+  tool_use_result: z.unknown().optional(),
+  toolUseResult: z.unknown().optional(),
 });
+
+/** AskUserQuestion answers carried by a user line's structured tool result, if any. */
+export function toolUseResultAnswers(line: { tool_use_result?: unknown; toolUseResult?: unknown }): Record<string, string> | undefined {
+  const parsed = ToolUseResultSchema.safeParse(line.tool_use_result ?? line.toolUseResult);
+  return parsed.success ? parsed.data.answers : undefined;
+}
 
 export const ResultLineSchema = z.looseObject({
   type: z.literal("result"),

@@ -1,4 +1,5 @@
 import { ChatManager } from "../chat/chat-manager.js";
+import { createLinkedIssuesResolver } from "../chat/issues.js";
 import { resolveChatMcp } from "../chat/launch.js";
 import { SUPPORTED_PHASE } from "../config/version.js";
 import { Engine } from "../engine/engine.js";
@@ -76,6 +77,10 @@ export function createRepoContext(daemon: DaemonContext, row: RepoRow): RepoCont
     env,
     spawner: daemon.chatSpawner,
     onRateLimit: (info) => daemon.usageLimits.observe(info),
+    linkedIssues: createLinkedIssuesResolver({
+      graphIssues: (graphId) => graphs.get(graphId).graph.issues ?? [],
+      issueContext: (ids) => daemon.linear.issueContext(ids),
+    }),
     mcp: () =>
       resolveChatMcp({
         repoPath: repo.path,

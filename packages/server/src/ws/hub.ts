@@ -265,7 +265,7 @@ export class WsHub {
       .then(({ chat }) => {
         if (msg.type === "chat:send") chat.send(msg.sessionId, msg.text, msg.context);
         else if (msg.type === "chat:interrupt") chat.interrupt(msg.sessionId);
-        else chat.answerPermission(msg.sessionId, msg.requestId, msg.allow, msg.message);
+        else chat.answerPermission(msg.sessionId, msg.requestId, msg.allow, msg.message, msg.answers);
       })
       .catch((err: unknown) => {
         if (!(err instanceof ChatError)) console.error(err);

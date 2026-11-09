@@ -15,6 +15,7 @@ import {
   ResultLineSchema,
   type RateLimitInfo,
   StreamEventLineSchema,
+  toolUseResultAnswers,
   SystemInitLineSchema,
   TextBlockSchema,
   ToolResultBlockSchema,
@@ -183,6 +184,8 @@ export class ChatNormalizer {
     const parsed = UserLineSchema.safeParse(line);
     if (!parsed.success || !Array.isArray(parsed.data.message.content)) return [];
     const events: ChatEvent[] = [];
+    // The structured result belongs to the line's (single) tool result; only AskUserQuestion carries answers.
+    const answers = toolUseResultAnswers(parsed.data);
     for (const block of parsed.data.message.content) {
       const result = ToolResultBlockSchema.safeParse(block);
       if (!result.success) continue;
@@ -193,6 +196,7 @@ export class ChatNormalizer {
           toolUseId: result.data.tool_use_id,
           isError: result.data.is_error === true,
           text: truncateToolResult(toolResultText(result.data.content)),
+          ...(answers ? { answers } : {}),
         },
       });
     }
@@ -227,6 +231,7 @@ export class ChatNormalizer {
       ...(t.display_name ? { displayName: t.display_name } : {}),
       ...(t.description ? { description: t.description } : {}),
       ...(t.blocked_path ? { blockedPath: t.blocked_path } : {}),
+      ...(t.tool_use_id ? { toolUseId: t.tool_use_id } : {}),
     };
     return [{ kind: "permission", item }];
   }
@@ -304,6 +309,11 @@ export function summarizeToolUse(name: string, input: unknown, cwd?: string): st
     case "Task":
     case "Agent":
       return oneLine(`${name}: ${str(input, "description") ?? ""}`);
+    case "AskUserQuestion": {
+      const questions = (input as { questions?: unknown } | null)?.questions;
+      const n = Array.isArray(questions) ? questions.length : 0;
+      return n ? `AskUserQuestion · ${n} question${n === 1 ? "" : "s"}` : "AskUserQuestion";
+    }
     case "Skill":
       return oneLine(`Skill ${str(input, "skill") ?? str(input, "command") ?? ""}`);
     case "TodoWrite": {
